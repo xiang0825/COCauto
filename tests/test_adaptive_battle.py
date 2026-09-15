@@ -104,8 +104,8 @@ class 自适应战斗测试(unittest.TestCase):
             置脚本状态=日志.append,
         )
         候选点 = 任务.生成可下兵候选点(上下文, 坐标(400, 285))
-        with patch.object(任务, "读取兵栏槽位图像", side_effect=[object(), object(), object()]), \
-             patch.object(任务, "判断下兵反馈", side_effect=[False, True]):
+        with patch.object(任务, "读取兵栏槽位图像", side_effect=[object()] * 5), \
+             patch.object(任务, "判断下兵反馈", side_effect=[False, False, False, True]):
             成功, 使用坐标 = 任务.尝试下兵至可用位置(
                 上下文,
                 {"名称": "测试兵", "区域": (0, 0, 1, 1), "类别": "兵种"},
@@ -146,6 +146,31 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertEqual(任务.执行高速下兵批次(上下文, (100, 200), 5, "快速连点"), 5)
         self.assertEqual(任务.执行高速下兵批次(上下文, (100, 200), 2, "短按压"), 2)
         self.assertEqual([项[0] for 项 in 鼠标对象.调用], ["连点", "短按"])
+
+    def test_同一兵栏槽位连续下兵不会重复点击反选(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        点击记录 = []
+        设置 = SimpleNamespace(是否启用高速下兵=False, 下兵间隔毫秒=5)
+        上下文 = SimpleNamespace(
+            设置=设置,
+            当前兵栏清单=[
+                {"槽位": 1, "类别": "兵种", "数量": 2,
+                 "区域": (20, 20, 50, 50), "名称": "测试兵"}
+            ],
+            点击=lambda x, y, **_参数: 点击记录.append((x, y)),
+            置脚本状态=lambda *_参数, **_关键字: None,
+            脚本延时=lambda _毫秒: None,
+            op=SimpleNamespace(获取屏幕图像cv=lambda *_区域: np.full((30, 30, 3), (0, 80, 200), dtype=np.uint8)),
+        )
+        任务.准备可下兵区域 = lambda *_参数, **_关键字: None
+        任务.生成可下兵候选点 = lambda *_参数: [(100, 100)]
+        任务.记录可下兵点标记 = lambda *_参数: None
+        任务.刷新选中兵种后的下兵边界 = lambda *_参数: None
+        任务.战斗是否仍在进行 = lambda *_参数: True
+        任务.是否为灰色图片 = lambda *_参数: False
+        with patch.object(任务, "尝试下兵至可用位置", side_effect=[(True, (100, 100)), (True, (100, 100))]):
+            任务.执行下兵流程(上下文, [{"中心坐标": 坐标(100, 100)}])
+        self.assertEqual(点击记录, [(35, 35)])
 
     def test_回营模板没有结果页标记时仍视为战斗中(self):
         class 匹配器:
