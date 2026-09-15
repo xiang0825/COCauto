@@ -1,5 +1,8 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
+
+import numpy as np
 
 from 任务流程.主世界打鱼.进攻 import 进攻任务
 from 任务流程.主世界打鱼.进攻坐标逻辑计算 import 坐标
@@ -61,6 +64,59 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertIn("高价值资源可达比例", 依据)
         self.assertFalse(搜索目标敌人任务.是否达到资源易窃取门槛(5.0))
         self.assertTrue(搜索目标敌人任务.是否达到资源易窃取门槛(5.01))
+
+    def test_下兵点只允许边界带并能生成邻近候选(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        上下文 = SimpleNamespace(
+            _部署区域已初始化=True,
+            _部署红色掩码=None,
+            本场可下兵区域={
+                "边界顶点": [(394, 20), (745, 293), (405, 549), (68, 278)],
+                "边界带宽": 58.0,
+            },
+        )
+        候选点 = 任务.生成可下兵候选点(上下文, 坐标(400, 285))
+        self.assertEqual(len(候选点), 8)
+        self.assertTrue(all(任务.下兵点是否位于可下兵区域(上下文, 点) for 点 in 候选点))
+        self.assertFalse(任务.下兵点是否位于可下兵区域(上下文, (400, 285)))
+
+    def test_兵栏变化才视为下兵成功(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        前图 = np.zeros((36, 31, 3), dtype=np.uint8)
+        后图 = 前图.copy()
+        self.assertFalse(任务.判断下兵反馈(前图, 后图, {"类别": "兵种"}))
+        后图[10:25, 5:25] = 255
+        self.assertTrue(任务.判断下兵反馈(前图, 后图, {"类别": "兵种"}))
+
+    def test_被拒绝的候选点会换点而不是重复点击(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        点击记录 = []
+        日志 = []
+        上下文 = SimpleNamespace(
+            _部署区域已初始化=True,
+            _部署红色掩码=None,
+            本场可下兵区域={
+                "边界顶点": [(394, 20), (745, 293), (405, 549), (68, 278)],
+                "边界带宽": 58.0,
+            },
+            点击=lambda x, y, **_参数: 点击记录.append((x, y)),
+            脚本延时=lambda _毫秒: None,
+            置脚本状态=日志.append,
+        )
+        候选点 = 任务.生成可下兵候选点(上下文, 坐标(400, 285))
+        with patch.object(任务, "读取兵栏槽位图像", side_effect=[object(), object(), object()]), \
+             patch.object(任务, "判断下兵反馈", side_effect=[False, True]):
+            成功, 使用坐标 = 任务.尝试下兵至可用位置(
+                上下文,
+                {"名称": "测试兵", "区域": (0, 0, 1, 1), "类别": "兵种"},
+                坐标(400, 285),
+                候选点[:2],
+                5,
+            )
+        self.assertTrue(成功)
+        self.assertEqual(使用坐标, 候选点[1])
+        self.assertEqual(点击记录, 候选点[:2])
+        self.assertTrue(any("换下一个候选点" in 文本 for 文本 in 日志))
 
 
 if __name__ == "__main__":
