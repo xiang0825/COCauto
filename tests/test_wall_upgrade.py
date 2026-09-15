@@ -38,6 +38,39 @@ class 刷墙识别测试(unittest.TestCase):
         左, 上, 右, 下 = self.任务.墙体搜索区域
         self.assertTrue(all(左 <= x < 右 and 上 <= y < 下 for x, y in 候选点))
 
+    def test_墙体面板快速筛选只关注底部变化(self):
+        原图 = np.zeros((600, 800, 3), dtype=np.uint8)
+        self.assertFalse(self.任务._选择面板明显变化(原图, 原图.copy()))
+
+        面板图 = 原图.copy()
+        面板图[410:590, 100:700] = 180
+        self.assertTrue(self.任务._选择面板明显变化(原图, 面板图))
+
+        顶部变化图 = 原图.copy()
+        顶部变化图[0:300, :] = 255
+        self.assertFalse(self.任务._选择面板明显变化(原图, 顶部变化图))
+
+    def test_断线弹窗主体和文字可被兜底识别且不会误点回营(self):
+        画面 = np.full((600, 800, 3), (10, 18, 22), dtype=np.uint8)
+        # 模拟测试服中央深色弹窗；底部额外放置战斗结算页绿色“回营”按钮。
+        cv2.rectangle(画面, (164, 180), (635, 423), (32, 26, 29), -1)
+        cv2.rectangle(画面, (334, 483), (467, 538), (0, 180, 0), -1)
+        cv2.rectangle(画面, (201, 218), (304, 244), (220, 220, 220), -1)
+        cv2.rectangle(画面, (201, 270), (580, 294), (220, 220, 220), -1)
+        cv2.rectangle(画面, (201, 306), (232, 328), (220, 220, 220), -1)
+        cv2.rectangle(画面, (201, 368), (325, 389), (220, 220, 220), -1)
+        是否断线, 坐标 = self.任务._检测断线弹窗(画面)
+        self.assertTrue(是否断线)
+        self.assertGreaterEqual(坐标[0], 201)
+        self.assertLessEqual(坐标[0], 325)
+        self.assertGreaterEqual(坐标[1], 368)
+        self.assertLessEqual(坐标[1], 389)
+
+        仅结算页 = np.full((600, 800, 3), (10, 18, 22), dtype=np.uint8)
+        cv2.rectangle(仅结算页, (334, 483), (467, 538), (0, 180, 0), -1)
+        无弹窗, _ = self.任务._检测断线弹窗(仅结算页)
+        self.assertFalse(无弹窗)
+
     def test_点击候选点后必须先确认城墙才执行升级(self):
         self.任务.执行升级 = Mock(return_value=True)
         上下文 = SimpleNamespace(置脚本状态=Mock())

@@ -27,10 +27,13 @@ class 城墙升级任务(基础任务):
 
     # 任务坐标统一使用 800×600 逻辑画布；ADB 屏幕适配器会负责映射到实际分辨率。
     墙体搜索区域 = (70, 55, 730, 540)
-    墙体搜索每轮最大候选数 = 24
+    # 每个候选点都做一次完整 OCR 会触发模拟器整屏截图和 ONNX 推理，
+    # 24 个点在当前设备上超过 CoC 的空闲断线窗口。先快速筛选面板变化，
+    # 再对疑似选中目标做 OCR，单轮限制在安全时长内。
+    墙体搜索每轮最大候选数 = 12
     墙体搜索最大轮数 = 5
-    墙体搜索超时秒 = 120
-    墙体点击后等待毫秒 = 420
+    墙体搜索超时秒 = 75
+    墙体点击后等待毫秒 = 350
     墙体关键词 = ("城墙", "城牆", "围墙", "围牆", "wall", "walls")
     墙体满级关键词 = ("已满级", "已滿級", "满级", "滿級", "最高等级", "最高等級", "maxed", "maxlevel")
 
@@ -109,6 +112,7 @@ class 城墙升级任务(基础任务):
                 f"第{轮次 + 1}轮识别到{len(候选点列表)}个墙段候选点"
             )
 
+            当前基准画面 = 屏幕图像
             for 候选序号, (x, y) in enumerate(候选点列表, 1):
                 if time.monotonic() - 开始找墙时间 >= self.墙体搜索超时秒:
                     break
@@ -118,7 +122,40 @@ class 城墙升级任务(基础任务):
                 )
                 上下文.点击(x, y, 延时=180, 是否精确点击=True)
                 上下文.脚本延时(self.墙体点击后等待毫秒)
-                ocr结果 = self.执行OCR识别(上下文)
+                点击前画面 = 当前基准画面
+                点击后画面 = 上下文.op.获取屏幕图像cv(0, 0, 800, 600)
+
+                # 断线弹窗是可恢复状态：只点击“重新载入游戏”，不关闭
+                # 应用、不进入商店，然后交回登录检测重新确认主页。
+                需要重载, (重载x, 重载y), _ = self.模板识别.执行匹配(
+                    点击后画面,
+                    "重新载入游戏.bmp|连接中断.bmp",
+                    相似度阈值=0.85,
+                )
+                if not 需要重载:
+                    需要重载, (重载x, 重载y) = self._检测断线弹窗(点击后画面)
+                if 需要重载:
+                    上下文.置脚本状态(
+                        "刷墙扫描发现游戏断线弹窗，仅点击重新载入并恢复主页；不关闭游戏"
+                    )
+                    上下文.点击已确认安全按钮(重载x, 重载y, 延时=180)
+                    上下文.脚本延时(5000)
+                    try:
+                        from 任务流程.检测游戏登录状态 import 检测游戏登录状态任务
+                        检测游戏登录状态任务(上下文).执行(首次登录=False)
+                    except Exception as 异常:
+                        上下文.置脚本状态(f"断线恢复后的主页检测失败：{异常}")
+                    return False
+
+                # 没有看到选择面板时跳过昂贵 OCR；点击前后仍各只截一次
+                # 图，保证真正的墙面板出现时不会漏掉。
+                if not self._选择面板明显变化(点击前画面, 点击后画面):
+                    当前基准画面 = 点击后画面
+                    continue
+
+                当前基准画面 = 点击后画面
+
+                ocr结果 = self.执行OCR识别(上下文, 屏幕图像=点击后画面)
                 墙体项 = next(
                     (项 for 项 in (ocr结果 or [])
                      if len(项) >= 2 and self.文本是否城墙(项[1])),
@@ -264,13 +301,105 @@ class 城墙升级任务(基础任务):
 
 
 
-    def 执行OCR识别(self, 上下文) -> list:
+    @staticmethod
+    def _检测断线弹窗(屏幕图像: np.ndarray) -> tuple[bool, tuple[int, int]]:
+        """模板失效时识别测试服断线弹窗，并返回文字按钮的点击中心。
+
+        不能只看绿色按钮：战斗结算页底部也有绿色“回营”按钮，
+        会导致把正常结算页误判为断线。这里先找中央近似均匀的深色
+        弹窗主体，再确认标题、正文和左对齐操作文字三段白色文字。
+        """
+        if not isinstance(屏幕图像, np.ndarray) or 屏幕图像.ndim != 3:
+            return False, (0, 0)
+        高度, 宽度 = 屏幕图像.shape[:2]
+        if 高度 < 300 or 宽度 < 400:
+            return False, (0, 0)
+        参考点 = 屏幕图像[高度 // 2, 宽度 // 2].astype(np.int16)
+        差异 = np.max(
+            np.abs(屏幕图像.astype(np.int16) - 参考点), axis=2
+        )
+        区域左, 区域上 = int(宽度 * 0.08), int(高度 * 0.16)
+        区域右, 区域下 = int(宽度 * 0.92), int(高度 * 0.86)
+        近似面板 = (差异[区域上:区域下, 区域左:区域右] <= 3).astype(np.uint8) * 255
+        近似面板 = cv2.morphologyEx(
+            近似面板, cv2.MORPH_CLOSE, np.ones((3, 3), dtype=np.uint8)
+        )
+        轮廓列表, _ = cv2.findContours(
+            近似面板, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        灰度 = cv2.cvtColor(屏幕图像, cv2.COLOR_BGR2GRAY)
+        for 轮廓 in sorted(轮廓列表, key=cv2.contourArea, reverse=True):
+            x, y, w, h = cv2.boundingRect(轮廓)
+            x += 区域左
+            y += 区域上
+            面积 = cv2.contourArea(轮廓)
+            if not (
+                面积 >= 宽度 * 高度 * 0.15
+                and 宽度 * 0.42 <= w <= 宽度 * 0.75
+                and 高度 * 0.25 <= h <= 高度 * 0.55
+                and 宽度 * 0.14 <= x <= 宽度 * 0.30
+                and 高度 * 0.22 <= y <= 高度 * 0.45
+            ):
+                continue
+            面板灰度 = 灰度[y:y + h, x:x + w]
+            if 面板灰度.size == 0:
+                continue
+            def 亮像素(上比例, 下比例, 左比例=0.04, 右比例=0.92):
+                上边 = max(0, min(h - 1, int(h * 上比例)))
+                下边 = max(上边 + 1, min(h, int(h * 下比例)))
+                左边 = max(0, min(w - 1, int(w * 左比例)))
+                右边 = max(左边 + 1, min(w, int(w * 右比例)))
+                return 面板灰度[上边:下边, 左边:右边] > 120
+
+            标题像素 = 亮像素(0.10, 0.35)
+            正文像素 = 亮像素(0.35, 0.72)
+            操作像素 = 亮像素(0.72, 0.95, 0.04, 0.58)
+            if (
+                int(np.count_nonzero(标题像素)) < 180
+                or int(np.count_nonzero(正文像素)) < 120
+                or int(np.count_nonzero(操作像素)) < 120
+            ):
+                continue
+            操作y1, 操作y2 = int(h * 0.72), int(h * 0.95)
+            操作x1, 操作x2 = int(w * 0.04), int(w * 0.58)
+            ys, xs = np.where(面板灰度[操作y1:操作y2, 操作x1:操作x2] > 120)
+            if len(xs) == 0:
+                continue
+            return True, (
+                x + 操作x1 + int((xs.min() + xs.max()) / 2),
+                y + 操作y1 + int((ys.min() + ys.max()) / 2),
+            )
+        return False, (0, 0)
+
+    @staticmethod
+    def _选择面板明显变化(点击前画面: np.ndarray, 点击后画面: np.ndarray) -> bool:
+        """只比较底部升级面板区，快速判断是否值得调用 OCR。"""
+        if (
+            not isinstance(点击前画面, np.ndarray)
+            or not isinstance(点击后画面, np.ndarray)
+            or 点击前画面.shape != 点击后画面.shape
+            or 点击前画面.ndim != 3
+        ):
+            return True
+        高度 = 点击后画面.shape[0]
+        上边 = max(0, min(高度 - 1, round(高度 * 0.64)))
+        前景 = 点击前画面[上边:]
+        后景 = 点击后画面[上边:]
+        if 前景.size == 0:
+            return True
+        差异 = cv2.absdiff(前景, 后景)
+        变化比例 = float(np.mean(np.max(差异, axis=2) > 22))
+        平均变化 = float(np.mean(差异))
+        return 变化比例 >= 0.02 or 平均变化 >= 5.0
+
+    def 执行OCR识别(self, 上下文, 屏幕图像=None) -> list:
         """执行屏幕OCR识别"""
 
         try:
             # 选中墙后标题/升级面板可能出现在底部或右侧，不能再限制在
             # 219,57,595,398；使用完整逻辑画布，OCR 坐标天然为绝对坐标。
-            屏幕图像 = 上下文.op.获取屏幕图像cv(0, 0, 800, 600)
+            if 屏幕图像 is None:
+                屏幕图像 = 上下文.op.获取屏幕图像cv(0, 0, 800, 600)
             # 使用OCR引擎识别
             ocr结果, _ = self.ocr引擎(屏幕图像)
             return ocr结果 or []
