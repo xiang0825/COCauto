@@ -25,6 +25,7 @@ def 创建上下文(屏幕图像: np.ndarray):
     上下文.置脚本状态 = Mock()
     上下文.停止事件 = Mock()
     上下文.停止事件.set = Mock()
+    上下文._宝石保护确认主页面 = Mock(return_value=False)
     return 上下文
 
 
@@ -34,14 +35,15 @@ class 宝石安全保护测试(unittest.TestCase):
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
         屏幕[230:230 + 模板.shape[0], 390:390 + 模板.shape[1]] = 模板
         上下文 = 创建上下文(屏幕)
+        上下文._宝石保护确认主页面.return_value = True
 
         self.assertTrue(上下文.检查宝石商店危险页面(强制=True))
         self.assertEqual(
             [调用.args[0] for 调用 in 上下文.键盘.按字符按压.call_args_list],
             ["esc", "esc", "esc"],
         )
-        上下文.停止事件.set.assert_called_once_with()
-        self.assertTrue(上下文.页面恢复失败)
+        上下文.停止事件.set.assert_not_called()
+        self.assertFalse(上下文.页面恢复失败)
 
     def test_主世界右上角常驻宝石图标不会误触发(self):
         模板 = 读取模板("宝石.bmp")
@@ -57,9 +59,9 @@ class 宝石安全保护测试(unittest.TestCase):
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
         屏幕[230:230 + 模板.shape[0], 390:390 + 模板.shape[1]] = 模板
         上下文 = 创建上下文(屏幕)
+        上下文._宝石保护确认主页面.return_value = True
 
-        with self.assertRaises(SystemExit):
-            上下文.点击(400, 300, 延时=1, 是否精确点击=True)
+        self.assertFalse(上下文.点击(400, 300, 延时=1, 是否精确点击=True))
         上下文.鼠标.移动到.assert_not_called()
         上下文.鼠标.左键点击.assert_not_called()
 
