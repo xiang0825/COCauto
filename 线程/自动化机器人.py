@@ -1,0 +1,424 @@
+import queue
+import random
+
+import threading
+import time
+
+from 任务流程.世界跳转.到主世界任务 import 到主世界任务
+from 任务流程.世界跳转.到夜世界任务 import 到夜世界任务
+from 任务流程.主世界打鱼 import 主世界打鱼任务
+from 任务流程.升级城墙 import 城墙升级任务
+from 任务流程.启动模拟器 import 启动模拟器任务
+from 任务流程.基础任务框架 import 任务上下文
+from 任务流程.夜世界.夜世界打鱼 import 夜世界打鱼任务
+from 任务流程.夜世界.收集圣水车 import 收集圣水车任务
+from 任务流程.夜世界.更新夜世界账号资源状态 import 更新夜世界资源状态任务
+from 任务流程.建筑升级 import 建筑升级任务
+from 任务流程.收集资源 import 收集资源任务
+
+from 任务流程.建筑升级.寻找建筑 import 寻找建筑
+
+from 任务流程.战宠升级 import 战宠升级任务
+from 任务流程.兵种或法术升级 import 兵种或法术升级任务
+# from 任务流程.夜世界.更新夜世界账号资源状态 import 更新夜世界资源状态任务
+from 任务流程.更新主世界账号资源状态 import 更新家乡资源状态任务
+from 任务流程.检查图像 import 检查图像任务
+from 任务流程.检测游戏登录状态 import 检测游戏登录状态任务
+from 工具包.工具函数 import 是否家乡资源打满, 是否夜世界资源打满
+from 数据库.任务数据库 import 任务数据库, 机器人设置, 默认任务计划顺序
+from 核心.ADB屏幕 import ADB屏幕
+
+from 核心.键盘操作 import 键盘控制器
+from 核心.鼠标操作 import 鼠标控制器
+from 模块.ADB设备操作类 import ADB设备操作类
+from 核心.核心异常们 import 图像获取失败
+
+
+class 自动化机器人:
+    """为单个用户提供游戏自动化服务的机器人实例"""
+
+    def __init__(self, 机器人标志: str, 消息队列: queue.Queue, 数据库: 任务数据库, 日志队列: queue.Queue):
+        # 基础属性
+        self.机器人标志 = 机器人标志
+        self.消息队列 = 消息队列  # 用来给监控中心发送消息
+        self.数据库 = 数据库
+        self.日志队列 = 日志队列
+
+        self.继续事件 = threading.Event()
+        self.停止事件 = threading.Event()
+        self.停止事件.set()  # 目前未启动线程,处于停止状态
+
+        self.op: ADB屏幕
+
+    def 启动(self):
+        设置 = self.数据库.获取机器人设置(self.机器人标志)
+        if not 设置.ADB已确认模拟器 or not 设置.ADB设备序列号:
+            raise RuntimeError("请先在“模拟器连接”页选择 ADB 设备、确认它是模拟器并保存。")
+        # 在创建后台任务前验证路径，避免线程因配置错误静默退出。
+        ADB设备操作类.解析ADB路径(设置.ADB路径)
+        self.数据库.记录日志(self.机器人标志, f"启动标志为{self.机器人标志}的机器人", time.time() + 60)
+        if self.停止事件.is_set():
+            self.停止事件.clear()
+            #线程执行完毕后不可重复 start，因此在检测到停止事件后需新建线程实例，用于重新启动任务流程。，所以创建线程操作放在启动里面
+            self.主线程 = threading.Thread(
+                target=self._任务流程,
+                name=f"任务线程-{self.机器人标志}",
+                daemon=True
+            )
+            self.主线程.start()
+
+        else:
+            print("目前线程未停止,无需再次启动")
+
+    def 暂停(self):
+        """标记暂停状态"""
+        print("已暂停")
+        self.继续事件.clear()
+
+    def 继续(self):
+        """清除暂停状态"""
+        print("已继续")
+        self.继续事件.set()
+
+    def 停止(self, 停止原因="", 等待=True):
+        """标记终止状态
+
+        注意：此方法由监控中心调用，用于外部强制停止。
+        如果是任务异常导致的停止，线程会自己设置停止事件并退出。
+        """
+        self.继续()  # 唤醒可能已经暂停的线程
+        self.停止事件.set()
+        # 等待线程停止,如果未启动则没有主线程属性,加一层判断
+        if 等待 and hasattr(self, "主线程") and self.主线程.is_alive():
+            self.主线程.join()
+
+    @property
+    def 设置(self) -> 机器人设置:
+        配置 = self.数据库.获取机器人设置(self.机器人标志)
+        return 配置
+
+    @property
+    def 当前状态(self) -> str:
+        if self.停止事件.is_set():
+            return "已停止"
+        elif not self.继续事件.is_set():
+            return "暂停中"
+        else:
+            return "运行中"
+
+    def 记录日志(self, 日志内容: str, 超时的时间: float = 60, 级别: str = "正常"):
+        """记录日志到数据库并通过队列发送到UI
+        级别: "正常" | "警告" | "错误"（默认"正常"）。保持原有调用兼容，新增关键字参数 级别。
+        """
+
+        # 规范级别取值
+        合法级别 = {"正常", "警告", "错误"}
+        if 级别 not in 合法级别:
+            级别 = "正常"
+
+        # 根据级别为文本添加可解析前缀（仅非“正常”时）
+        带级别前缀的内容 = 日志内容
+        if 级别 != "正常" and not (日志内容.startswith("[警告]") or 日志内容.startswith("[错误]")):
+            前缀 = "[警告]" if 级别 == "警告" else "[错误]"
+            带级别前缀的内容 = f"{前缀} {日志内容}"
+
+        # 写入数据库（保持原表结构，内容中包含级别前缀）
+        self.数据库.记录日志(self.机器人标志, 带级别前缀的内容, time.time() + 超时的时间)
+
+        # 发送到UI日志队列（携带结构化级别，便于实时渲染）
+        if self.日志队列:
+            self.日志队列.put({
+                '内容': f"[{time.strftime('%H:%M:%S')}] {带级别前缀的内容}",
+                '机器人ID': self.机器人标志,
+                '类型': '运行',
+                '级别': 级别,
+            })
+
+        # Windows 的 time.strftime 使用系统 locale，不能在格式串里放中文字符。
+        # 控制台只是辅助输出；即使终端编码异常，也不能中断机器人任务线程。
+        try:
+            print(
+                f"[机器人消息] {self.机器人标志} "
+                f"{time.strftime('%Y-%m-%d %H:%M:%S')}: {带级别前缀的内容}"
+            )
+        except Exception:
+            pass
+
+    def _任务计划顺序(self, 设置: 机器人设置) -> list[str]:
+        """返回规范化的启用任务顺序，顺序完全来自任务计划页面。"""
+        原顺序 = getattr(设置, "任务计划顺序", None)
+        if not isinstance(原顺序, list) or not 原顺序:
+            原顺序 = 默认任务计划顺序
+        已知任务 = set(默认任务计划顺序)
+        顺序 = []
+        for 任务键 in 原顺序:
+            if 任务键 in 已知任务 and 任务键 not in 顺序:
+                顺序.append(任务键)
+        for 任务键 in 默认任务计划顺序:
+            if 任务键 not in 顺序:
+                顺序.append(任务键)
+        return [任务键 for 任务键 in 顺序 if self._任务是否启用(设置, 任务键)]
+
+    @staticmethod
+    def _任务是否启用(设置: 机器人设置, 任务键: str) -> bool:
+        """将任务计划中的键映射到实际配置开关。"""
+        if 任务键 == "main_resource":
+            return bool(设置.是否刷主世界)
+        if 任务键 == "night_resource":
+            return bool(设置.是否刷夜世界)
+        if 任务键 == "eagle":
+            return bool(设置.是否刷天鹰火炮)
+        if 任务键 == "wall":
+            return bool(设置.开启刷墙)
+        if 任务键 == "building":
+            return bool(设置.是否升级建议升级的建筑)
+        if 任务键 in {"hero", "research", "pet"}:
+            字段 = {
+                "hero": "欲升级的英雄或建筑",
+                "research": "欲升级的兵种或法术",
+                "pet": "欲升级的战宠",
+            }[任务键]
+            return bool(getattr(设置, 字段, ""))
+        return False
+
+    def _执行天鹰计划(self, 上下文, 检测登录):
+        """执行一个天鹰任务循环，完成后交回任务计划继续执行。"""
+        from 任务流程.天鹰火炮成就 import 刷天鹰火炮任务
+        上下文.置脚本状态("开始执行刷天鹰火炮成就")
+        到主世界任务(上下文).执行()
+        if not self.停止事件.is_set():
+            刷天鹰火炮任务(上下文).执行()
+            检测登录.执行()
+
+    def _执行主世界刷资源计划(self, 上下文, 检测登录) -> bool:
+        上下文.置脚本状态("开始执行主世界打鱼任务,当打满资源时结束本项")
+        到主世界任务(上下文).执行()
+        收集资源任务(上下文).执行()
+        主世界进攻次数 = 0
+        while not self.停止事件.is_set():
+            更新家乡资源状态任务(上下文).执行()
+            当前状态 = 上下文.数据库.获取最新完整状态(self.机器人标志)
+            if 是否家乡资源打满(当前状态.状态数据["家乡资源"]):
+                上下文.置脚本状态(
+                    "触发家乡资源已打满条件：金币和圣水末尾含3或5个零；低本黑油为0也视为打满，解锁后黑油同样需满足末尾零条件。"
+                )
+                上下文.置脚本状态("资源已打满,结束循环家乡打鱼")
+                return True
+
+            上下文.脚本延时(random.randint(500, 3000))
+            主世界打鱼任务(上下文).执行()
+            主世界进攻次数 += 1
+            if 主世界进攻次数 % 5 == 0:
+                收集资源任务(上下文).执行()
+            检测登录.执行()
+            上下文.置脚本状态("进攻完毕,到循环头")
+        return False
+
+    def _执行夜世界刷资源计划(self, 上下文, 检测登录) -> bool:
+        上下文.置脚本状态("开始执行夜世界打鱼任务,当打满资源时结束本项")
+        到夜世界任务(上下文).执行()
+        收集资源任务(上下文).执行()
+        夜世界成功进攻次数 = 0
+        while not self.停止事件.is_set():
+            更新夜世界资源状态任务(上下文).执行()
+            当前状态 = 上下文.数据库.获取最新完整状态(self.机器人标志)
+            if 是否夜世界资源打满(当前状态.状态数据["夜世界资源"]):
+                上下文.置脚本状态(
+                    "触发夜世界资源已打满条件：当夜世界的金币和圣水数量末尾有3个或5个零时，视为打满。"
+                )
+                上下文.置脚本状态("资源已打满,结束循环夜世界打鱼")
+                return True
+
+            if 夜世界成功进攻次数 % 5 == 0:
+                上下文.置脚本状态(F"夜世界打鱼次数到了{夜世界成功进攻次数},收集圣水车")
+                收集圣水车任务(上下文).执行()
+                收集资源任务(上下文).执行()
+            夜世界打鱼任务(上下文).执行()
+            上下文.脚本延时(random.randint(500, 3000))
+            检测登录.执行()
+            夜世界成功进攻次数 += 1
+        return False
+
+    def _执行升级计划(self, 任务键: str, 上下文):
+        """在任务计划指定的位置执行一次升级任务。"""
+        到主世界任务(上下文).执行()
+        if 任务键 == "wall":
+            城墙升级任务(上下文).执行()
+        elif 任务键 in {"building", "hero"}:
+            建筑升级任务(上下文).执行()
+        elif 任务键 == "pet":
+            战宠升级任务(上下文).执行()
+        elif 任务键 == "research":
+            兵种或法术升级任务(上下文).执行()
+
+    def _任务流程(self):
+        """主任务逻辑"""
+        # 初始化企业微信通知器
+        设置 = self.数据库.获取机器人设置(self.机器人标志)
+        if not 设置.ADB已确认模拟器:
+            raise RuntimeError("请先在“模拟器连接”页确认目标是 Android 模拟器并保存连接。")
+        if not 设置.ADB设备序列号:
+            raise RuntimeError("尚未配置 ADB 设备序列号；请先扫描并选择模拟器。")
+        self.设备 = ADB设备操作类(设置.ADB路径, 设置.ADB设备序列号)
+        self.op = ADB屏幕(self.设备)
+        self.雷电模拟器 = self.设备
+        企业微信通知器实例 = None
+        if 设置.企业微信webhook:
+            try:
+                from 工具包.企业微信通知 import 企业微信通知器
+                企业微信通知器实例 = 企业微信通知器(设置.企业微信webhook)
+            except Exception as e:
+                print(f"初始化企业微信通知器失败: {e}")
+
+        上下文 = 任务上下文(
+            机器人标志=self.机器人标志,
+            消息队列=self.消息队列,
+            数据库=self.数据库,
+            停止事件=self.停止事件,
+            继续事件=self.继续事件,
+            置脚本状态=self.记录日志,
+            op=self.op,
+            雷电模拟器=self.雷电模拟器,
+            鼠标=鼠标控制器(self.设备),
+            键盘=键盘控制器(self.设备),
+            企业微信通知器=企业微信通知器实例,
+            上次上报时间=time.time(),  # 初始化为当前时间
+            上报间隔秒=设置.状态上报间隔分钟 * 60,  # 转换为秒
+            上次检查上报时间=time.time()  # 初始化为当前时间
+        )
+        # 上下文.置脚本状态("开始执行",1000)
+        上下文.继续事件.set()
+        print("本次运行时的设置为"+self.设置.__str__())
+
+        try:
+
+
+            检测登录 = 检测游戏登录状态任务(上下文)#检测任务需要重复调用，这里先创建，但是不执行
+
+
+            if not 启动模拟器任务(上下文).执行():
+                return
+
+            # 截图与输入始终使用同一个明确选定的 ADB 序列号。
+
+            if not 检查图像任务(上下文).执行():
+                return
+
+            # 发送启动通知
+            from datetime import datetime
+            上下文.发送企业微信通知(
+                f"✅ 机器人已启动\n时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                包含截图=True
+            )
+
+            检测登录.执行()
+
+
+            设置 = self.设置
+            任务顺序 = self._任务计划顺序(设置)
+            上下文.置脚本状态("任务计划顺序：" + " → ".join(任务顺序 or ["无启用任务"]))
+            是否有资源打满 = False
+
+            # 任务计划中的每一个项目只在自己的位置执行，避免旧版固定顺序覆盖用户选择。
+            for 任务键 in 任务顺序:
+                if self.停止事件.is_set():
+                    break
+                if 任务键 == "eagle":
+                    self._执行天鹰计划(上下文, 检测登录)
+                elif 任务键 == "main_resource":
+                    是否有资源打满 = self._执行主世界刷资源计划(
+                        上下文, 检测登录
+                    ) or 是否有资源打满
+                elif 任务键 == "night_resource":
+                    是否有资源打满 = self._执行夜世界刷资源计划(
+                        上下文, 检测登录
+                    ) or 是否有资源打满
+                elif 任务键 in {"wall", "building", "hero", "pet", "research"}:
+                    上下文.置脚本状态(f"按任务计划执行：{任务键}")
+                    self._执行升级计划(任务键, 上下文)
+
+            if 是否有资源打满 and 设置.资源打满后动作 == "待机" and not self.停止事件.is_set():
+                上下文.置脚本状态("资源已达到目标，按设置进入待机；可在主界面点击停止")
+                while not self.停止事件.is_set():
+                    上下文.脚本延时(60_000)
+            elif 是否有资源打满:
+                上下文.置脚本状态("资源已达到目标，按设置退出任务")
+            #升级英雄(上下文,"野蛮人之王").执行()
+           # 建筑升级任务(上下文).执行()
+            # 寻找建筑(上下文,["亡灵王子","大守护者","复合机械塔"]).执行()
+
+
+            print("-"*10+F"{self.机器人标志} 线程自然消亡"+"-"*10)
+            self.停止事件.set()  # 标志目前线程已经停止了,以免监控中心一直启动
+
+        except 图像获取失败 as e:
+            上下文.发送死亡通知(f"异常: {str(e)}")
+            print("-"*10+F"{self.机器人标志} 线程因为异常而消亡"+"-"*10+f"异常: {str(e)}")
+        except SystemExit as e:
+            print("-"*10+F"{self.机器人标志} 线程因为捕获到退出而消亡"+"-"*10)
+            print(F"具体信息:{str(e)}")
+        except Exception as e:
+            import traceback
+            诊断信息 = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+            print(诊断信息)
+            self.记录日志(f"[错误] 初始化或任务执行失败：{e}", 300, "错误")
+            try:
+                with open("robot-error.log", "a", encoding="utf-8") as 日志文件:
+                    日志文件.write(诊断信息 + "\n")
+            except OSError:
+                pass
+            self.停止事件.set()
+        finally:
+            # 在清理 op 之前发送停止通知（此时 op 还活着，可以截图）
+            try:
+                if 企业微信通知器实例:
+                    from datetime import datetime
+                    # 判断停止原因
+                    if self.停止事件.is_set():
+                        停止原因 = "任务异常或完成"
+                    else:
+                        停止原因 = "外部停止"
+
+                    # 获取截图
+                    截图 = None
+                    try:
+                        截图 = 上下文.op.获取屏幕图像cv(0, 0, 800, 600)
+                    except:
+                        pass  # 截图失败不影响通知发送
+
+                    # 停止通知必须同步发送，确保截图在线程退出前完成 HTTP 请求
+                    企业微信通知器实例._同步发送状态消息(
+                        机器人标志=self.机器人标志,
+                        状态文本=f"⛔ 机器人已停止\n原因: {停止原因}\n时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                        截图=截图
+                    )
+            except Exception as e:
+                print(f"发送停止通知失败: {e}")
+
+            上下文.op.安全清理()
+
+    def 检查超时(self) -> tuple[bool, str]:
+        """检查是否超时，返回 (是否超时, 原因)。未超时返回 (False, '')"""
+
+        最后日志 = self.数据库.读取最后日志(self.机器人标志)
+        # 无历史日志的情况
+        if not 最后日志:
+            return (False, "无历史日志记录")  # 无日志视为第一次启动,不是超时的异常状态
+
+        # 主动停止不视为超时
+        if self.停止事件.is_set():
+
+            return (False, F"{self.机器人标志} 线程已主动停止,不是异常状态")
+
+        if time.time() > 最后日志.下次超时:
+            实际间隔 = round(time.time() - 最后日志.记录时间)
+            超时阈值 = round(最后日志.下次超时 - 最后日志.记录时间)
+
+            原因 = (
+                f"数据库最后日志记录已超时（内容：[{最后日志.日志内容}]），"
+                f"实际间隔 {实际间隔} 秒超过阈值 {超时阈值} 秒"
+            )
+
+            return True, 原因
+
+        return (False, "")

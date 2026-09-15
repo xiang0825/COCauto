@@ -1,0 +1,88 @@
+
+# Python 编译产生的文件
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+venv/
+env/
+.venv/
+.venv311/
+ENV/
+.python310/
+.tmp/
+op_runtime/
+get-pip.py
+python-3.10.9-nuget.nupkg
+
+# IDE 编辑器配置
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# pip 依赖文件
+*.egg-info/
+*.egg
+dist/
+build/
+# 本地构建输出（不同版本目录不上传仓库）
+dist_*/
+build_*/
+
+# Jupyter Notebook 检查点
+.ipynb_checkpoints/
+
+# 日志文件
+*.log
+
+# dotenv 文件（通常包含敏感信息）
+.env
+.env.*
+
+# 本地数据库
+*.sqlite3
+
+# 覆盖率报告
+htmlcov/
+.coverage
+.cache/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# 单元测试缓存
+.pytest_cache/
+
+# mypy 静态检查缓存
+.mypy_cache/
+.dmypy.json
+
+# VSCode Python 调试配置缓存
+__pypackages__/
+
+#数据库文件
+*.db
+数据库/任务系统.db
+数据库/任务系统.db-shm
+数据库/任务系统.db-wal
+/自动启动配置.json
+/最新远程版本缓存.txt
+/自动启动脚本/启动_模拟器索引0.bat
+/CLAUDE.md
+/.claude/settings.local.json
+/dataset/
+/.claude
+/最新远程版本缓存.json
+/公告缓存.json
+/统计缓存.json
+/开发者标记.txt
+
+# macOS 系统文件
+.DS_Store
+**/.DS_Store
+
+# 本地实际测试截图
+/*.png
