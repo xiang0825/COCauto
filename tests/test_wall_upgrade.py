@@ -129,6 +129,40 @@ class 刷墙识别测试(unittest.TestCase):
             "金币",
         )
 
+    def test_缺少家乡资源状态时返回未知而不是零(self):
+        状态 = SimpleNamespace(状态数据={})
+        上下文 = SimpleNamespace(
+            机器人标志="robot_1",
+            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态)),
+        )
+
+        self.assertEqual(self.任务.获取当前墙体资源(上下文), (None, None))
+
+    def test_资源未知时执行升级不点击任何入口(self):
+        状态 = SimpleNamespace(状态数据={})
+        上下文 = SimpleNamespace(
+            机器人标志="robot_1",
+            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态)),
+            点击=Mock(),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+
+        self.assertFalse(
+            self.任务.执行升级(
+                上下文,
+                0,
+                0,
+                10,
+                10,
+                已选中=True,
+                OCR结果=[],
+            )
+        )
+        上下文.点击.assert_not_called()
+        状态文本 = " ".join(调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
+        self.assertIn("禁止点击城墙升级入口", 状态文本)
+
     def test_执行升级资源不足不会点击资源入口(self):
         状态 = SimpleNamespace(
             状态数据={"家乡资源": {"金币": 1_000_000, "圣水": 2_000_000}}
