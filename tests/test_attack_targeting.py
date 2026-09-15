@@ -52,6 +52,20 @@ class 进攻目标选择测试(unittest.TestCase):
         self.assertEqual(结果[0]["类别名称"], "金库")
         self.assertLessEqual(len(结果), self.任务.最多集中目标数)
 
+    def test_资源模式覆盖全部已识别资源目标(self):
+        目标列表 = [
+            {
+                "类别名称": "金矿",
+                "置信度": 0.9,
+                "中心坐标": 坐标(80 + 索引 * 25, 100 + 索引 * 12),
+                "靠近边缘": True,
+            }
+            for 索引 in range(6)
+        ]
+        结果 = self.任务.选择集中进攻目标(self.上下文, 目标列表)
+        self.assertEqual(len(结果), len(目标列表))
+        self.assertIn("覆盖全部6个资源目标", self.上下文.状态[-1])
+
 
 if __name__ == "__main__":
     unittest.main()

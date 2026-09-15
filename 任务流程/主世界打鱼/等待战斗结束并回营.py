@@ -13,6 +13,24 @@ from 模块.检测.模板匹配器 import 模板匹配引擎
 
 class 等待战斗结束并回营任务(基础任务):
 
+    def _结果页按钮可信(self, 上下文, 屏幕图像) -> bool:
+        """回营模板命中后再确认结果页，避免误点战场中的绿色区域。"""
+        if getattr(上下文, "_战斗结束已确认", False):
+            return True
+        try:
+            强按钮, _, _ = self.模板识别.执行匹配(
+                屏幕图像,
+                "领取奖励.bmp|回营_领取奖励.bmp",
+                相似度阈值=0.90,
+            )
+            if 强按钮:
+                return True
+            OCR结果, _ = self.ocr引擎(屏幕图像, use_cls=False)
+            文本 = "".join(str(项[1]) for 项 in (OCR结果 or []) if len(项) > 1)
+            return any(关键词 in 文本 for 关键词 in ("胜利", "获胜", "失败", "战败"))
+        except Exception:
+            return False
+
     def 执行(self) -> bool:
         上下文 = self.上下文
 
@@ -113,7 +131,7 @@ class 等待战斗结束并回营任务(基础任务):
                     return True
             # 执行模板匹配
             是否匹配, (x, y), _ = self.模板识别.执行匹配(屏幕图像, 模板路径, 相似度阈值=0.9)
-            if 是否匹配:
+            if 是否匹配 and self._结果页按钮可信(上下文, 屏幕图像):
                 if not 是否已点击回营:
                     是否已点击回营 = True
                     # 这里的画面已经命中回营按钮，优先用同一帧记录结果，

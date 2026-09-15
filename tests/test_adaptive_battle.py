@@ -147,6 +147,33 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertEqual(任务.执行高速下兵批次(上下文, (100, 200), 2, "短按压"), 2)
         self.assertEqual([项[0] for 项 in 鼠标对象.调用], ["连点", "短按"])
 
+    def test_回营模板没有结果页标记时仍视为战斗中(self):
+        class 匹配器:
+            def 执行匹配(self, _图像, 模板路径, **_参数):
+                if "领取奖励" in 模板路径:
+                    return False, (0, 0), None
+                return True, (400, 550), None
+
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.模板识别 = 匹配器()
+        任务.ocr引擎 = lambda *_参数, **_关键字: ([], None)
+        self.assertFalse(任务._结束画面有结果标记(np.zeros((600, 800, 3), dtype=np.uint8)))
+
+    def test_结果页有失败文字才允许确认结束(self):
+        class 匹配器:
+            def 执行匹配(self, _图像, 模板路径, **_参数):
+                if "领取奖励" in 模板路径:
+                    return False, (0, 0), None
+                return True, (400, 550), None
+
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.模板识别 = 匹配器()
+        任务.ocr引擎 = lambda *_参数, **_关键字: (
+            [([[0, 0], [1, 0], [1, 1], [0, 1]], "战斗失败", 0.99)],
+            None,
+        )
+        self.assertTrue(任务._结束画面有结果标记(np.zeros((600, 800, 3), dtype=np.uint8)))
+
 
 if __name__ == "__main__":
     unittest.main()
