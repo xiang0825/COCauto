@@ -1,6 +1,9 @@
 import time
 import random
+import re
 
+import cv2
+import numpy as np
 from 任务流程.基础任务框架 import 基础任务, 任务上下文
 from 模块.检测.OCR识别器 import 安全OCR引擎
 from 模块.检测.YOLO检测器 import 线程安全YOLO检测器
@@ -128,17 +131,49 @@ class 等待战斗结束并回营任务(基础任务):
             return "失败"
         return "未知"
 
-    def 记录战斗结果(self, 上下文) -> None:
-        """可选记录试战结果和累计胜率，不影响正常回营流程。"""
-        设置 = 上下文.数据库.获取机器人设置(上下文.机器人标志)
-        if not getattr(设置, "是否试战统计胜率", False):
-            return
+    @staticmethod
+    def 从OCR文本提取摧毁率(OCR文本: str):
+        """提取结果页的百分比；没有识别到时返回 None。"""
+        百分比列表 = [int(值) for 值 in re.findall(r"(?<!\d)(100|[1-9]?\d)\s*%", OCR文本)]
+        return 百分比列表[0] if 百分比列表 else None
 
+    @staticmethod
+    def 识别星数(屏幕图像, OCR文本: str):
+        """优先从 OCR 读取星数，失败时在结果页中心区域检测金色星形区域。"""
+        匹配 = re.search(r"([0-3])\s*星", OCR文本)
+        if 匹配:
+            return int(匹配.group(1))
+        # 战斗进行中也有大量金色建筑，只有结果页明确出现胜负词时
+        # 才启用图像兜底，避免把建筑误判成三颗星。
+        if not any(词 in OCR文本 for 词 in ("胜利", "获胜", "失败", "战败")):
+            return None
+        if 屏幕图像 is None or getattr(屏幕图像, "ndim", 0) != 3:
+            return None
+
+        高, 宽 = 屏幕图像.shape[:2]
+        # 结果页的星星位于中央上半区；限制区域以排除顶部资源图标。
+        区域 = 屏幕图像[int(高 * 0.12):int(高 * 0.48), int(宽 * 0.25):int(宽 * 0.75)]
+        hsv = cv2.cvtColor(区域, cv2.COLOR_BGR2HSV)
+        掩码 = cv2.inRange(hsv, (12, 90, 120), (45, 255, 255))
+        掩码 = cv2.morphologyEx(掩码, cv2.MORPH_OPEN, np.ones((3, 3), dtype=np.uint8))
+        数量, _, 统计, _ = cv2.connectedComponentsWithStats(掩码)
+        候选数量 = 0
+        for 索引 in range(1, 数量):
+            _, _, 框宽, 框高, 面积 = 统计[索引]
+            if 12 <= 框宽 <= 130 and 12 <= 框高 <= 100 and 面积 >= 80:
+                候选数量 += 1
+        return min(3, 候选数量) if 候选数量 else None
+
+    def 记录战斗结果(self, 上下文) -> None:
+        """强制记录每场战斗的胜负、星数和摧毁率，不影响正常回营流程。"""
         try:
             屏幕图像 = 上下文.op.获取屏幕图像cv(0, 0, 800, 600)
             OCR结果, _ = self.ocr引擎(屏幕图像)
             文本 = "".join(str(项[1]) for 项 in (OCR结果 or []) if len(项) > 1)
             结果 = self.从OCR文本判断战斗结果(文本)
+            星数 = self.识别星数(屏幕图像, 文本)
+            摧毁率 = self.从OCR文本提取摧毁率(文本)
+            目标战利品 = getattr(上下文, "本场目标战利品", {}) or {}
 
             旧状态 = 上下文.数据库.获取最新完整状态(上下文.机器人标志)
             统计 = dict(旧状态.状态数据.get("战斗胜率", {}))
@@ -147,11 +182,43 @@ class 等待战斗结束并回营任务(基础任务):
                 统计["识别场次"] = int(统计.get("识别场次", 0)) + 1
                 键 = "胜场" if 结果 == "胜利" else "负场"
                 统计[键] = int(统计.get(键, 0)) + 1
+            if 星数 is not None:
+                统计["最近星数"] = 星数
+                统计["累计星数"] = int(统计.get("累计星数", 0)) + 星数
+                统计["平均星数"] = round(统计["累计星数"] / 统计["完成场次"], 2)
+            else:
+                统计["最近星数"] = None
+            if 摧毁率 is not None:
+                统计["最近摧毁率"] = 摧毁率
+                统计["累计摧毁率"] = int(统计.get("累计摧毁率", 0)) + 摧毁率
+                统计["平均摧毁率"] = round(统计["累计摧毁率"] / 统计["完成场次"], 2)
+            else:
+                统计["最近摧毁率"] = None
+            统计["最近结果"] = 结果
+            统计["最近战利品目标"] = {
+                "金币": 目标战利品.get("金币"),
+                "圣水": 目标战利品.get("圣水"),
+                "黑油": 目标战利品.get("黑油"),
+            }
+            if 结果 == "失败":
+                if 摧毁率 is not None and 摧毁率 < 50:
+                    诊断 = "失败且摧毁率低：优先检查兵栏识别、下兵入口和目标边缘比例"
+                else:
+                    诊断 = "战斗失败：检查敌方布局、兵种等级和攻城器械"
+            elif 结果 == "胜利" and 星数 is not None and 星数 < 2:
+                诊断 = "已胜利但星数偏低：可切换稳健三星玩法"
+            elif 摧毁率 is not None and 摧毁率 < 40:
+                诊断 = "摧毁率偏低：可能只打到外圈采集器，建议确认储存建筑识别和进攻方向"
+            else:
+                诊断 = "本场结果正常"
+            统计["最近诊断"] = 诊断
             识别场次 = int(统计.get("识别场次", 0))
             统计["胜率"] = round(统计.get("胜场", 0) / 识别场次 * 100, 1) if 识别场次 else None
             上下文.数据库.更新状态(上下文.机器人标志, "战斗胜率", 统计)
             上下文.置脚本状态(
-                f"试战结果：{结果}；已识别 {识别场次} 场，当前胜率 {统计['胜率'] if 统计['胜率'] is not None else '待识别'}%"
+                f"战斗结果：{结果}；星数：{星数 if 星数 is not None else '待识别'}；"
+                f"摧毁率：{摧毁率 if 摧毁率 is not None else '待识别'}%；"
+                f"当前胜率：{统计['胜率'] if 统计['胜率'] is not None else '待识别'}%；{诊断}"
             )
         except Exception as 异常:
             上下文.置脚本状态(f"试战结果统计失败：{异常}")

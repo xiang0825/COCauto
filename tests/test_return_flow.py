@@ -44,6 +44,8 @@ class 回营状态机测试(unittest.TestCase):
         self.assertEqual(等待战斗结束并回营任务.从OCR文本判断战斗结果("胜利！"), "胜利")
         self.assertEqual(等待战斗结束并回营任务.从OCR文本判断战斗结果("战斗失败"), "失败")
         self.assertEqual(等待战斗结束并回营任务.从OCR文本判断战斗结果("结束战斗"), "未知")
+        self.assertEqual(等待战斗结束并回营任务.从OCR文本提取摧毁率("摧毁率 67%"), 67)
+        self.assertIsNone(等待战斗结束并回营任务.识别星数(None, "结束战斗"))
 
     def test_点击回营后必须确认主界面(self):
         任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
