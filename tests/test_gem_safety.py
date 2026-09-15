@@ -1,11 +1,12 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import cv2
 import numpy as np
 
 from 任务流程.基础任务框架 import 任务上下文
+from 核心.鼠标操作 import 鼠标控制器
 
 
 def 读取模板(名称: str) -> np.ndarray:
@@ -45,6 +46,17 @@ class 宝石安全保护测试(unittest.TestCase):
         上下文.停止事件.set.assert_not_called()
         self.assertFalse(上下文.页面恢复失败)
 
+    def test_缩放后的中部宝石图标仍然触发拦截(self):
+        模板 = 读取模板("宝石.bmp")
+        缩放模板 = cv2.resize(模板, None, fx=0.8, fy=0.8, interpolation=cv2.INTER_AREA)
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        屏幕[230:230 + 缩放模板.shape[0], 390:390 + 缩放模板.shape[1]] = 缩放模板
+        上下文 = 创建上下文(屏幕)
+        上下文._宝石保护确认主页面.return_value = True
+
+        self.assertTrue(上下文.检查宝石商店危险页面(强制=True))
+        上下文.键盘.按字符按压.assert_called()
+
     def test_主世界右上角常驻宝石图标不会误触发(self):
         模板 = 读取模板("宝石.bmp")
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
@@ -64,6 +76,24 @@ class 宝石安全保护测试(unittest.TestCase):
         self.assertFalse(上下文.点击(400, 300, 延时=1, 是否精确点击=True))
         上下文.鼠标.移动到.assert_not_called()
         上下文.鼠标.左键点击.assert_not_called()
+
+    def test_点击完成后强制再次检查危险页面(self):
+        上下文 = 创建上下文(np.zeros((600, 800, 3), dtype=np.uint8))
+        上下文.检查宝石商店危险页面 = Mock(side_effect=[False, True])
+
+        self.assertFalse(上下文.点击(400, 300, 延时=1, 是否精确点击=True))
+        self.assertEqual(
+            上下文.检查宝石商店危险页面.call_args_list,
+            [call(), call(强制=True)],
+        )
+
+    def test_底层鼠标路径也会阻断危险点击(self):
+        鼠标 = 鼠标控制器.__new__(鼠标控制器)
+        鼠标._安全点击检查回调 = Mock(return_value=True)
+        鼠标._左键点击内部 = Mock(return_value=True)
+
+        self.assertFalse(鼠标.左键点击())
+        鼠标._左键点击内部.assert_not_called()
 
 
 if __name__ == "__main__":

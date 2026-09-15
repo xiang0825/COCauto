@@ -8,6 +8,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Tuple, Any, Optional
 
+import cv2
+
 from 工具包.工具函数 import 生成贝塞尔轨迹
 from 数据库.任务数据库 import 任务数据库, 机器人设置
 from 核心.ADB屏幕 import ADB屏幕
@@ -87,10 +89,10 @@ class 任务上下文:
             命中模板 = None
             命中坐标 = None
             for 模板 in ("宝石.bmp", "宝石1.bmp", "宝石2.bmp", "宝石3.bmp"):
-                命中, 坐标, _ = 识图引擎.执行匹配(
+                命中, 坐标 = self._多尺度匹配宝石图标(
+                    识图引擎,
                     危险区域,
                     模板,
-                    相似度阈值=0.96,
                 )
                 绝对坐标 = (int(坐标[0]), int(坐标[1]) + 上)
                 # 网络截图中的危险弹窗位于画面中央；把上方资源栏和
@@ -131,6 +133,43 @@ class 任务上下文:
             # 点击会按节流窗口再次检查。真正命中模板时仍然是强制拦截。
             self.置脚本状态(f"[安全拦截] 宝石页面识别暂时失败：{异常}")
             return False
+
+    @staticmethod
+    def _多尺度匹配宝石图标(识图引擎, 图像, 模板路径):
+        """兼容窗口缩放后的宝石图标，返回图标中心坐标。"""
+        模板 = 识图引擎._安全加载模板(模板路径)
+        if 模板 is None:
+            return False, (0, 0)
+        最佳分数 = -1.0
+        最佳坐标 = (0, 0)
+        # 覆盖常见 70%~130% 窗口缩放；中央弹窗约束在调用方处理。
+        for 比例 in (0.70, 0.80, 0.90, 1.00, 1.10, 1.20, 1.30):
+            if 比例 == 1.00:
+                缩放模板 = 模板
+            else:
+                缩放模板 = cv2.resize(
+                    模板,
+                    None,
+                    fx=比例,
+                    fy=比例,
+                    interpolation=cv2.INTER_AREA if 比例 < 1 else cv2.INTER_CUBIC,
+                )
+            if (
+                缩放模板.size == 0
+                or 缩放模板.shape[0] > 图像.shape[0]
+                or 缩放模板.shape[1] > 图像.shape[1]
+            ):
+                continue
+            _, 分数, _, 左上 = cv2.minMaxLoc(
+                cv2.matchTemplate(图像, 缩放模板, cv2.TM_CCOEFF_NORMED)
+            )
+            if 分数 > 最佳分数:
+                最佳分数 = 分数
+                最佳坐标 = (
+                    左上[0] + 缩放模板.shape[1] // 2,
+                    左上[1] + 缩放模板.shape[0] // 2,
+                )
+        return 最佳分数 >= 0.86, 最佳坐标
 
     def _宝石保护发送ESC并确认主页面(self) -> bool:
         """只用 ESC 退出危险页，并用主城入口和资源栏确认恢复成功。"""
@@ -347,7 +386,9 @@ class 任务上下文:
 
         # 点击可能刚好打开资源不足/宝石确认页；点击后的第二次检查只
         # 在节流窗口允许时执行，战斗连点不会每次额外截一张图。
-        if self.检查宝石商店危险页面():
+        # 点击后必须强制检查，不能被前置检查的节流窗口跳过；升级页的
+        # 宝石/商店弹窗就是在这次点击后才出现的。
+        if self.检查宝石商店危险页面(强制=True):
             return False
         return True
 

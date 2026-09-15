@@ -20,6 +20,8 @@ class 鼠标控制器:
         self._adb按下起点 = None
         self._adb有移动 = False
         self._adb按下时间 = 0.0
+        # 由任务上下文注入；返回 True 表示当前输入必须被阻断。
+        self._安全点击检查回调 = None
         if hasattr(窗口句柄, '触控') and hasattr(窗口句柄, '滑动'):
             self._adb设备 = 窗口句柄
             self._模式 = 'ADB模式'
@@ -54,7 +56,17 @@ class 鼠标控制器:
         self._x, self._y = x, y
         return 返回值
 
-    def 左键点击(self):
+    def _允许鼠标按下(self):
+        回调 = getattr(self, "_安全点击检查回调", None)
+        if not callable(回调):
+            return True
+        try:
+            return not bool(回调())
+        except Exception:
+            # 无法确认页面时宁可不点击，避免误触宝石确认按钮。
+            return False
+
+    def _左键点击内部(self):
         if self._adb设备 is not None:
             return self._adb设备.触控(self._x, self._y)
         返回值, 返回值2 = 0, 0
@@ -74,11 +86,18 @@ class 鼠标控制器:
 
         return 返回值 and 返回值2
 
+    def 左键点击(self):
+        if not self._允许鼠标按下():
+            return False
+        return self._左键点击内部()
+
     def 连续点击(self, x, y, 次数=1, 间隔毫秒=0, 是否精确点击=True):
         """连续点击同一点；ADB 模式优先复用一次 shell 会话。"""
         次数 = max(0, min(32, int(次数)))
         if 次数 == 0:
             return True
+        if not self._允许鼠标按下():
+            return False
         if self._adb设备 is not None and hasattr(self._adb设备, '连续触控'):
             return self._adb设备.连续触控(
                 [(int(x), int(y))] * 次数,
@@ -87,7 +106,7 @@ class 鼠标控制器:
 
         for 序号 in range(次数):
             self.移动到(int(x), int(y))
-            if not self.左键点击():
+            if not self._左键点击内部():
                 return False
             if 序号 < 次数 - 1 and 间隔毫秒 > 0:
                 time.sleep(max(0, int(间隔毫秒)) / 1000)
@@ -96,10 +115,12 @@ class 鼠标控制器:
     def 长按(self, x, y, 时长毫秒=220, 是否精确点击=True):
         """执行同点长按；ADB 模式使用 input swipe 保持触点。"""
         x, y = int(x), int(y)
+        if not self._允许鼠标按下():
+            return False
         self.移动到(x, y)
         if self._adb设备 is not None and hasattr(self._adb设备, '长按触控'):
             return self._adb设备.长按触控(x, y, 时长毫秒=时长毫秒)
-        self.左键按下()
+        self._左键按下内部()
         time.sleep(max(0, int(时长毫秒)) / 1000)
         return bool(self.左键抬起())
 
@@ -139,7 +160,7 @@ class 鼠标控制器:
             return win32api.SendInput(1, [输入], win32api.sizeof(输入)) > 0
         return self.移动到(self._x + rx, self._y + ry)
 
-    def 左键按下(self):
+    def _左键按下内部(self):
         if self._adb设备 is not None:
             self._adb按下起点 = (self._x, self._y)
             self._adb有移动 = False
@@ -152,6 +173,11 @@ class 鼠标控制器:
             return win32api.SendInput(1, [输入], win32api.sizeof(输入)) > 0
         return win32gui.SendMessageTimeout(self._窗口句柄, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON,
                                            win32api.MAKELONG(self._x, self._y), win32con.SMTO_BLOCK, 2000)
+
+    def 左键按下(self):
+        if not self._允许鼠标按下():
+            return False
+        return self._左键按下内部()
 
     def 左键抬起(self):
         if self._adb设备 is not None:
