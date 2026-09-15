@@ -16,6 +16,7 @@ from 模块.ADB设备操作类 import (
 )
 from 核心.鼠标操作 import 鼠标控制器
 from 核心.键盘操作 import 键盘控制器
+from 核心.ADB屏幕 import ADB屏幕
 from 数据库.任务数据库 import 任务数据库
 from 任务流程.建筑升级.升级普通建筑 import 升级普通建筑任务
 
@@ -83,27 +84,40 @@ class ADB设备测试(unittest.TestCase):
         self.assertEqual(len(runner.命令), 1)
 
     def test_触控命令固定绑定选中序列号(self):
-        runner = 假Runner(结果(在线模拟器), 结果())
+        runner = 假Runner(结果(在线模拟器), 结果(b"Physical size: 800x600"), 结果())
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
         self.assertTrue(设备.触控(12, 34))
-        self.assertEqual(runner.命令[1][1:], ["-s", "emulator-5554", "shell", "input", "tap", "12", "34"])
+        self.assertEqual(runner.命令[-1][1:], ["-s", "emulator-5554", "shell", "input", "tap", "12", "34"])
+
+    def test_实际分辨率自动映射参考坐标(self):
+        runner = 假Runner(
+            结果(在线模拟器),
+            结果(b"Physical size: 1280x720"),
+            结果(),
+        )
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        self.assertTrue(设备.触控(12, 34))
+        self.assertEqual(
+            runner.命令[-1][1:],
+            ["-s", "emulator-5554", "shell", "input", "tap", "19", "41"],
+        )
 
     def test_ADB连续触控复用一次shell会话(self):
-        runner = 假Runner(结果(在线模拟器), 结果())
+        runner = 假Runner(结果(在线模拟器), 结果(b"Physical size: 800x600"), 结果())
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
         self.assertTrue(设备.连续触控([(12, 34), (12, 34)], 间隔毫秒=8))
         self.assertEqual(
-            runner.命令[1][1:],
+            runner.命令[-1][1:],
             ["-s", "emulator-5554", "shell", "sh", "-c",
              "input tap 12 34; sleep 0.008; input tap 12 34"],
         )
 
     def test_ADB长按使用同点swipe(self):
-        runner = 假Runner(结果(在线模拟器), 结果())
+        runner = 假Runner(结果(在线模拟器), 结果(b"Physical size: 800x600"), 结果())
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
         self.assertTrue(设备.长按触控(12, 34, 220))
         self.assertEqual(
-            runner.命令[1][1:],
+            runner.命令[-1][1:],
             ["-s", "emulator-5554", "shell", "input", "swipe",
              "12", "34", "12", "34", "220"],
         )
@@ -118,6 +132,20 @@ class ADB设备测试(unittest.TestCase):
         裁剪 = 设备.获取屏幕图像cv(40, 50, 90, 100)
         self.assertEqual(裁剪.shape, (50, 50, 3))
         self.assertEqual(runner.命令[1][1:], ["-s", "emulator-5554", "exec-out", "screencap", "-p"])
+
+    def test_ADB屏幕把任意实际分辨率归一化到逻辑画布(self):
+        图像 = np.zeros((720, 1280, 3), dtype=np.uint8)
+        编码成功, 编码 = cv2.imencode(".png", 图像)
+        self.assertTrue(编码成功)
+        runner = 假Runner(
+            结果(在线模拟器),
+            结果(b"Physical size: 1280x720"),
+            结果(编码.tobytes()),
+        )
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        屏幕 = ADB屏幕(设备)
+        结果图 = 屏幕.获取屏幕图像cv(0, 0, 800, 600)
+        self.assertEqual(结果图.shape, (600, 800, 3))
 
     def test_打开已在前台的游戏不会重启或force_stop(self):
         runner = 假Runner(
@@ -151,6 +179,15 @@ class ADB设备测试(unittest.TestCase):
              "com.supercell.clashofclans/.SplashActivity"],
         )
         self.assertFalse(any("monkey" in 命令 for 命令 in runner.命令))
+
+    def test_ADB安全保护拒绝结束游戏和模拟器(self):
+        runner = 假Runner(结果(在线模拟器))
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        with self.assertRaisesRegex(ADB错误, "安全保护"):
+            设备.执行(["shell", "am", "force-stop", "com.supercell.clashofclans"])
+        with self.assertRaisesRegex(ADB错误, "安全保护"):
+            设备.关闭模拟器中的应用("com.supercell.clashofclans")
+        self.assertEqual(len(runner.命令), 0)
 
     def test_建筑升级确认区灰色时不会误报成功(self):
         任务 = object.__new__(升级普通建筑任务)

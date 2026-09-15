@@ -78,10 +78,10 @@ class 设备连接面板(ttk.Frame):
         ttk.Button(按钮区, text="测试连接并截图", command=self.测试截图).pack(side=tk.LEFT)
 
         ttk.Separator(左侧).pack(fill=tk.X, pady=9)
-        ttk.Label(左侧, text="脚本要求分辨率 800 × 600。", font=("Microsoft YaHei UI", 10, "bold")).pack(anchor=tk.W)
+        ttk.Label(左侧, text="脚本坐标自动适配实际分辨率。", font=("Microsoft YaHei UI", 10, "bold")).pack(anchor=tk.W)
         ttk.Label(
             左侧,
-            text="分辨率操作仅在确认模拟器后可用；可随时恢复 Android 默认值。普通连接测试不会触控游戏。",
+            text="任务以 800×600 为逻辑坐标，运行时自动映射到模拟器实际尺寸；下面按钮仅用于手动修改 Android 显示设置。",
             wraplength=330,
         ).pack(anchor=tk.W, pady=(3, 7))
         分辨率按钮 = ttk.Frame(左侧)
@@ -209,7 +209,7 @@ class 设备连接面板(ttk.Frame):
             if 尺寸 == (800, 600):
                 self.状态.set("连接和截图正常。可保存连接，再从左侧启动机器人。")
             else:
-                self.状态.set(f"截图可用，但分辨率为 {自然宽}×{自然高}；请设为 800×600 后再运行脚本。")
+                self.状态.set(f"连接和截图正常；已启用自动适配（实际 {自然宽}×{自然高}，逻辑 800×600）。")
         def 工作():
             设备 = self._取已确认设备()
             图像 = 设备.获取屏幕图像cv(0, 0, 2000, 2000)

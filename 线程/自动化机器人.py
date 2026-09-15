@@ -47,6 +47,7 @@ class 自动化机器人:
         self.继续事件 = threading.Event()
         self.停止事件 = threading.Event()
         self.停止事件.set()  # 目前未启动线程,处于停止状态
+        self.停止原因 = "未启动"
 
         self.op: ADB屏幕
 
@@ -58,6 +59,7 @@ class 自动化机器人:
         ADB设备操作类.解析ADB路径(设置.ADB路径)
         self.数据库.记录日志(self.机器人标志, f"启动标志为{self.机器人标志}的机器人", time.time() + 60)
         if self.停止事件.is_set():
+            self.停止原因 = ""
             self.停止事件.clear()
             #线程执行完毕后不可重复 start，因此在检测到停止事件后需新建线程实例，用于重新启动任务流程。，所以创建线程操作放在启动里面
             self.主线程 = threading.Thread(
@@ -86,6 +88,11 @@ class 自动化机器人:
         注意：此方法由监控中心调用，用于外部强制停止。
         如果是任务异常导致的停止，线程会自己设置停止事件并退出。
         """
+        self.停止原因 = (停止原因 or "外部停止").strip()
+        try:
+            self.记录日志(f"收到外部停止请求：{self.停止原因}", 300, "警告")
+        except Exception:
+            pass
         self.继续()  # 唤醒可能已经暂停的线程
         self.停止事件.set()
         # 等待线程停止,如果未启动则没有主线程属性,加一层判断
@@ -380,15 +387,20 @@ class 自动化机器人:
 
 
             print("-"*10+F"{self.机器人标志} 线程自然消亡"+"-"*10)
+            self.停止原因 = "任务自然完成"
             self.停止事件.set()  # 标志目前线程已经停止了,以免监控中心一直启动
 
         except 图像获取失败 as e:
+            self.停止原因 = f"图像获取失败：{e}"
             上下文.发送死亡通知(f"异常: {str(e)}")
             print("-"*10+F"{self.机器人标志} 线程因为异常而消亡"+"-"*10+f"异常: {str(e)}")
         except SystemExit as e:
+            if not self.停止原因:
+                self.停止原因 = "收到外部停止事件"
             print("-"*10+F"{self.机器人标志} 线程因为捕获到退出而消亡"+"-"*10)
             print(F"具体信息:{str(e)}")
         except Exception as e:
+            self.停止原因 = f"未处理异常：{e}"
             import traceback
             诊断信息 = "".join(traceback.format_exception(type(e), e, e.__traceback__))
             print(诊断信息)
@@ -404,11 +416,7 @@ class 自动化机器人:
             try:
                 if 企业微信通知器实例:
                     from datetime import datetime
-                    # 判断停止原因
-                    if self.停止事件.is_set():
-                        停止原因 = "任务异常或完成"
-                    else:
-                        停止原因 = "外部停止"
+                    停止原因 = self.停止原因 or "线程退出"
 
                     # 获取截图
                     截图 = None

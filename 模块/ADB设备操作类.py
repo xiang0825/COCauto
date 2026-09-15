@@ -115,6 +115,8 @@ class ADB设备操作类:
         return (宽, 高) if 宽 > 0 and 高 > 0 else None
 
     def 执行(self, 参数: Iterable[str], *, timeout: float = 10, binary: bool = False):
+        参数 = list(参数)
+        self._拒绝危险结束命令(参数)
         命令 = self.构造设备命令(self.adb路径, self.设备序列号, 参数)
         startupinfo = None
         creationflags = 0
@@ -145,6 +147,21 @@ class ADB设备操作类:
                 错误文本 = str(stderr).strip()
             raise ADB错误(错误文本 or f"ADB 命令失败，退出码 {结果.returncode}")
         return stdout
+
+    @staticmethod
+    def _拒绝危险结束命令(参数: Iterable[str]) -> None:
+        """阻止任务流程意外结束游戏、清空数据或关闭 Android。"""
+        参数 = [str(项).lower() for 项 in 参数]
+        if "shell" not in 参数:
+            return
+        shell参数 = 参数[参数.index("shell") + 1:]
+        危险序列 = (("am", "force-stop"), ("am", "kill"), ("pm", "clear"), ("reboot",))
+        for 序列 in 危险序列:
+            if all(项 in shell参数 for 项 in 序列):
+                raise ADB错误(
+                    f"安全保护已拦截 ADB 结束命令：{' '.join(shell参数)}；"
+                    "当前模式不会主动关闭游戏或模拟器。"
+                )
 
     @classmethod
     def 扫描设备(cls, adb路径: str = "", runner: Callable = subprocess.run) -> list[ADB设备信息]:
@@ -247,12 +264,27 @@ class ADB设备操作类:
 
     def 取屏幕尺寸(self) -> tuple[int, int]:
         if self._屏幕尺寸 is None:
-            self.获取屏幕图像cv(0, 0, self.参考宽度, self.参考高度)
+            self._验证目标()
+            try:
+                self._屏幕尺寸 = self.查询屏幕尺寸()
+            except ADB错误:
+                self._屏幕尺寸 = None
+            if not self._屏幕尺寸:
+                # 测试/兼容设备的安全默认值；真实截图成功后会更新为实际尺寸。
+                self._屏幕尺寸 = (self.参考宽度, self.参考高度)
         return self._屏幕尺寸
+
+    def 参考坐标转设备坐标(self, x: int | float, y: int | float) -> tuple[int, int]:
+        """把任务使用的 800×600 参考坐标映射到实际 ADB 屏幕。"""
+        宽度, 高度 = self.取屏幕尺寸()
+        设备x = round(float(x) * 宽度 / self.参考宽度)
+        设备y = round(float(y) * 高度 / self.参考高度)
+        return max(0, min(宽度 - 1, 设备x)), max(0, min(高度 - 1, 设备y))
 
     def 触控(self, x: int, y: int) -> bool:
         self._验证目标()
-        self.执行(["shell", "input", "tap", str(int(x)), str(int(y))], timeout=8)
+        x, y = self.参考坐标转设备坐标(x, y)
+        self.执行(["shell", "input", "tap", str(x), str(y)], timeout=8)
         return True
 
     def 连续触控(self, 位置列表: Iterable[tuple[int, int]], 间隔毫秒: int = 0) -> bool:
@@ -268,6 +300,7 @@ class ADB设备操作类:
             raise ADB错误("单次连续触控最多支持 32 个点。")
 
         间隔毫秒 = max(0, min(80, int(间隔毫秒)))
+        点位 = [self.参考坐标转设备坐标(x, y) for x, y in 点位]
         间隔命令 = f"; sleep {间隔毫秒 / 1000:.3f}" if 间隔毫秒 else ""
         脚本 = "; ".join(
             f"input tap {x} {y}{间隔命令 if 序号 < len(点位) - 1 else ''}"
@@ -280,6 +313,7 @@ class ADB设备操作类:
         """通过同点 swipe 发送一次短长按，供游戏的按住连续部署手势使用。"""
         self._验证目标()
         时长毫秒 = max(120, min(1500, int(时长毫秒)))
+        x, y = self.参考坐标转设备坐标(x, y)
         self.执行([
             "shell", "input", "swipe", str(int(x)), str(int(y)),
             str(int(x)), str(int(y)), str(时长毫秒),
@@ -288,8 +322,10 @@ class ADB设备操作类:
 
     def 滑动(self, 起点: tuple[int, int], 终点: tuple[int, int], 时长毫秒: int = 350) -> bool:
         self._验证目标()
-        self.执行(["shell", "input", "swipe", str(int(起点[0])), str(int(起点[1])),
-                    str(int(终点[0])), str(int(终点[1])), str(max(1, int(时长毫秒)))], timeout=10)
+        起点 = self.参考坐标转设备坐标(*起点)
+        终点 = self.参考坐标转设备坐标(*终点)
+        self.执行(["shell", "input", "swipe", str(起点[0]), str(起点[1]),
+                    str(终点[0]), str(终点[1]), str(max(1, int(时长毫秒)))], timeout=10)
         return True
 
     def 按键(self, 按键码: int | str) -> bool:
@@ -309,10 +345,11 @@ class ADB设备操作类:
 
     def 设置屏幕尺寸(self, 宽度: int = 800, 高度: int = 600) -> None:
         self._验证目标()
-        if (宽度, 高度) != (800, 600):
-            raise ADB错误("当前任务流程只支持 800×600；拒绝应用未验证的分辨率。")
+        宽度, 高度 = int(宽度), int(高度)
+        if not 320 <= 宽度 <= 4096 or not 240 <= 高度 <= 4096:
+            raise ADB错误("分辨率超出安全范围：宽度 320–4096，高度 240–4096。")
         self.执行(["shell", "wm", "size", f"{宽度}x{高度}"], timeout=8)
-        self._屏幕尺寸 = None
+        self._屏幕尺寸 = (宽度, 高度)
 
     def 恢复屏幕尺寸(self) -> None:
         self._验证目标()
@@ -361,8 +398,10 @@ class ADB设备操作类:
         ], timeout=20)
 
     def 关闭模拟器中的应用(self, 包名: str) -> None:
-        self._验证目标()
-        self.执行(["shell", "am", "force-stop", 包名], timeout=10)
+        raise ADB错误(
+            f"安全保护已阻止结束应用：{包名 or '未知包名'}。"
+            "ADB 模式不会主动关闭游戏，请从模拟器界面手动退出。"
+        )
 
     def 修改分辨率(self, 宽度: int = 800, 高度: int = 600, dpi: int = 160) -> None:
         self.设置屏幕尺寸(宽度, 高度)
