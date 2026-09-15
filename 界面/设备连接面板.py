@@ -18,6 +18,7 @@ class 设备连接面板(ttk.Frame):
         self._设备信息 = {}
         self._预览图 = None
         self.adb路径 = tk.StringVar()
+        self.自动检测路径 = tk.BooleanVar(value=True)
         self.网络地址 = tk.StringVar()
         self.设备序列号 = tk.StringVar()
         self.设备已确认 = tk.BooleanVar(value=False)
@@ -47,6 +48,12 @@ class 设备连接面板(ttk.Frame):
         self.路径输入 = ttk.Entry(路径行, textvariable=self.adb路径, width=34)
         self.路径输入.pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(路径行, text="浏览…", command=self._浏览ADB).pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Button(路径行, text="自动检测", command=self._自动检测ADB).pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Checkbutton(
+            左侧,
+            text="自动检测模拟器 ADB 路径（MuMu/雷电/BlueStacks）",
+            variable=self.自动检测路径,
+        ).pack(anchor=tk.W, pady=(0, 8))
 
         ttk.Label(左侧, text="在线设备（请选模拟器序列号）").pack(anchor=tk.W)
         设备行 = ttk.Frame(左侧)
@@ -100,6 +107,7 @@ class 设备连接面板(ttk.Frame):
         self.当前机器人ID = 机器人ID
         if not 机器人ID:
             self.adb路径.set("")
+            self.自动检测路径.set(True)
             self.设备序列号.set("")
             self.设备已确认.set(False)
             self.设备描述.config(text="请先在左侧选择一个机器人配置。")
@@ -107,6 +115,7 @@ class 设备连接面板(ttk.Frame):
             return
         设置 = self.数据库.获取机器人设置(机器人ID)
         self.adb路径.set(设置.ADB路径 or "")
+        self.自动检测路径.set(bool(getattr(设置, "ADB自动检测路径", True)))
         self.设备序列号.set(设置.ADB设备序列号 or "")
         self.设备已确认.set(bool(设置.ADB已确认模拟器))
         self.设备描述.config(text=f"机器人：{机器人ID}\n已保存设备：{设置.ADB设备序列号 or '未选择'}")
@@ -122,6 +131,18 @@ class 设备连接面板(ttk.Frame):
         )
         if 路径:
             self.adb路径.set(路径)
+            self.自动检测路径.set(False)
+
+    def _自动检测ADB(self):
+        self.状态.set("正在自动检测 MuMu、雷电、BlueStacks 等模拟器的 ADB 路径…")
+        def 完成(路径):
+            self.adb路径.set(路径)
+            self.自动检测路径.set(True)
+            self.状态.set(f"已检测到 ADB：{路径}；现在可以点击“扫描”。")
+        self._后台(
+            lambda: ADB设备操作类.解析ADB路径("", 自动检测=True),
+            完成,
+        )
 
     def _设备更改(self, _事件=None):
         self.设备已确认.set(False)
@@ -147,7 +168,10 @@ class 设备连接面板(ttk.Frame):
     def 扫描设备(self):
         self.状态.set("正在扫描 ADB 设备…")
         adb路径 = self.adb路径.get().strip()
-        def 完成(设备列表):
+        自动检测 = self.自动检测路径.get()
+        def 完成(扫描结果):
+            已解析路径, 设备列表 = 扫描结果
+            self.adb路径.set(已解析路径)
             self._设备信息 = {设备.序列号: 设备 for 设备 in 设备列表}
             self.设备选择.configure(values=[设备.序列号 for 设备 in 设备列表])
             if self.设备序列号.get() not in self._设备信息 and 设备列表:
@@ -159,22 +183,40 @@ class 设备连接面板(ttk.Frame):
             else:
                 self.设备描述.config(text="\n".join(设备.显示文本 for 设备 in 设备列表))
                 self.状态.set(f"发现 {len(设备列表)} 台设备。请选择要连接的模拟器。")
-        self._后台(lambda: ADB设备操作类.扫描设备(adb路径), 完成)
+        def 工作():
+            已解析路径 = ADB设备操作类.解析ADB路径(adb路径, 自动检测=自动检测)
+            设备列表 = ADB设备操作类.扫描设备(
+                已解析路径,
+                自动检测路径=False,
+            )
+            return 已解析路径, 设备列表
+        self._后台(工作, 完成)
 
     def 连接网络地址(self):
         地址 = self.网络地址.get().strip()
         self.状态.set(f"正在连接 ADB 地址 {地址}…")
         adb路径 = self.adb路径.get().strip()
-        def 完成(文本):
+        自动检测 = self.自动检测路径.get()
+        def 完成(结果):
+            已解析路径, 文本 = 结果
+            self.adb路径.set(已解析路径)
             self.状态.set(f"{文本}；请扫描设备并明确选择目标。")
-        self._后台(lambda: ADB设备操作类.连接网络设备(adb路径, 地址), 完成)
+        def 工作():
+            已解析路径 = ADB设备操作类.解析ADB路径(adb路径, 自动检测=自动检测)
+            文本 = ADB设备操作类.连接网络设备(已解析路径, 地址, 自动检测路径=False)
+            return 已解析路径, 文本
+        self._后台(工作, 完成)
 
     def _取已确认设备(self):
         if not self.设备序列号.get().strip():
             raise ADB错误("请先扫描并选择设备。")
         if not self.设备已确认.get():
             raise ADB错误("请确认目标是 Android 模拟器，不是实体手机。")
-        设备 = ADB设备操作类(self.adb路径.get().strip(), self.设备序列号.get().strip())
+        设备 = ADB设备操作类(
+            self.adb路径.get().strip(),
+            self.设备序列号.get().strip(),
+            自动检测路径=self.自动检测路径.get(),
+        )
         设备.确认在线()
         return 设备
 
@@ -183,12 +225,18 @@ class 设备连接面板(ttk.Frame):
             messagebox.showwarning("尚未选择机器人", "请先在左侧选择或创建机器人配置。", parent=self)
             return
         try:
+            自动检测 = self.自动检测路径.get()
             if self.设备已确认.get():
                 if not self.设备序列号.get().strip():
                     raise ADB错误("请先扫描并选择设备。")
-                ADB设备操作类.解析ADB路径(self.adb路径.get().strip())
+                已解析路径 = ADB设备操作类.解析ADB路径(
+                    self.adb路径.get().strip(),
+                    自动检测=自动检测,
+                )
+                self.adb路径.set(已解析路径)
             设置 = self.数据库.获取机器人设置(self.当前机器人ID)
             设置.ADB路径 = self.adb路径.get().strip()
+            设置.ADB自动检测路径 = 自动检测
             设置.ADB设备序列号 = self.设备序列号.get().strip()
             设置.ADB已确认模拟器 = bool(self.设备已确认.get() and 设置.ADB设备序列号)
             self.数据库.保存机器人设置(self.当前机器人ID, 设置)

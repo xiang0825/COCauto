@@ -34,6 +34,15 @@ class 机器人设置:
         metadata={"显示名称": "ADB 路径", "描述": "模拟器自带 adb.exe 的路径；留空则自动查找", "UI类型": "hidden"}
     )
 
+    ADB自动检测路径: bool = field(
+        default=True,
+        metadata={
+            "显示名称": "自动检测 ADB 路径",
+            "描述": "自动查找 MuMu、雷电、BlueStacks 等模拟器的 adb.exe",
+            "UI类型": "hidden",
+        }
+    )
+
     ADB设备序列号: str = field(
         default="",
         metadata={"显示名称": "ADB 设备序列号", "描述": "在模拟器连接页明确选择设备", "UI类型": "hidden"}

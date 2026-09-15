@@ -57,45 +57,105 @@ class ADB设备操作类:
     参考宽度 = 800
     参考高度 = 600
 
-    def __init__(self, adb路径: str = "", 设备序列号: str = "", runner: Callable = subprocess.run):
-        self.adb路径 = self.解析ADB路径(adb路径)
+    def __init__(
+            self,
+            adb路径: str = "",
+            设备序列号: str = "",
+            runner: Callable = subprocess.run,
+            自动检测路径: bool = True,
+    ):
+        self.自动检测路径 = bool(自动检测路径)
+        self.adb路径 = self.解析ADB路径(adb路径, 自动检测=self.自动检测路径)
         self.设备序列号 = (设备序列号 or "").strip()
         self._runner = runner
         self._屏幕尺寸: tuple[int, int] | None = None
         self._目标已验证 = False
 
     @staticmethod
-    def 解析ADB路径(adb路径: str = "") -> str:
+    def _候选ADB路径() -> list[Path]:
+        """返回常见模拟器和 Android SDK 的 adb 客户端位置。"""
+        程序文件目录 = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        程序文件目录x86 = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+        本地应用目录 = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+        用户应用目录 = Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
+        候选 = [
+            # BlueStacks
+            程序文件目录 / "BlueStacks_nxt" / "HD-Adb.exe",
+            程序文件目录x86 / "BlueStacks_nxt" / "HD-Adb.exe",
+            程序文件目录 / "BlueStacks" / "HD-Adb.exe",
+            # MuMu
+            程序文件目录 / "Netease" / "MuMuPlayer" / "nx_main" / "adb.exe",
+            程序文件目录 / "Netease" / "MuMuPlayer-12.0" / "shell" / "adb.exe",
+            程序文件目录x86 / "Netease" / "MuMuPlayer" / "nx_main" / "adb.exe",
+            本地应用目录 / "Netease" / "MuMuPlayer-12.0" / "shell" / "adb.exe",
+            用户应用目录 / "Netease" / "MuMuPlayer-12.0" / "shell" / "adb.exe",
+            # 雷电
+            Path(r"E:\LDPlayer\LDPlayer14\adb.exe"),
+            Path(r"E:\LDPlayer\LDPlayer9\adb.exe"),
+            Path(r"C:\LDPlayer\LDPlayer14\adb.exe"),
+            Path(r"C:\LDPlayer\LDPlayer9\adb.exe"),
+            Path(r"C:\leidian\LDPlayer9\adb.exe"),
+            程序文件目录 / "LDPlayer" / "LDPlayer9" / "adb.exe",
+            程序文件目录x86 / "LDPlayer" / "LDPlayer9" / "adb.exe",
+            # 夜神、逍遥和 Genymotion
+            程序文件目录 / "Nox" / "bin" / "nox_adb.exe",
+            程序文件目录x86 / "Nox" / "bin" / "nox_adb.exe",
+            程序文件目录 / "Microvirt" / "MEmu" / "adb.exe",
+            程序文件目录x86 / "Microvirt" / "MEmu" / "adb.exe",
+            程序文件目录 / "Genymobile" / "Genymotion" / "tools" / "adb.exe",
+            # Android SDK / PATH
+            本地应用目录 / "Android" / "Sdk" / "platform-tools" / "adb.exe",
+            Path(os.environ.get("ANDROID_HOME", "")) / "platform-tools" / "adb.exe"
+            if os.environ.get("ANDROID_HOME") else Path(),
+            Path(os.environ.get("ANDROID_SDK_ROOT", "")) / "platform-tools" / "adb.exe"
+            if os.environ.get("ANDROID_SDK_ROOT") else Path(),
+        ]
+        雷电目录 = os.environ.get("COC_LDPLAYER_DIR", "").strip()
+        if 雷电目录:
+            候选.insert(0, Path(雷电目录) / ("adb.exe" if os.name == "nt" else "adb"))
+
+        去重 = []
+        已见 = set()
+        for 路径 in 候选:
+            if not str(路径) or str(路径) == ".":
+                continue
+            标准路径 = os.path.normcase(os.path.abspath(str(路径)))
+            if 标准路径 not in 已见:
+                已见.add(标准路径)
+                去重.append(路径)
+        return 去重
+
+    @classmethod
+    def 查找ADB路径(cls, adb路径: str = "", 自动检测: bool = True) -> list[str]:
+        """查找可用的 adb.exe；显式路径优先，自动检测时再查常见模拟器目录。"""
         候选 = (adb路径 or os.environ.get("ANDROID_ADB", "")).strip().strip('"')
         if 候选:
             路径 = Path(候选)
             if 路径.is_dir():
                 路径 = 路径 / ("adb.exe" if os.name == "nt" else "adb")
             if 路径.is_file():
-                return str(路径.resolve())
+                return [str(路径.resolve())]
             系统候选 = shutil.which(候选)
             if 系统候选:
-                return 系统候选
+                return [str(Path(系统候选).resolve())]
             raise ADB错误(f"ADB 路径不存在：{候选}")
-        # 常见 Windows 模拟器安装位置；也可在“设备连接”页手动选择 adb.exe。
-        雷电目录 = os.environ.get("COC_LDPLAYER_DIR", "")
-        程序文件目录 = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
-        常见位置 = [
-            程序文件目录 / "BlueStacks_nxt" / "HD-Adb.exe",
-            程序文件目录 / "Netease" / "MuMuPlayer" / "nx_main" / "adb.exe",
-            程序文件目录 / "Netease" / "MuMuPlayer-12.0" / "shell" / "adb.exe",
-            Path(r"E:\LDPlayer\LDPlayer14\adb.exe"),
-            Path(r"C:\LDPlayer\LDPlayer9\adb.exe"),
-        ]
-        if 雷电目录:
-            常见位置.insert(3, Path(雷电目录) / ("adb.exe" if os.name == "nt" else "adb"))
-        for 路径 in 常见位置:
+        if not 自动检测:
+            raise ADB错误("未启用 ADB 自动检测，请填写模拟器自带的 adb.exe 路径。")
+        可执行路径 = []
+        for 路径 in cls._候选ADB路径():
             if 路径.is_file():
-                return str(路径.resolve())
+                可执行路径.append(str(路径.resolve()))
         系统路径 = shutil.which("adb")
         if 系统路径:
-            return 系统路径
+            可执行路径.append(str(Path(系统路径).resolve()))
+        去重 = list(dict.fromkeys(可执行路径))
+        if 去重:
+            return 去重
         raise ADB错误("找不到 adb.exe。请在“模拟器连接”页选择模拟器自带的 adb.exe。")
+
+    @classmethod
+    def 解析ADB路径(cls, adb路径: str = "", 自动检测: bool = True) -> str:
+        return cls.查找ADB路径(adb路径, 自动检测=自动检测)[0]
 
     @staticmethod
     def 构造设备命令(adb路径: str, 序列号: str, 参数: Iterable[str]) -> list[str]:
@@ -164,8 +224,18 @@ class ADB设备操作类:
                 )
 
     @classmethod
-    def 扫描设备(cls, adb路径: str = "", runner: Callable = subprocess.run) -> list[ADB设备信息]:
-        临时适配器 = cls(adb路径, "_scan_placeholder", runner=runner)
+    def 扫描设备(
+            cls,
+            adb路径: str = "",
+            runner: Callable = subprocess.run,
+            自动检测路径: bool = True,
+    ) -> list[ADB设备信息]:
+        临时适配器 = cls(
+            adb路径,
+            "_scan_placeholder",
+            runner=runner,
+            自动检测路径=自动检测路径,
+        )
         命令 = [临时适配器.adb路径, "devices", "-l"]
         startupinfo = None
         creationflags = 0
@@ -189,7 +259,13 @@ class ADB设备操作类:
         return 解析ADB设备列表(输出)
 
     @classmethod
-    def 连接网络设备(cls, adb路径: str, 地址: str, runner: Callable = subprocess.run) -> str:
+    def 连接网络设备(
+            cls,
+            adb路径: str,
+            地址: str,
+            runner: Callable = subprocess.run,
+            自动检测路径: bool = True,
+    ) -> str:
         地址 = (地址 or "").strip()
         匹配 = re.fullmatch(r"([^:\s]+):(\d{1,5})", 地址)
         if not 匹配 or not 1 <= int(匹配.group(2)) <= 65535:
@@ -200,7 +276,7 @@ class ADB设备操作类:
         except ValueError:
             if not re.fullmatch(r"[A-Za-z0-9.-]+", 主机):
                 raise ADB错误("地址格式应为 host:port，例如 127.0.0.1:5555。")
-        可执行文件 = cls.解析ADB路径(adb路径)
+        可执行文件 = cls.解析ADB路径(adb路径, 自动检测=自动检测路径)
         命令 = [可执行文件, "connect", 地址]
         startupinfo = None
         creationflags = 0
@@ -227,7 +303,11 @@ class ADB设备操作类:
     def 确认在线(self) -> ADB设备信息:
         if not self.设备序列号:
             raise ADB错误("尚未选择设备序列号。")
-        设备列表 = self.扫描设备(self.adb路径, runner=self._runner)
+        设备列表 = self.扫描设备(
+            self.adb路径,
+            runner=self._runner,
+            自动检测路径=self.自动检测路径,
+        )
         当前设备 = next((设备 for 设备 in 设备列表 if 设备.序列号 == self.设备序列号), None)
         if 当前设备 is None:
             raise ADB错误(f"所选设备 {self.设备序列号} 未出现在 ADB 设备列表中。")

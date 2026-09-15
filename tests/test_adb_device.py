@@ -68,6 +68,16 @@ class ADB设备测试(unittest.TestCase):
         self.assertEqual(ADB设备操作类.解析屏幕尺寸("Physical size: 1280x720\nOverride size: 800x600"), (800, 600))
         self.assertIsNone(ADB设备操作类.解析屏幕尺寸("unknown"))
 
+    def test_自动检测ADB路径并支持关闭自动检测(self):
+        with patch.object(ADB设备操作类, "_候选ADB路径", return_value=[Path(sys.executable)]), \
+                patch("模块.ADB设备操作类.shutil.which", return_value=None):
+            self.assertEqual(
+                ADB设备操作类.解析ADB路径("", 自动检测=True),
+                str(Path(sys.executable).resolve()),
+            )
+        with self.assertRaisesRegex(ADB错误, "未启用 ADB 自动检测"):
+            ADB设备操作类.解析ADB路径("", 自动检测=False)
+
     def test_实体Samsung设备即使确认也会被阻止(self):
         runner = 假Runner(结果(b"List of devices attached\n127.0.0.1:16416 device model:SM_A5560 product:a55xchn\n"))
         设备 = ADB设备操作类(ADB, "127.0.0.1:16416", runner=runner)

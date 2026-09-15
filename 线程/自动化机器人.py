@@ -57,7 +57,10 @@ class 自动化机器人:
         if not 设置.ADB已确认模拟器 or not 设置.ADB设备序列号:
             raise RuntimeError("请先在“模拟器连接”页选择 ADB 设备、确认它是模拟器并保存。")
         # 在创建后台任务前验证路径，避免线程因配置错误静默退出。
-        ADB设备操作类.解析ADB路径(设置.ADB路径)
+        ADB设备操作类.解析ADB路径(
+            设置.ADB路径,
+            自动检测=getattr(设置, "ADB自动检测路径", True),
+        )
         self.数据库.记录日志(self.机器人标志, f"启动标志为{self.机器人标志}的机器人", time.time() + 60)
         if self.停止事件.is_set():
             self.停止原因 = ""
@@ -386,7 +389,11 @@ class 自动化机器人:
             raise RuntimeError("请先在“模拟器连接”页确认目标是 Android 模拟器并保存连接。")
         if not 设置.ADB设备序列号:
             raise RuntimeError("尚未配置 ADB 设备序列号；请先扫描并选择模拟器。")
-        self.设备 = ADB设备操作类(设置.ADB路径, 设置.ADB设备序列号)
+        self.设备 = ADB设备操作类(
+            设置.ADB路径,
+            设置.ADB设备序列号,
+            自动检测路径=getattr(设置, "ADB自动检测路径", True),
+        )
         self.op = ADB屏幕(self.设备)
         self.雷电模拟器 = self.设备
         企业微信通知器实例 = None
