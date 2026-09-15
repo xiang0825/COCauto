@@ -1,5 +1,7 @@
 import random
 import time
+import math
+import re
 
 import cv2
 import numpy as np
@@ -22,6 +24,14 @@ class 资源不足错误(Exception):
 
 class 城墙升级任务(基础任务):
     """自动检测并升级城墙"""
+
+    # 任务坐标统一使用 800×600 逻辑画布；ADB 屏幕适配器会负责映射到实际分辨率。
+    墙体搜索区域 = (70, 55, 730, 540)
+    墙体搜索每轮最大候选数 = 24
+    墙体搜索最大轮数 = 5
+    墙体搜索超时秒 = 120
+    墙体点击后等待毫秒 = 420
+    墙体关键词 = ("城墙", "城牆", "围墙", "围牆", "wall", "walls")
 
     @property
     def 设置(self) -> 机器人设置:
@@ -50,45 +60,50 @@ class 城墙升级任务(基础任务):
             return False
 
     def 刷一次墙(self):
-        上下文=self.上下文
+        上下文 = self.上下文
 
-        上下文.置脚本状态("开始刷一块墙")
-        # 初始化操作
+        上下文.置脚本状态("开始刷一块墙：扫描主世界可见墙段")
         self.进入城墙界面(上下文)
-        随机半径 = random.randint(0, 5)
-        开始找墙时间=time.time()
+        开始找墙时间 = time.monotonic()
+        已尝试点 = []
 
-        # 主循环
-        while True:
-            上下文.脚本延时(1500)
+        # 旧实现只 OCR “城墙”文字，但文字只有在点击墙段后才会出现，
+        # 因此永远没有第一步。现在先用边缘/颜色生成墙段候选，再用
+        # 点击后的“城墙”文字和升级面板双重确认，候选失败就换点。
+        for 轮次 in range(self.墙体搜索最大轮数):
+            if time.monotonic() - 开始找墙时间 >= self.墙体搜索超时秒:
+                break
 
-            # OCR识别处理
-            ocr结果 = self.执行OCR识别(上下文)
+            屏幕图像 = 上下文.op.获取屏幕图像cv(0, 0, 800, 600)
+            候选点列表 = self.生成城墙候选点(屏幕图像)
+            候选点列表 = [
+                点 for 点 in 候选点列表
+                if not any((点[0] - 旧点[0]) ** 2 + (点[1] - 旧点[1]) ** 2 < 14 ** 2
+                           for 旧点 in 已尝试点)
+            ]
+            上下文.置脚本状态(
+                f"第{轮次 + 1}轮识别到{len(候选点列表)}个墙段候选点"
+            )
 
-            print(ocr结果)
-            if not ocr结果:
-                continue
+            for 候选序号, (x, y) in enumerate(候选点列表, 1):
+                if time.monotonic() - 开始找墙时间 >= self.墙体搜索超时秒:
+                    break
+                已尝试点.append((x, y))
+                上下文.置脚本状态(
+                    f"尝试选择墙段 {x},{y}（第{候选序号}个候选）"
+                )
+                上下文.点击(x, y, 延时=180, 是否精确点击=True)
+                上下文.脚本延时(self.墙体点击后等待毫秒)
+                ocr结果 = self.执行OCR识别(上下文)
+                if self.处理已选中的城墙(上下文, ocr结果, (x, y)):
+                    上下文.脚本延时(900)
+                    return True
 
-            # 处理OCR结果
-            if self.处理OCR结果(上下文, ocr结果):
-                上下文.脚本延时(1500)
-                return True  # 成功升级
+            if 轮次 + 1 < self.墙体搜索最大轮数:
+                self.滑动屏幕(上下文, random.randint(0, 5))
+                上下文.置脚本状态("当前区域未确认可升级墙段，平移村庄继续搜索")
 
-            # if "其他升级" in ocr结果.__str__() or "升级中" in ocr结果.__str__():
-                # 上下文.置脚本状态("其他升级")
-                # break
-
-            if time.time()-开始找墙时间>60*2:
-                raise RuntimeError("找墙超时,超过了120秒")
-
-
-            # 滑动屏幕
-            self.滑动屏幕(上下文, 随机半径)
-            上下文.置脚本状态("往上滑动继续找墙")
-
-        上下文.点击(353, 13, 延时=1000)#关闭建筑栏
-        # 超时处理
-        上下文.置脚本状态("未找到可升级城墙")
+        上下文.置脚本状态("未找到可升级城墙：已扫描可见墙段和多个村庄区域")
         return False
 
 
@@ -122,16 +137,15 @@ class 城墙升级任务(基础任务):
             return False
 
     def 进入城墙界面(self, 上下文):
-        """点击进入城墙界面"""
-        x = 353 if self.设置.是否刷主世界 else 450
-        上下文.脚本延时(1000)
-        上下文.点击(x, 13, 延时=1000)
-        上下文.鼠标.移动到(399,116)
-        上下文.鼠标.左键按下()
-        for _ in range(150):
-            上下文.鼠标.移动相对位置(0,random.randint(-10,-5))
-            上下文.脚本延时(5)
-        上下文.鼠标.左键抬起()
+        """准备在主世界直接扫描墙段。
+
+        旧版点击 (353, 13) 假定存在“城墙列表”入口，但当前版本该位置
+        不是稳定入口，点击后也不会产生可供 OCR 的墙体列表。任务计划在
+        进入本任务前已经调用到主世界，因此这里仅等待画面稳定，不再误点
+        顶部 UI；找不到墙时由主流程负责平移和重试。
+        """
+        上下文.置脚本状态("主世界画面已稳定，准备识别墙段")
+        上下文.脚本延时(800)
 
 
 
@@ -139,53 +153,216 @@ class 城墙升级任务(基础任务):
         """执行屏幕OCR识别"""
 
         try:
-            # 截取识别区域
-            #屏幕图像 = 上下文.op.获取屏幕图像cv(266, 68, 559, 389)
-            屏幕图像 = 上下文.op.获取屏幕图像cv(219,57,595,398)
-            # cv2.imshow("a",屏幕图像)
-            # cv2.waitKey(0)
-            # cv2.destroyAllWindows()
+            # 选中墙后标题/升级面板可能出现在底部或右侧，不能再限制在
+            # 219,57,595,398；使用完整逻辑画布，OCR 坐标天然为绝对坐标。
+            屏幕图像 = 上下文.op.获取屏幕图像cv(0, 0, 800, 600)
             # 使用OCR引擎识别
             ocr结果, _ = self.ocr引擎(屏幕图像)
-            return ocr结果
+            return ocr结果 or []
         except Exception as e:
             上下文.置脚本状态(f"OCR识别失败: {str(e)}")
             return []
 
+    @classmethod
+    def 文本是否城墙(cls, 文本) -> bool:
+        """兼容简体/繁体和国际服英文 OCR 结果。"""
+        文本 = str(文本 or "").replace(" ", "").lower()
+        return any(关键词 in 文本 for 关键词 in cls.墙体关键词)
+
+    @staticmethod
+    def 解析OCR坐标(坐标点列表, 偏移=(0, 0)) -> tuple[int, int, int, int]:
+        """把 OCR 四边形坐标转成稳定的绝对包围框。"""
+        if not 坐标点列表 or len(坐标点列表) < 2:
+            raise ValueError("OCR 坐标为空")
+        所有x = [int(点[0]) for 点 in 坐标点列表]
+        所有y = [int(点[1]) for 点 in 坐标点列表]
+        偏移x, 偏移y = int(偏移[0]), int(偏移[1])
+        左上x = max(0, min(800, min(所有x) + 偏移x))
+        左上y = max(0, min(600, min(所有y) + 偏移y))
+        右下x = max(左上x + 1, min(800, max(所有x) + 偏移x))
+        右下y = max(左上y + 1, min(600, max(所有y) + 偏移y))
+        return 左上x, 左上y, 右下x, 右下y
+
+    def 生成城墙候选点(self, 屏幕图像: np.ndarray) -> list[tuple[int, int]]:
+        """从村庄画面提取墙段候选点。
+
+        城墙在不同等级下颜色会变化，因此不依赖单一模板；使用金色/灰色
+        边缘和等距去重生成候选，真正是否为墙由点击后的 OCR 再确认。
+        """
+        if not isinstance(屏幕图像, np.ndarray) or 屏幕图像.ndim != 3:
+            return []
+        高度, 宽度 = 屏幕图像.shape[:2]
+        if 高度 < 80 or 宽度 < 120:
+            return []
+
+        区域左, 区域上, 区域右, 区域下 = self.墙体搜索区域
+        区域右 = min(区域右, 宽度)
+        区域下 = min(区域下, 高度)
+        if 区域右 <= 区域左 or 区域下 <= 区域上:
+            return []
+        裁剪 = 屏幕图像[区域上:区域下, 区域左:区域右]
+        hsv图像 = cv2.cvtColor(裁剪, cv2.COLOR_BGR2HSV)
+
+        # 兼容常见灰黑墙体和金色墙顶；只用于排序，不直接判定墙。
+        金色掩码 = cv2.inRange(
+            hsv图像,
+            np.array([8, 75, 75], dtype=np.uint8),
+            np.array([40, 255, 255], dtype=np.uint8),
+        )
+        灰色掩码 = cv2.inRange(
+            hsv图像,
+            np.array([0, 0, 28], dtype=np.uint8),
+            np.array([179, 145, 205], dtype=np.uint8),
+        )
+        灰度 = cv2.cvtColor(裁剪, cv2.COLOR_BGR2GRAY)
+        边缘 = cv2.Canny(灰度, 60, 170)
+        线性掩码 = cv2.bitwise_or(边缘, 金色掩码)
+        线性掩码 = cv2.morphologyEx(
+            线性掩码,
+            cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
+        )
+        线段列表 = cv2.HoughLinesP(
+            线性掩码,
+            1,
+            np.pi / 180,
+            threshold=14,
+            minLineLength=16,
+            maxLineGap=5,
+        )
+        候选评分 = []
+        if 线段列表 is not None:
+            for 线段 in 线段列表[:, 0]:
+                x1, y1, x2, y2 = [int(值) for 值 in 线段]
+                长度 = math.hypot(x2 - x1, y2 - y1)
+                角度 = abs(math.degrees(math.atan2(y2 - y1, x2 - x1))) % 180
+                # 等距视角下的墙线通常是斜线；过滤水平文字和竖直 UI。
+                if 长度 < 16 or not (18 <= 角度 <= 72 or 108 <= 角度 <= 162):
+                    continue
+                for 比例 in (0.30, 0.50, 0.70):
+                    x = round(x1 + (x2 - x1) * 比例) + 区域左
+                    y = round(y1 + (y2 - y1) * 比例) + 区域上
+                    半径 = 6
+                    局部金色 = 金色掩码[
+                        max(0, y - 区域上 - 半径):min(区域下 - 区域上, y - 区域上 + 半径 + 1),
+                        max(0, x - 区域左 - 半径):min(区域右 - 区域左, x - 区域左 + 半径 + 1),
+                    ]
+                    局部灰色 = 灰色掩码[
+                        max(0, y - 区域上 - 半径):min(区域下 - 区域上, y - 区域上 + 半径 + 1),
+                        max(0, x - 区域左 - 半径):min(区域右 - 区域左, x - 区域左 + 半径 + 1),
+                    ]
+                    金色比例 = float(np.count_nonzero(局部金色)) / max(1, 局部金色.size)
+                    灰色比例 = float(np.count_nonzero(局部灰色)) / max(1, 局部灰色.size)
+                    评分 = 长度 * 0.45 + 金色比例 * 80 + 灰色比例 * 22
+                    候选评分.append((评分, x, y))
+
+        候选评分.sort(reverse=True)
+        结果 = []
+        for _, x, y in 候选评分:
+            if not (区域左 <= x < 区域右 and 区域上 <= y < 区域下):
+                continue
+            if any((x - 旧x) ** 2 + (y - 旧y) ** 2 < 16 ** 2 for 旧x, 旧y in 结果):
+                continue
+            结果.append((x, y))
+            if len(结果) >= self.墙体搜索每轮最大候选数:
+                break
+
+        # 低画质/缩放状态下 Hough 可能没有稳定直线，改用角点作为保底；
+        # 这些点仍然必须经过点击后的“城墙” OCR 确认，不会直接升级。
+        if not 结果:
+            角点列表 = cv2.goodFeaturesToTrack(
+                灰度,
+                maxCorners=self.墙体搜索每轮最大候选数 * 2,
+                qualityLevel=0.02,
+                minDistance=18,
+                blockSize=5,
+            )
+            if 角点列表 is not None:
+                for 角点 in 角点列表:
+                    x = int(round(float(角点[0][0]))) + 区域左
+                    y = int(round(float(角点[0][1]))) + 区域上
+                    if 区域左 <= x < 区域右 and 区域上 <= y < 区域下:
+                        结果.append((x, y))
+                    if len(结果) >= self.墙体搜索每轮最大候选数:
+                        break
+
+        return 结果
+
+    def 处理已选中的城墙(self, 上下文, ocr结果, 目标点: tuple[int, int]) -> bool:
+        """点击候选点后确认标题确实是城墙，再读取升级面板。"""
+        墙体项 = next(
+            (项 for 项 in (ocr结果 or [])
+             if len(项) >= 2 and self.文本是否城墙(项[1])),
+            None,
+        )
+        if 墙体项 is None:
+            return False
+        上下文.置脚本状态(
+            f"已确认城墙候选点{目标点[0]},{目标点[1]}，读取升级资源按钮"
+        )
+        x, y = int(目标点[0]), int(目标点[1])
+        return self.执行升级(
+            上下文,
+            x - 10,
+            y - 10,
+            x + 10,
+            y + 10,
+            已选中=True,
+            OCR结果=ocr结果,
+        )
+
+    @staticmethod
+    def OCR文本数字(文本) -> int | None:
+        """读取升级费用；兼容 OCR 把 5/0 识别成 S/o 的情况。"""
+        文本 = str(文本 or "").replace(" ", "").replace(",", "")
+        if not 文本:
+            return None
+        文本 = 文本.translate(str.maketrans({"o": "0", "O": "0", "s": "5", "S": "5"}))
+        数字 = re.sub(r"[^0-9]", "", 文本)
+        if not 数字:
+            return None
+        try:
+            数值 = int(数字)
+        except ValueError:
+            return None
+        return 数值 if 10_000 <= 数值 <= 100_000_000 else None
+
+    def 解析城墙升级费用(self, ocr结果) -> tuple[int | None, int | None]:
+        """按升级按钮的左右位置读取金币/圣水费用。"""
+        金币费用 = None
+        圣水费用 = None
+        for 识别项 in ocr结果 or []:
+            if len(识别项) < 2:
+                continue
+            try:
+                x1, y1, x2, y2 = self.解析OCR坐标(识别项[0])
+            except Exception:
+                continue
+            if y1 < 430 or y2 > 485:
+                continue
+            数值 = self.OCR文本数字(识别项[1])
+            if 数值 is None:
+                continue
+            if x2 <= 485:
+                金币费用 = 数值
+            elif x1 >= 485:
+                圣水费用 = 数值
+        return 金币费用, 圣水费用
+
     def 处理OCR结果(self, 上下文, ocr结果) -> bool:
         """解析OCR结果并处理,并尝试升级城墙,返回false则升级失败"""
         for 识别项 in ocr结果:
+            if len(识别项) < 2:
+                continue
             文本内容 = 识别项[1]
-            if "城墙" not in 文本内容:
+            if not self.文本是否城墙(文本内容):
                 continue
 
             # 获取坐标信息
             try:
-                # 位置数组 = [int(x) for x in 识别项[0]]
-                # 左上x = 位置数组[0] + 266
-                # 左上y = 位置数组[1] + 68
-                # 右下x = 559
-                # 右下y = 位置数组[3] + 68
-
-                # 提取坐标点
-                坐标点列表 = 识别项[0]  # 是一个列表，里面是 4 个 [x, y]
-                print(识别项)
-                # 分别提取出所有 x 和所有 y
-                所有x = [点[0] for 点 in 坐标点列表]
-                所有y = [点[1] for 点 in 坐标点列表]
-
-                # 求出左上角和右下角的 x 和 y（做近似包围框处理）
-                # 左上x = int(min(所有x)) + 266
-                # 左上y = int(min(所有y)) + 68
-                # # 右下x = int(max(所有x)) + 266
-                # 右下x = 559
-                # 右下y = int(max(所有y)) + 68
-                #
-                左上x = int(min(所有x)) + 219
-                左上y = int(min(所有y)) + 57
-                # 右下x = int(max(所有x)) + 266
-                右下x = 595
-                右下y = int(max(所有y)) + 57
+                # 当前执行OCR识别返回的是完整画布坐标；同时保留该方法
+                # 对外的兼容性，避免再把右下角硬编码到 595。
+                左上x, 左上y, 右下x, 右下y = self.解析OCR坐标(识别项[0])
             except Exception as e:
                 上下文.置脚本状态(f"坐标解析失败: {str(e)}")
                 continue
@@ -247,7 +424,6 @@ class 城墙升级任务(基础任务):
             )
             if 是否有红色调偏粉色块:  # 根据实际情况调整阈值
                 上下文.置脚本状态("资源不足无法升级")
-                上下文.点击(353, 13)  # 返回
                 raise 资源不足错误("资源不足,退出刷墙功能")
                 #return False
             return True
@@ -257,13 +433,28 @@ class 城墙升级任务(基础任务):
             上下文.置脚本状态(f"资源检查失败: {str(e)}")
             return False
 
-    def 执行升级(self, 上下文, x1, y1, x2, y2) -> bool:
+    def 执行升级(
+            self,
+            上下文,
+            x1,
+            y1,
+            x2,
+            y2,
+            已选中: bool = False,
+            OCR结果=None,
+    ) -> bool:
         """执行升级操作"""
         try:
-            # 计算点击中心
-            中心x = (x1 + x2) // 2 + random.randint(-5, 5)
-            中心y = (y1 + y2) // 2 + random.randint(-5, 5)
-            上下文.点击(中心x, 中心y, 延时=1500)
+            if not 已选中:
+                # 旧的建议列表流程传入的是目标框，需要先点击选中。
+                中心x = (x1 + x2) // 2 + random.randint(-5, 5)
+                中心y = (y1 + y2) // 2 + random.randint(-5, 5)
+                上下文.点击(中心x, 中心y, 延时=1500)
+            else:
+                # 直接扫描墙段时目标已经被点击；再次点击可能会关闭面板或
+                # 进入“选择一列”，所以只等待升级面板稳定。
+                上下文.置脚本状态("城墙面板已打开，不重复点击墙段")
+                上下文.脚本延时(350)
 
             # # 选择升级资源
             # 当前金币 = 上下文.数据库.获取最新资源(上下文.机器人标志).get("金币", 0)
@@ -272,6 +463,7 @@ class 城墙升级任务(基础任务):
 
             当前金币=上下文.数据库.获取最新完整状态(上下文.机器人标志).状态数据["家乡资源"]["金币"]
             当前圣水=上下文.数据库.获取最新完整状态(上下文.机器人标志).状态数据["家乡资源"]["圣水"]
+            金币费用, 圣水费用 = self.解析城墙升级费用(OCR结果)
             区域图像=上下文.op.获取屏幕图像cv(276,440,626,468)
             #区域图像=上下文.op.获取屏幕图像cv(133,428,677,491)
 
@@ -296,21 +488,22 @@ class 城墙升级任务(基础任务):
 
 
             if 当前圣水 > 当前金币 and 有圣水图标:
+                if 圣水费用 is not None and 当前圣水 < 圣水费用:
+                    上下文.置脚本状态(f"圣水不足：当前{当前圣水}，城墙升级需要{圣水费用}")
+                    return False
                 上下文.置脚本状态("使用圣水升级")
                 上下文.点击(圣水x, 圣水y, 延时=1000)
             elif 有金币图标:
+                if 金币费用 is not None and 当前金币 < 金币费用:
+                    上下文.置脚本状态(f"金币不足：当前{当前金币}，城墙升级需要{金币费用}")
+                    return False
                 上下文.置脚本状态("使用金币升级")
                 上下文.点击(金币x, 金币y, 延时=1000)
             else:
                 raise RuntimeError("无法定位升级按钮")
-            # 上下文.脚本延时(2000)
-            上下文.置脚本状态("点击升级")
-            # 确认升级
-            if self.设置.是否刷主世界:
-                上下文.点击(573, 495, 延时=500)
-            else:
-                上下文.点击(400, 520, 延时=500)
-            上下文.置脚本状态("城墙升级成功")
+            # 当前版本资源按钮本身就是升级按钮；旧版这里额外点击固定
+            # 坐标会落到旁边另一种资源按钮，造成误触或重复操作。
+            上下文.置脚本状态("城墙升级按钮已点击")
             return True
         except Exception as e:
             上下文.置脚本状态(f"升级操作失败: {str(e)}")
