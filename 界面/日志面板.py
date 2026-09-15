@@ -1,5 +1,6 @@
 """运行观察面板：集中显示所有机器人的历史日志和实时消息。"""
 import queue
+import re
 import time
 import tkinter as tk
 from tkinter import ttk, scrolledtext
@@ -57,7 +58,11 @@ class 日志面板(ttk.Frame):
                 机器人ID = str(日志消息.get("机器人ID") or "系统")
                 内容 = str(日志消息.get("内容", ""))
                 级别 = 日志消息.get("级别", "正常")
-                self._实时日志.append((当前时间, 机器人ID, 内容, 级别))
+                try:
+                    记录时间 = float(日志消息.get("记录时间", 当前时间))
+                except (TypeError, ValueError):
+                    记录时间 = 当前时间
+                self._实时日志.append((记录时间, 机器人ID, 内容, 级别))
             else:
                 self._实时日志.append((当前时间, "系统", str(日志消息), "正常"))
             有变化 = True
@@ -106,6 +111,11 @@ class 日志面板(ttk.Frame):
             return "警告"
         return "正常"
 
+    @staticmethod
+    def _去掉实时前缀(文本: str) -> str:
+        """历史日志没有时间前缀，实时队列有；去掉后才能合并同一条记录。"""
+        return re.sub(r"^\[\d{2}:\d{2}:\d{2}\]\s*", "", str(文本))
+
     def 更新日志显示(self):
         """合并全部机器人历史日志、实时消息和界面操作日志。"""
         self._获取历史日志()
@@ -119,6 +129,23 @@ class 日志面板(ttk.Frame):
         全部日志.extend(self._实时日志)
         全部日志.extend(self._操作日志)
         全部日志.sort(key=lambda 项: 项[0])
+
+        # 同一条运行日志同时存在于数据库历史和实时队列中；使用数据库
+        # 返回的记录时间做关联，并去掉实时消息的显示前缀，避免重复渲染。
+        去重日志 = []
+        已显示 = set()
+        for 项 in 全部日志:
+            时间戳, 机器人ID, 内容, 级别 = 项
+            关键字 = (
+                str(机器人ID),
+                round(float(时间戳), 6),
+                self._去掉实时前缀(内容),
+            )
+            if 关键字 in 已显示:
+                continue
+            已显示.add(关键字)
+            去重日志.append(项)
+        全部日志 = 去重日志
 
         当前视图 = self.日志文本框.yview()
         self.日志文本框.configure(state="normal")

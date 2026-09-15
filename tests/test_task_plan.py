@@ -1,6 +1,7 @@
 import unittest
 
 from 数据库.任务数据库 import 机器人设置
+from 界面.日志面板 import 日志面板
 from 界面.任务计划面板 import 生成任务计划
 from 任务流程.主世界打鱼.搜索敌人 import 搜索目标敌人任务
 
@@ -52,6 +53,13 @@ class 任务计划测试(unittest.TestCase):
 
         self.assertGreater(金币优先, 700000)
         self.assertGreater(黑水优先, 700000)
+
+    def test_日志面板会去掉实时消息时间前缀(self):
+        self.assertEqual(
+            日志面板._去掉实时前缀("[14:33:41] 下兵成功"),
+            "下兵成功",
+        )
+        self.assertEqual(日志面板._去掉实时前缀("普通历史日志"), "普通历史日志")
 
 
 if __name__ == "__main__":

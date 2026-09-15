@@ -503,13 +503,15 @@ class 任务数据库:
         """原子化日志记录
         下次超时:为下次超时的时间戳
         """
+        记录时间 = time.time()
         with self._获取连接() as conn:
             游标 = conn.execute(
                 "INSERT INTO 任务日志 (机器人标志, 日志内容, 记录时间, 下次超时) VALUES (?, ?, ?, ?)",
-                (机器人标志, 日志内容, time.time(), 下次超时)
+                (机器人标志, 日志内容, 记录时间, 下次超时)
             )
 
             conn.commit()
+        return 记录时间
 
     def 读取最后日志(self, 机器人标志: str) -> 任务日志:
         """获取最后有效日志"""
