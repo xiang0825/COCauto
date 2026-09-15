@@ -1,7 +1,7 @@
 import unittest
 import threading
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from 数据库.任务数据库 import 机器人设置
 from 界面.日志面板 import 日志面板
@@ -81,10 +81,12 @@ class 任务计划测试(unittest.TestCase):
         机器人._执行升级计划 = Mock(side_effect=模拟升级)
         机器人._执行主世界刷资源计划 = Mock(return_value=True)
 
-        机器人._执行刷墙计划(上下文, object())
+        with patch("线程.自动化机器人.到主世界任务") as 回主世界:
+            机器人._执行刷墙计划(上下文, object())
 
         self.assertEqual(调用次数["wall"], 2)
         机器人._执行主世界刷资源计划.assert_called_once()
+        回主世界.assert_called_once_with(上下文)
         self.assertFalse(机器人.停止事件.is_set())
 
 

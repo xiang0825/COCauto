@@ -88,6 +88,86 @@ class 刷墙识别测试(unittest.TestCase):
         self.assertNotIn("夜.bmp", 金币模板)
         self.assertNotIn("夜.bmp", 圣水模板)
 
+    def test_资源不足只返回主世界且不点击宝石或商店(self):
+        键盘 = Mock()
+        上下文 = SimpleNamespace(
+            键盘=键盘,
+            点击=Mock(),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+
+        self.任务._标记资源不足并返回主世界(上下文, "金币不足")
+
+        self.assertTrue(上下文.刷墙需要资源)
+        键盘.按字符按压.assert_called_once_with("esc")
+        上下文.点击.assert_not_called()
+        日志 = " ".join(调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
+        self.assertIn("禁止使用宝石", 日志)
+        self.assertIn("禁止进入商店", 日志)
+
+    def test_资源不足时没有安全可点击资源(self):
+        self.assertIsNone(
+            self.任务.选择可安全使用的升级资源(
+                1_000_000,
+                2_000_000,
+                5_000_000,
+                5_000_000,
+                True,
+                True,
+            )
+        )
+        self.assertEqual(
+            self.任务.选择可安全使用的升级资源(
+                6_000_000,
+                2_000_000,
+                5_000_000,
+                5_000_000,
+                True,
+                True,
+            ),
+            "金币",
+        )
+
+    def test_执行升级资源不足不会点击资源入口(self):
+        状态 = SimpleNamespace(
+            状态数据={"家乡资源": {"金币": 1_000_000, "圣水": 2_000_000}}
+        )
+        上下文 = SimpleNamespace(
+            机器人标志="robot_1",
+            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态)),
+            键盘=Mock(),
+            点击=Mock(),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        self.任务.识别城墙升级资源按钮 = Mock(return_value={
+            "金币": True,
+            "金币点击点": (447, 484),
+            "圣水": True,
+            "圣水点击点": (534, 484),
+        })
+        self.任务.确认城墙升级提交 = Mock()
+        OCR结果 = [
+            ([[411, 450], [471, 450], [471, 464], [411, 464]], "5000000", 0.80),
+            ([[500, 450], [559, 450], [559, 464], [500, 464]], "5000000", 0.80),
+        ]
+
+        self.assertFalse(
+            self.任务.执行升级(
+                上下文,
+                0,
+                0,
+                10,
+                10,
+                已选中=True,
+                OCR结果=OCR结果,
+            )
+        )
+        self.assertTrue(上下文.刷墙需要资源)
+        上下文.点击.assert_not_called()
+        self.任务.确认城墙升级提交.assert_not_called()
+
     def test_能读取墙体等级并识别资源不足(self):
         OCR结果 = [
             ([[250, 416], [390, 416], [390, 443], [250, 443]], "城墙（16级-）", 0.95),
