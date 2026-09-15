@@ -99,6 +99,22 @@ class ADB设备测试(unittest.TestCase):
         self.assertTrue(设备.触控(12, 34))
         self.assertEqual(runner.命令[-1][1:], ["-s", "emulator-5554", "shell", "input", "tap", "12", "34"])
 
+    def test_ADB传输断线会重连后重试(self):
+        runner = 假Runner(
+            结果(在线模拟器),
+            结果(b"Physical size: 800x600"),
+            结果(code=1, 错误=b"error: protocol fault (couldn't read status): connection reset"),
+            结果(),
+            结果(),
+        )
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        self.assertTrue(设备.触控(12, 34))
+        self.assertEqual(runner.命令[-2][1:], ["reconnect", "offline"])
+        self.assertEqual(
+            runner.命令[-1][1:],
+            ["-s", "emulator-5554", "shell", "input", "tap", "12", "34"],
+        )
+
     def test_实际分辨率自动映射参考坐标(self):
         runner = 假Runner(
             结果(在线模拟器),

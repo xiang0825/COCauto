@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -87,6 +87,30 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertFalse(任务.判断下兵反馈(前图, 后图, {"类别": "兵种"}))
         后图[10:25, 5:25] = 255
         self.assertTrue(任务.判断下兵反馈(前图, 后图, {"类别": "兵种"}))
+
+    def test_英雄技能无专用模板时按英雄槽位识别高亮(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.模板识别 = Mock()
+        任务.模板识别._安全加载模板.return_value = None
+        战前图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        战后图像 = 战前图像.copy()
+        # 模拟第4格英雄技能区域出现紫色高亮；颜色使用 BGR。
+        战后图像[530:570, 245:290] = (200, 0, 255)
+        上下文 = SimpleNamespace(
+            当前兵栏清单=[{
+                "槽位": 4,
+                "名称": "英雄_野蛮人之王",
+                "类别": "英雄",
+                "区域": (234, 510, 304, 594),
+            }],
+            _战斗开始兵栏画面=战前图像,
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=战后图像),
+            ),
+            置脚本状态=Mock(),
+        )
+        状态 = 任务.识别英雄技能状态(上下文)
+        self.assertEqual(状态["第4格/英雄_野蛮人之王"], "可用")
 
     def test_被拒绝的候选点会换点而不是重复点击(self):
         任务 = 进攻任务.__new__(进攻任务)

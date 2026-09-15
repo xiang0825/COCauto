@@ -9,6 +9,7 @@ import ipaddress
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
@@ -178,6 +179,65 @@ class ADB设备操作类:
         参数 = list(参数)
         self._拒绝危险结束命令(参数)
         命令 = self.构造设备命令(self.adb路径, self.设备序列号, 参数)
+        for 尝试次数 in range(2):
+            startupinfo = None
+            creationflags = 0
+            if os.name == "nt":
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            try:
+                结果 = self._runner(
+                    命令,
+                    capture_output=True,
+                    timeout=timeout,
+                    check=False,
+                    startupinfo=startupinfo,
+                    creationflags=creationflags,
+                )
+            except FileNotFoundError as 异常:
+                raise ADB错误(f"无法启动 ADB：{self.adb路径}") from 异常
+            except subprocess.TimeoutExpired as 异常:
+                raise ADB错误(f"ADB 命令超时：{' '.join(命令[1:])}") from 异常
+
+            stdout = 结果.stdout or (b"" if binary else "")
+            stderr = 结果.stderr or (b"" if binary else "")
+            if not 结果.returncode:
+                return stdout
+
+            if isinstance(stderr, bytes):
+                错误文本 = stderr.decode("utf-8", errors="replace").strip()
+            else:
+                错误文本 = str(stderr).strip()
+            if (
+                尝试次数 == 0
+                and self._是ADB传输错误(错误文本)
+            ):
+                self._尝试恢复ADB连接()
+                continue
+            raise ADB错误(错误文本 or f"ADB 命令失败，退出码 {结果.returncode}")
+
+        raise ADB错误(f"ADB 命令失败：{' '.join(命令[1:])}")
+
+    @staticmethod
+    def _是ADB传输错误(错误文本: str) -> bool:
+        """判断是否为模拟器 ADB 通道短暂断线，而非业务命令错误。"""
+        文本 = str(错误文本 or "").lower()
+        return any(
+            标记 in 文本
+            for 标记 in (
+                "device offline",
+                "device not found",
+                "protocol fault",
+                "connection reset",
+                "cannot connect",
+                "closed",
+            )
+        )
+
+    def _尝试恢复ADB连接(self) -> None:
+        """只重置 ADB 传输通道，不重启游戏或模拟器。"""
+        命令 = [self.adb路径, "reconnect", "offline"]
         startupinfo = None
         creationflags = 0
         if os.name == "nt":
@@ -185,28 +245,18 @@ class ADB设备操作类:
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
-            结果 = self._runner(
+            self._runner(
                 命令,
                 capture_output=True,
-                timeout=timeout,
+                timeout=5,
                 check=False,
                 startupinfo=startupinfo,
                 creationflags=creationflags,
             )
-        except FileNotFoundError as 异常:
-            raise ADB错误(f"无法启动 ADB：{self.adb路径}") from 异常
-        except subprocess.TimeoutExpired as 异常:
-            raise ADB错误(f"ADB 命令超时：{' '.join(命令[1:])}") from 异常
-
-        stdout = 结果.stdout or (b"" if binary else "")
-        stderr = 结果.stderr or (b"" if binary else "")
-        if 结果.returncode:
-            if isinstance(stderr, bytes):
-                错误文本 = stderr.decode("utf-8", errors="replace").strip()
-            else:
-                错误文本 = str(stderr).strip()
-            raise ADB错误(错误文本 or f"ADB 命令失败，退出码 {结果.returncode}")
-        return stdout
+        except Exception:
+            # 恢复命令失败时让原始命令的第二次尝试给出最终错误。
+            pass
+        time.sleep(0.35)
 
     @staticmethod
     def _拒绝危险结束命令(参数: Iterable[str]) -> None:
