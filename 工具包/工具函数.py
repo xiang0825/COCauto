@@ -83,8 +83,16 @@ def 单行资源识别(ocr引擎, img):
     )
     result, _ = ocr引擎(binary,  use_cls=False)
     if result and len(result) > 0:
-        清理文本 = result[0][1].replace('O', '0').replace('o', '0').replace(' ', '')
-        return int(''.join(filter(str.isdigit, 清理文本)))
+        # OCR 偶尔会把资源图标或阴影识别成额外的一项；取最长的数字
+        # 串，而不是固定使用 result[0]，提高不同主题/分辨率下的稳定性。
+        候选 = []
+        for 项 in result:
+            清理文本 = str(项[1]).replace('O', '0').replace('o', '0').replace(' ', '')
+            数字 = ''.join(filter(str.isdigit, 清理文本))
+            if 数字:
+                候选.append(数字)
+        if 候选:
+            return int(max(候选, key=len))
     return 0
 
 

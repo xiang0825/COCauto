@@ -158,6 +158,18 @@ class 机器人设置:
         }
     )
 
+    下兵间隔毫秒: int = field(
+        default=25,
+        metadata={
+            "显示名称": "下兵间隔（毫秒）",
+            "描述": "每次落点之间的间隔；数值越小越快，建议20-60，范围5-300",
+            "UI类型": "spinbox",
+            "最小值": 5,
+            "最大值": 300,
+            "步进": 5,
+        }
+    )
+
     是否自动配兵: bool = field(
         default=False,
         metadata={
@@ -341,6 +353,10 @@ class 机器人设置:
             self.战利品优先级 = "均衡"
         if self.自动配兵玩法 not in {"资源优先", "稳健三星", "快速速刷"}:
             self.自动配兵玩法 = "资源优先"
+        try:
+            self.下兵间隔毫秒 = max(5, min(300, int(self.下兵间隔毫秒)))
+        except (TypeError, ValueError):
+            self.下兵间隔毫秒 = 25
         if not isinstance(self.任务计划顺序, list) or not self.任务计划顺序:
             self.任务计划顺序 = 默认任务计划顺序.copy()
         else:

@@ -269,6 +269,7 @@ class 任务计划面板(ttk.Frame):
             ttk.Label(self._参数内容, text="退出：完成任务并停止线程；待机：保持连接和界面观察，不再继续进攻。", wraplength=560).pack(anchor=tk.W, pady=5)
         elif 任务名称 == "进攻选项" or 任务名称 == "combat_options":
             self._增加勾选项("快速结束资源战斗（速刷）", "是否快速刷资源", getattr(self._设置, "是否快速刷资源", False))
+            self._增加输入项("下兵间隔（毫秒）", "下兵间隔毫秒", getattr(self._设置, "下兵间隔毫秒", 25))
             self._增加勾选项("启用自动配兵玩法", "是否自动配兵", getattr(self._设置, "是否自动配兵", False))
             self._增加下拉项("自动配兵玩法", "自动配兵玩法", getattr(self._设置, "自动配兵玩法", "资源优先"), ["资源优先", "稳健三星", "快速速刷"])
             ttk.Label(self._参数内容, text="战斗结果统计：强制启用（胜负、星数、摧毁率和战利品分析）", foreground="#2563eb", wraplength=560).pack(anchor=tk.W, pady=5)
@@ -290,7 +291,7 @@ class 任务计划面板(ttk.Frame):
             elif 字段 == "欲升级的英雄或建筑":
                 项目 = str(值).replace("\n", "、").replace(",", "、").split("、")
                 setattr(self._设置, 字段, [项.strip() for 项 in 项目 if 项.strip()])
-            elif 字段 in ("欲进攻的最小资源", "刷墙起始金币", "刷墙起始圣水", "漏下兵种检测格数", "状态上报间隔分钟"):
+            elif 字段 in ("欲进攻的最小资源", "刷墙起始金币", "刷墙起始圣水", "漏下兵种检测格数", "状态上报间隔分钟", "下兵间隔毫秒"):
                 setattr(self._设置, 字段, int(str(值).strip()))
             elif 字段 in ("欲进攻资源建筑靠近地图边缘最小比例", "建筑升级检查间隔", "战宠升级检查间隔", "研究升级检查间隔"):
                 数值 = float(str(值).strip())
