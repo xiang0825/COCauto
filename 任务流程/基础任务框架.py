@@ -72,6 +72,13 @@ class 任务上下文:
         if getattr(self, "_宝石保护已触发", False):
             return True
 
+        # 战斗画面没有商店/宝石购买入口。战场建筑、资源图标和特效可能
+        # 与宝石模板局部相似；战斗中继续做全屏模板匹配还会额外增加
+        # ADB screencap 压力，并可能误发 ESC 中断战斗。战斗结束后由
+        # 回营流程和下一次主城主页校验重新启用完整保护。
+        if getattr(self, "_战斗中", False):
+            return False
+
         当前时间 = time.monotonic()
         上次检查 = float(getattr(self, "_宝石保护上次检查时间", 0.0))
         if not 强制 and 当前时间 - 上次检查 < 0.75:
