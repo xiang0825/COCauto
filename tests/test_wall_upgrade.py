@@ -80,6 +80,14 @@ class 刷墙识别测试(unittest.TestCase):
         ]
         self.assertEqual(self.任务.解析城墙升级费用(变形OCR结果), (5000000, None))
 
+    def test_刷墙升级始终使用主世界资源模板(self):
+        金币模板, 圣水模板 = self.任务.获取城墙升级资源模板()
+
+        self.assertIn("升级建筑的金币小图标1.bmp", 金币模板)
+        self.assertIn("升级建筑的圣水小图标1.bmp", 圣水模板)
+        self.assertNotIn("夜.bmp", 金币模板)
+        self.assertNotIn("夜.bmp", 圣水模板)
+
     def test_能读取墙体等级并识别资源不足(self):
         OCR结果 = [
             ([[250, 416], [390, 416], [390, 443], [250, 443]], "城墙（16级-）", 0.95),
