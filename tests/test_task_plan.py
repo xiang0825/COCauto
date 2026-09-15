@@ -2,6 +2,7 @@ import unittest
 
 from 数据库.任务数据库 import 机器人设置
 from 界面.任务计划面板 import 生成任务计划
+from 任务流程.主世界打鱼.搜索敌人 import 搜索目标敌人任务
 
 
 class 任务计划测试(unittest.TestCase):
@@ -32,6 +33,19 @@ class 任务计划测试(unittest.TestCase):
         self.assertEqual(设置.任务计划顺序[0], "night_resource")
         self.assertEqual(设置.任务计划顺序.count("night_resource"), 1)
         self.assertIn("main_resource", 设置.任务计划顺序)
+
+    def test_战利品优先级和自动配兵配置有安全默认值(self):
+        设置 = 机器人设置(战利品优先级="未知", 自动配兵玩法="未知")
+
+        self.assertEqual(设置.战利品优先级, "均衡")
+        self.assertEqual(设置.自动配兵玩法, "资源优先")
+
+    def test_战利品评分会随优先级改变(self):
+        金币优先 = 搜索目标敌人任务.计算战利品评分(800000, 100000, 1000, "金币")
+        黑水优先 = 搜索目标敌人任务.计算战利品评分(100000, 100000, 8000, "黑水")
+
+        self.assertGreater(金币优先, 700000)
+        self.assertGreater(黑水优先, 700000)
 
 
 if __name__ == "__main__":

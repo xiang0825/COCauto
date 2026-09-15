@@ -245,6 +245,7 @@ class 任务计划面板(ttk.Frame):
         self._参数说明.configure(text=(计划项 or {}).get("说明", "修改后自动保存。"))
         if 任务名称 in ("主世界刷资源", "夜世界刷资源"):
             self._增加输入项("最低目标资源", "欲进攻的最小资源", getattr(self._设置, "欲进攻的最小资源", 0))
+            self._增加下拉项("战利品优先级", "战利品优先级", getattr(self._设置, "战利品优先级", "均衡"), ["均衡", "金币", "圣水", "黑水"])
             self._增加输入项("资源边缘比例", "欲进攻资源建筑靠近地图边缘最小比例", getattr(self._设置, "欲进攻资源建筑靠近地图边缘最小比例", 0.5))
             self._增加输入项("漏兵检测格数", "漏下兵种检测格数", getattr(self._设置, "漏下兵种检测格数", 1))
         elif 任务名称 == "刷墙":
@@ -268,6 +269,9 @@ class 任务计划面板(ttk.Frame):
             ttk.Label(self._参数内容, text="退出：完成任务并停止线程；待机：保持连接和界面观察，不再继续进攻。", wraplength=560).pack(anchor=tk.W, pady=5)
         elif 任务名称 == "进攻选项" or 任务名称 == "combat_options":
             self._增加勾选项("快速结束资源战斗（速刷）", "是否快速刷资源", getattr(self._设置, "是否快速刷资源", False))
+            self._增加勾选项("启用自动配兵玩法", "是否自动配兵", getattr(self._设置, "是否自动配兵", False))
+            self._增加下拉项("自动配兵玩法", "自动配兵玩法", getattr(self._设置, "自动配兵玩法", "资源优先"), ["资源优先", "稳健三星", "快速速刷"])
+            self._增加勾选项("试战统计胜率", "是否试战统计胜率", getattr(self._设置, "是否试战统计胜率", False))
             self._增加勾选项("采集进攻界面图像", "是否采集进攻界面图像", getattr(self._设置, "是否采集进攻界面图像", False))
             ttk.Label(self._参数内容, text="这些开关会直接影响主世界和夜世界的进攻流程，修改后立即保存。", wraplength=560, foreground="#6b7280").pack(anchor=tk.W, pady=5)
         elif 任务名称 == "通知与状态上报" or 任务名称 == "notification":
@@ -281,7 +285,7 @@ class 任务计划面板(ttk.Frame):
             return
         for 字段, 控件 in self._编辑控件.items():
             值 = 控件.get()
-            if 字段 in ("是否快速刷资源", "是否采集进攻界面图像"):
+            if 字段 in ("是否快速刷资源", "是否自动配兵", "是否试战统计胜率", "是否采集进攻界面图像"):
                 setattr(self._设置, 字段, bool(值))
             elif 字段 == "欲升级的英雄或建筑":
                 项目 = str(值).replace("\n", "、").replace(",", "、").split("、")
