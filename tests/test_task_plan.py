@@ -1,9 +1,13 @@
 import unittest
+import threading
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 from 数据库.任务数据库 import 机器人设置
 from 界面.日志面板 import 日志面板
 from 界面.任务计划面板 import 生成任务计划
 from 任务流程.主世界打鱼.搜索敌人 import 搜索目标敌人任务
+from 线程.自动化机器人 import 自动化机器人
 
 
 class 任务计划测试(unittest.TestCase):
@@ -60,6 +64,28 @@ class 任务计划测试(unittest.TestCase):
             "下兵成功",
         )
         self.assertEqual(日志面板._去掉实时前缀("普通历史日志"), "普通历史日志")
+
+    def test_刷墙资源不足会自动刷资源后重试一次(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = threading.Event()
+        上下文 = SimpleNamespace(
+            刷墙需要资源=False,
+            置脚本状态=Mock(),
+        )
+        调用次数 = {"wall": 0}
+
+        def 模拟升级(任务键, 当前上下文, _检测登录):
+            调用次数[任务键] += 1
+            当前上下文.刷墙需要资源 = 调用次数[任务键] == 1
+
+        机器人._执行升级计划 = Mock(side_effect=模拟升级)
+        机器人._执行主世界刷资源计划 = Mock(return_value=True)
+
+        机器人._执行刷墙计划(上下文, object())
+
+        self.assertEqual(调用次数["wall"], 2)
+        机器人._执行主世界刷资源计划.assert_called_once()
+        self.assertFalse(机器人.停止事件.is_set())
 
 
 if __name__ == "__main__":
