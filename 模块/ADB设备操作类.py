@@ -198,6 +198,11 @@ class ADB设备操作类:
             except FileNotFoundError as 异常:
                 raise ADB错误(f"无法启动 ADB：{self.adb路径}") from 异常
             except subprocess.TimeoutExpired as 异常:
+                # screencap 偶尔会因为模拟器渲染忙或 ADB 传输通道卡住而超时。
+                # 第一次超时只重置传输通道并重试，不能立即杀掉机器人线程。
+                if 尝试次数 == 0:
+                    self._尝试恢复ADB连接()
+                    continue
                 raise ADB错误(f"ADB 命令超时：{' '.join(命令[1:])}") from 异常
 
             stdout = 结果.stdout or (b"" if binary else "")
