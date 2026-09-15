@@ -53,7 +53,7 @@ class 城墙升级任务(基础任务):
             # 不能替代对当前墙段实际升级费用的判断；否则资源不足时永远不会
             # 进入墙体面板，也就无法自动转去刷资源。
             for _ in range(300):
-                if self.停止事件.is_set():
+                if 上下文.停止事件.is_set():
                     break
                 if not self.刷一次墙():
                     if getattr(上下文, "刷墙需要资源", False):

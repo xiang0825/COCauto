@@ -1,4 +1,5 @@
 import unittest
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -54,6 +55,19 @@ class 刷墙识别测试(unittest.TestCase):
 
         self.assertFalse(self.任务.处理已选中的城墙(上下文, OCR结果, (205, 460)))
         self.任务.执行升级.assert_not_called()
+
+    def test_刷墙任务读取上下文停止事件(self):
+        上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            置脚本状态=Mock(),
+        )
+        上下文.停止事件.set()
+        self.任务.上下文 = 上下文
+        self.任务.检查功能开启 = Mock(return_value=True)
+        self.任务.刷一次墙 = Mock()
+
+        self.assertTrue(self.任务.执行())
+        self.任务.刷一次墙.assert_not_called()
 
     def test_能从墙体面板读取两种资源费用(self):
         OCR结果 = [
