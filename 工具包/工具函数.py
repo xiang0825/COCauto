@@ -77,22 +77,35 @@ def 单行资源识别(ocr引擎, img):
     加载/执行两个 ONNX 模型，并在分页文件较小的设备上触发 bad allocation。
     这里直接交给文字识别模型，既更轻量也更符合输入形态。
     """
-    img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    binary = cv2.adaptiveThreshold(
-        gray,
+    高, 宽 = img.shape[:2]
+    # 资源栏一行高度约 53px，但数字本身只有约 18px 高；直接把整行
+    # 缩放会让识别模型把图标和背景一起当成文字。先裁掉上下空白和右侧
+    # 资源图标，把数字放大到更接近模型训练尺寸。
+    if 高 >= 35:
+        上 = max(0, int(round(高 * 0.12)))
+        下 = min(高, int(round(高 * 0.82)))
+        img = img[上:下, :]
+    if 宽 >= 180:
+        img = img[:, int(round(宽 * 0.28)):int(round(宽 * 0.82))]
+    img = cv2.resize(img, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+
+    灰度 = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    二值图 = cv2.adaptiveThreshold(
+        灰度,
         255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY_INV,
         31,
         5
     )
-    result, _ = ocr引擎(binary, use_det=False, use_cls=False)
-    if result and len(result) > 0:
+
+    def 提取数字(结果):
+        if not 结果:
+            return 0
         # OCR 偶尔会把资源图标或阴影识别成额外的一项；取最长的数字
         # 串，而不是固定使用 result[0]，提高不同主题/分辨率下的稳定性。
         候选 = []
-        for 项 in result:
+        for 项 in 结果:
             # 完整 OCR 返回 [坐标, 文字, 置信度]；轻量单行模式返回
             # [文字, 置信度]。两种格式都只提取真正的文字字段。
             if len(项) >= 3:
@@ -105,8 +118,14 @@ def 单行资源识别(ocr引擎, img):
             数字 = ''.join(filter(str.isdigit, 清理文本))
             if 数字:
                 候选.append(数字)
-        if 候选:
-            return int(max(候选, key=len))
+        return int(max(候选, key=len)) if 候选 else 0
+
+    # 彩色原图保留浅色数字的边缘；二值图作为不同主题下的备用输入。
+    for 输入图 in (img, 二值图):
+        result, _ = ocr引擎(输入图, use_det=False, use_cls=False)
+        数值 = 提取数字(result)
+        if 数值:
+            return 数值
     return 0
 
 
