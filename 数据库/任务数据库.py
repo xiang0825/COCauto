@@ -170,6 +170,25 @@ class 机器人设置:
         }
     )
 
+    是否启用高速下兵: bool = field(
+        default=True,
+        metadata={
+            "显示名称": "启用高速下兵",
+            "描述": "识别到普通兵种数量不少于8个时，自动使用小批量连点或短按压；英雄、攻城器械和药水不启用",
+            "UI类型": "bool"
+        }
+    )
+
+    高速下兵方式: str = field(
+        default="快速连点",
+        metadata={
+            "显示名称": "高速下兵方式",
+            "描述": "快速连点更容易控制数量；短按压利用游戏的按住连续部署手势，实际消耗数量以游戏画面为准",
+            "UI类型": "combo",
+            "选项": ["快速连点", "短按压"],
+        }
+    )
+
     是否自动配兵: bool = field(
         default=False,
         metadata={
@@ -353,6 +372,8 @@ class 机器人设置:
             self.战利品优先级 = "均衡"
         if self.自动配兵玩法 not in {"资源优先", "稳健三星", "快速速刷"}:
             self.自动配兵玩法 = "资源优先"
+        if self.高速下兵方式 not in {"快速连点", "短按压"}:
+            self.高速下兵方式 = "快速连点"
         try:
             self.下兵间隔毫秒 = max(5, min(300, int(self.下兵间隔毫秒)))
         except (TypeError, ValueError):

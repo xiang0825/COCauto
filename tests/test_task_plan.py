@@ -35,10 +35,16 @@ class 任务计划测试(unittest.TestCase):
         self.assertIn("main_resource", 设置.任务计划顺序)
 
     def test_战利品优先级和自动配兵配置有安全默认值(self):
-        设置 = 机器人设置(战利品优先级="未知", 自动配兵玩法="未知")
+        设置 = 机器人设置(
+            战利品优先级="未知",
+            自动配兵玩法="未知",
+            高速下兵方式="未知",
+        )
 
         self.assertEqual(设置.战利品优先级, "均衡")
         self.assertEqual(设置.自动配兵玩法, "资源优先")
+        self.assertTrue(设置.是否启用高速下兵)
+        self.assertEqual(设置.高速下兵方式, "快速连点")
 
     def test_战利品评分会随优先级改变(self):
         金币优先 = 搜索目标敌人任务.计算战利品评分(800000, 100000, 1000, "金币")

@@ -74,6 +74,35 @@ class 鼠标控制器:
 
         return 返回值 and 返回值2
 
+    def 连续点击(self, x, y, 次数=1, 间隔毫秒=0, 是否精确点击=True):
+        """连续点击同一点；ADB 模式优先复用一次 shell 会话。"""
+        次数 = max(0, min(32, int(次数)))
+        if 次数 == 0:
+            return True
+        if self._adb设备 is not None and hasattr(self._adb设备, '连续触控'):
+            return self._adb设备.连续触控(
+                [(int(x), int(y))] * 次数,
+                间隔毫秒=间隔毫秒,
+            )
+
+        for 序号 in range(次数):
+            self.移动到(int(x), int(y))
+            if not self.左键点击():
+                return False
+            if 序号 < 次数 - 1 and 间隔毫秒 > 0:
+                time.sleep(max(0, int(间隔毫秒)) / 1000)
+        return True
+
+    def 长按(self, x, y, 时长毫秒=220, 是否精确点击=True):
+        """执行同点长按；ADB 模式使用 input swipe 保持触点。"""
+        x, y = int(x), int(y)
+        self.移动到(x, y)
+        if self._adb设备 is not None and hasattr(self._adb设备, '长按触控'):
+            return self._adb设备.长按触控(x, y, 时长毫秒=时长毫秒)
+        self.左键按下()
+        time.sleep(max(0, int(时长毫秒)) / 1000)
+        return bool(self.左键抬起())
+
     def 绑定(self, 窗口句柄, 模式='Windows消息模式'):
         if hasattr(窗口句柄, '触控') and hasattr(窗口句柄, '滑动'):
             self._adb设备 = 窗口句柄

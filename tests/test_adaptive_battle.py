@@ -118,6 +118,35 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertEqual(点击记录, 候选点[:2])
         self.assertTrue(any("换下一个候选点" in 文本 for 文本 in 日志))
 
+    def test_兵量足够的普通兵种才启用高速批次(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        设置 = SimpleNamespace(是否启用高速下兵=True)
+        上下文 = SimpleNamespace(设置=设置)
+        self.assertEqual(任务.取高速下兵批次(上下文, {"类别": "兵种", "数量": 7}, 7), 1)
+        self.assertEqual(任务.取高速下兵批次(上下文, {"类别": "兵种", "数量": 8}, 10), 6)
+        self.assertEqual(任务.取高速下兵批次(上下文, {"类别": "英雄", "数量": 20}, 10), 1)
+
+    def test_高速模式分别调用连点和短按压(self):
+        class 鼠标:
+            def __init__(self):
+                self.调用 = []
+
+            def 连续点击(self, *参数, **关键字):
+                self.调用.append(("连点", 参数, 关键字))
+                return True
+
+            def 长按(self, *参数, **关键字):
+                self.调用.append(("短按", 参数, 关键字))
+                return True
+
+        鼠标对象 = 鼠标()
+        日志 = []
+        上下文 = SimpleNamespace(鼠标=鼠标对象, 置脚本状态=日志.append)
+        任务 = 进攻任务.__new__(进攻任务)
+        self.assertEqual(任务.执行高速下兵批次(上下文, (100, 200), 5, "快速连点"), 5)
+        self.assertEqual(任务.执行高速下兵批次(上下文, (100, 200), 2, "短按压"), 2)
+        self.assertEqual([项[0] for 项 in 鼠标对象.调用], ["连点", "短按"])
+
 
 if __name__ == "__main__":
     unittest.main()

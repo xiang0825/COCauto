@@ -88,6 +88,26 @@ class ADB设备测试(unittest.TestCase):
         self.assertTrue(设备.触控(12, 34))
         self.assertEqual(runner.命令[1][1:], ["-s", "emulator-5554", "shell", "input", "tap", "12", "34"])
 
+    def test_ADB连续触控复用一次shell会话(self):
+        runner = 假Runner(结果(在线模拟器), 结果())
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        self.assertTrue(设备.连续触控([(12, 34), (12, 34)], 间隔毫秒=8))
+        self.assertEqual(
+            runner.命令[1][1:],
+            ["-s", "emulator-5554", "shell", "sh", "-c",
+             "input tap 12 34; sleep 0.008; input tap 12 34"],
+        )
+
+    def test_ADB长按使用同点swipe(self):
+        runner = 假Runner(结果(在线模拟器), 结果())
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        self.assertTrue(设备.长按触控(12, 34, 220))
+        self.assertEqual(
+            runner.命令[1][1:],
+            ["-s", "emulator-5554", "shell", "input", "swipe",
+             "12", "34", "12", "34", "220"],
+        )
+
     def test_screencap从ADB二进制解码并裁剪(self):
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         图像[50:100, 40:90] = (20, 100, 200)
@@ -178,6 +198,32 @@ class ADB设备测试(unittest.TestCase):
         鼠标.左键抬起()
         self.assertEqual(设备.操作[0], ("tap", 100, 200))
         self.assertEqual(设备.操作[1][:3], ("swipe", (100, 200), (120, 230)))
+
+    def test_ADB鼠标支持连续点击和长按(self):
+        class 假设备:
+            def __init__(self):
+                self.操作 = []
+
+            def 触控(self, _x, _y):
+                return True
+
+            def 滑动(self, _起点, _终点, _时长):
+                return True
+
+            def 连续触控(self, 点位列表, 间隔毫秒=0):
+                self.操作.append(("multi", 点位列表, 间隔毫秒))
+                return True
+
+            def 长按触控(self, x, y, 时长毫秒=220):
+                self.操作.append(("long", x, y, 时长毫秒))
+                return True
+
+        设备 = 假设备()
+        鼠标 = 鼠标控制器(设备)
+        self.assertTrue(鼠标.连续点击(100, 200, 次数=3, 间隔毫秒=8))
+        self.assertTrue(鼠标.长按(100, 200, 时长毫秒=220))
+        self.assertEqual(设备.操作[0], ("multi", [(100, 200)] * 3, 8))
+        self.assertEqual(设备.操作[1], ("long", 100, 200, 220))
 
     def test_键盘映射对应Android按键码(self):
         self.assertEqual(键盘控制器._转换ADB按键码("esc"), 4)

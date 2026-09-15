@@ -276,8 +276,11 @@ class 任务计划面板(ttk.Frame):
         elif 任务名称 == "进攻选项" or 任务名称 == "combat_options":
             self._增加勾选项("快速结束资源战斗（速刷）", "是否快速刷资源", getattr(self._设置, "是否快速刷资源", False))
             self._增加输入项("下兵间隔（毫秒）", "下兵间隔毫秒", getattr(self._设置, "下兵间隔毫秒", 25))
+            self._增加勾选项("启用高速下兵", "是否启用高速下兵", getattr(self._设置, "是否启用高速下兵", True))
+            self._增加下拉项("高速下兵方式", "高速下兵方式", getattr(self._设置, "高速下兵方式", "快速连点"), ["快速连点", "短按压"])
             self._增加勾选项("启用自动配兵玩法", "是否自动配兵", getattr(self._设置, "是否自动配兵", False))
             self._增加下拉项("自动配兵玩法", "自动配兵玩法", getattr(self._设置, "自动配兵玩法", "资源优先"), ["资源优先", "稳健三星", "快速速刷"])
+            ttk.Label(self._参数内容, text="高速下兵仅用于数量不少于8个的普通兵种；英雄、攻城器械和药水仍逐点确认。", foreground="#2563eb", wraplength=560).pack(anchor=tk.W, pady=5)
             ttk.Label(self._参数内容, text="战斗结果统计：强制启用（胜负、星数、摧毁率和战利品分析）", foreground="#2563eb", wraplength=560).pack(anchor=tk.W, pady=5)
             self._增加勾选项("采集进攻界面图像", "是否采集进攻界面图像", getattr(self._设置, "是否采集进攻界面图像", False))
             ttk.Label(self._参数内容, text="这些开关会直接影响主世界和夜世界的进攻流程，修改后立即保存。", wraplength=560, foreground="#6b7280").pack(anchor=tk.W, pady=5)
@@ -292,7 +295,7 @@ class 任务计划面板(ttk.Frame):
             return
         for 字段, 控件 in self._编辑控件.items():
             值 = 控件.get()
-            if 字段 in ("是否快速刷资源", "是否自动配兵", "是否采集进攻界面图像"):
+            if 字段 in ("是否快速刷资源", "是否启用高速下兵", "是否自动配兵", "是否采集进攻界面图像"):
                 setattr(self._设置, 字段, bool(值))
             elif 字段 == "欲升级的英雄或建筑":
                 项目 = str(值).replace("\n", "、").replace(",", "、").split("、")

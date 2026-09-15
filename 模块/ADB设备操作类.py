@@ -255,6 +255,37 @@ class ADB设备操作类:
         self.执行(["shell", "input", "tap", str(int(x)), str(int(y))], timeout=8)
         return True
 
+    def 连续触控(self, 位置列表: Iterable[tuple[int, int]], 间隔毫秒: int = 0) -> bool:
+        """在一次 ADB shell 会话内连续点击多个位置，减少逐次启动 adb 的开销。"""
+        self._验证目标()
+        try:
+            点位 = [(int(位置[0]), int(位置[1])) for 位置 in 位置列表]
+        except (TypeError, ValueError, IndexError) as 异常:
+            raise ADB错误("连续触控坐标非法。") from 异常
+        if not 点位:
+            return True
+        if len(点位) > 32:
+            raise ADB错误("单次连续触控最多支持 32 个点。")
+
+        间隔毫秒 = max(0, min(80, int(间隔毫秒)))
+        间隔命令 = f"; sleep {间隔毫秒 / 1000:.3f}" if 间隔毫秒 else ""
+        脚本 = "; ".join(
+            f"input tap {x} {y}{间隔命令 if 序号 < len(点位) - 1 else ''}"
+            for 序号, (x, y) in enumerate(点位)
+        )
+        self.执行(["shell", "sh", "-c", 脚本], timeout=max(8, len(点位) * 2))
+        return True
+
+    def 长按触控(self, x: int, y: int, 时长毫秒: int = 220) -> bool:
+        """通过同点 swipe 发送一次短长按，供游戏的按住连续部署手势使用。"""
+        self._验证目标()
+        时长毫秒 = max(120, min(1500, int(时长毫秒)))
+        self.执行([
+            "shell", "input", "swipe", str(int(x)), str(int(y)),
+            str(int(x)), str(int(y)), str(时长毫秒),
+        ], timeout=max(8, 时长毫秒 / 1000 + 5))
+        return True
+
     def 滑动(self, 起点: tuple[int, int], 终点: tuple[int, int], 时长毫秒: int = 350) -> bool:
         self._验证目标()
         self.执行(["shell", "input", "swipe", str(int(起点[0])), str(int(起点[1])),
