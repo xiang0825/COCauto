@@ -1,7 +1,9 @@
 Global:
     text_score: 0.5
     use_det: true
-    use_cls: true
+    # 模拟器长时间运行时方向分类模型没有必要，且会额外占用一套 ONNX
+    # 会话内存。游戏界面固定为横屏，因此默认关闭。
+    use_cls: false
     use_rec: true
     print_verbose: false
     min_height: 30
@@ -10,8 +12,10 @@ Global:
     min_side_len: 30
     return_word_box: false
 
-    intra_op_num_threads: &intra_nums -1
-    inter_op_num_threads: &inter_nums -1
+    # -1 会让每个 ONNX 模型各自使用全部 CPU 核心；检测、识别同时加载时
+    # 容易在低分页文件环境触发 bad allocation。固定为单线程优先稳定。
+    intra_op_num_threads: &intra_nums 1
+    inter_op_num_threads: &inter_nums 1
 
 Det:
     intra_op_num_threads: *intra_nums

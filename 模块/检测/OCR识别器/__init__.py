@@ -1,4 +1,5 @@
 import threading
+import gc
 from functools import wraps
 
 import cv2
@@ -39,6 +40,8 @@ class 安全OCR引擎:
 
     def __init__(self, 配置文件路径=None, **配置参数):
         self._操作锁 = threading.Lock()  # 实例方法调用锁
+        self._配置文件路径 = 配置文件路径
+        self._配置参数 = dict(配置参数)
         self._原始引擎 = RapidOCR(配置文件路径, **配置参数)  # 真正的OCR引擎
 
     def __call__(self, *输入参数, **动态参数):
@@ -46,6 +49,14 @@ class 安全OCR引擎:
         with self._操作锁:
 
             return self._原始引擎(*输入参数, **动态参数)
+
+    def 重置会话(self) -> None:
+        """释放发生 ONNX 内存错误的会话，下次调用按需重新加载模型。"""
+        with self._操作锁:
+            旧引擎 = self._原始引擎
+            self._原始引擎 = RapidOCR(self._配置文件路径, **self._配置参数)
+            del 旧引擎
+            gc.collect()
 
     def __getattr__(self, 属性名):
         """转发其他属性访问到原始引擎"""

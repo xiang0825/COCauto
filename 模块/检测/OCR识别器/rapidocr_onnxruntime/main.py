@@ -8,14 +8,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import cv2
 import numpy as np
 
-from .cal_rec_boxes import CalRecBoxes
-from .ch_ppocr_cls import TextClassifier
-from .ch_ppocr_det import TextDetector
-from .ch_ppocr_rec import TextRecognizer
 from .utils import (
-    LoadImage,
     UpdateParameters,
-    VisRes,
     add_round_letterbox,
     get_logger,
     increase_min_side,
@@ -49,19 +43,21 @@ class RapidOCR:
         self.width_height_ratio = global_config["width_height_ratio"]
 
         self.use_det = global_config["use_det"]
-        self.text_det = TextDetector(config["Det"])
-
         self.use_cls = global_config["use_cls"]
-        self.text_cls = TextClassifier(config["Cls"])
-
         self.use_rec = global_config["use_rec"]
-        self.text_rec = TextRecognizer(config["Rec"])
+        # 不要在构造任务时一次性加载检测、方向分类、文字识别三个 ONNX
+        # 模型。资源数字只需要识别模型，延迟加载可显著降低模拟器运行时
+        # 的峰值内存，并避免 ONNXRuntime 的 bad allocation。
+        self._config = config
+        self.text_det = None
+        self.text_cls = None
+        self.text_rec = None
 
-        self.load_img = LoadImage()
+        self.load_img = None
         self.max_side_len = global_config["max_side_len"]
         self.min_side_len = global_config["min_side_len"]
 
-        self.cal_rec_boxes = CalRecBoxes()
+        self.cal_rec_boxes = None
 
     def __call__(
         self,
@@ -75,7 +71,8 @@ class RapidOCR:
         use_cls = self.use_cls if use_cls is None else use_cls
         use_rec = self.use_rec if use_rec is None else use_rec
         return_word_box = False
-        if kwargs:
+        if kwargs and use_det:
+            self._ensure_text_det()
             box_thresh = kwargs.get("box_thresh", 0.5)
             unclip_ratio = kwargs.get("unclip_ratio", 1.6)
             text_score = kwargs.get("text_score", 0.5)
@@ -84,7 +81,7 @@ class RapidOCR:
             self.text_det.postprocess_op.unclip_ratio = unclip_ratio
             self.text_score = text_score
 
-        img = self.load_img(img_content)
+        img = self._load_image(img_content)
 
         raw_h, raw_w = img.shape[:2]
         op_record = {}
@@ -103,12 +100,18 @@ class RapidOCR:
             img = self.get_crop_img_list(img, dt_boxes)
 
         if use_cls:
+            self._ensure_text_cls()
             img, cls_res, cls_elapse = self.text_cls(img)
 
         if use_rec:
+            self._ensure_text_rec()
             rec_res, rec_elapse = self.text_rec(img, return_word_box)
 
         if dt_boxes is not None and rec_res is not None and return_word_box:
+            if self.cal_rec_boxes is None:
+                from .cal_rec_boxes import CalRecBoxes
+
+                self.cal_rec_boxes = CalRecBoxes()
             rec_res = self.cal_rec_boxes(img, dt_boxes, rec_res)
             for rec_res_i in rec_res:
                 if rec_res_i[2]:
@@ -166,12 +169,43 @@ class RapidOCR:
     def auto_text_det(
         self, img: np.ndarray
     ) -> Tuple[Optional[List[np.ndarray]], float]:
+        self._ensure_text_det()
         dt_boxes, det_elapse = self.text_det(img)
         if dt_boxes is None or len(dt_boxes) < 1:
             return None, 0.0
 
         dt_boxes = self.sorted_boxes(dt_boxes)
         return dt_boxes, det_elapse
+
+    def _ensure_text_det(self) -> None:
+        if self.text_det is None:
+            from .ch_ppocr_det import TextDetector
+
+            self.text_det = TextDetector(self._config["Det"])
+
+    def _ensure_text_cls(self) -> None:
+        if self.text_cls is None:
+            from .ch_ppocr_cls import TextClassifier
+
+            self.text_cls = TextClassifier(self._config["Cls"])
+
+    def _ensure_text_rec(self) -> None:
+        if self.text_rec is None:
+            from .ch_ppocr_rec import TextRecognizer
+
+            self.text_rec = TextRecognizer(self._config["Rec"])
+
+    def _load_image(self, img_content):
+        """numpy 截图无需加载 Pillow；文件输入才按需导入加载器。"""
+        if isinstance(img_content, np.ndarray):
+            if img_content.ndim == 2:
+                return cv2.cvtColor(img_content, cv2.COLOR_GRAY2BGR)
+            return img_content
+        if self.load_img is None:
+            from .utils.load_image import LoadImage
+
+            self.load_img = LoadImage()
+        return self.load_img(img_content)
 
     def get_crop_img_list(
         self, img: np.ndarray, dt_boxes: List[np.ndarray]
@@ -338,6 +372,8 @@ def main():
         logger.info(elapse_list)
 
     if args.vis_res:
+        from .utils.vis_res import VisRes
+
         vis = VisRes()
         Path(args.vis_save_path).mkdir(parents=True, exist_ok=True)
         save_path = Path(args.vis_save_path) / f"{Path(args.img_path).stem}_vis.png"

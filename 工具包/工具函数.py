@@ -71,6 +71,12 @@ def 是否夜世界资源打满(资源字典: dict) -> bool:
     # )
 
 def 单行资源识别(ocr引擎, img):
+    """识别已裁剪好的单行资源数字。
+
+    右上角资源图在调用前已经按行裁剪；再运行文字检测和方向分类会额外
+    加载/执行两个 ONNX 模型，并在分页文件较小的设备上触发 bad allocation。
+    这里直接交给文字识别模型，既更轻量也更符合输入形态。
+    """
     img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     binary = cv2.adaptiveThreshold(
@@ -81,13 +87,21 @@ def 单行资源识别(ocr引擎, img):
         31,
         5
     )
-    result, _ = ocr引擎(binary,  use_cls=False)
+    result, _ = ocr引擎(binary, use_det=False, use_cls=False)
     if result and len(result) > 0:
         # OCR 偶尔会把资源图标或阴影识别成额外的一项；取最长的数字
         # 串，而不是固定使用 result[0]，提高不同主题/分辨率下的稳定性。
         候选 = []
         for 项 in result:
-            清理文本 = str(项[1]).replace('O', '0').replace('o', '0').replace(' ', '')
+            # 完整 OCR 返回 [坐标, 文字, 置信度]；轻量单行模式返回
+            # [文字, 置信度]。两种格式都只提取真正的文字字段。
+            if len(项) >= 3:
+                原始文本 = 项[1]
+            elif len(项) >= 2 and isinstance(项[0], str):
+                原始文本 = 项[0]
+            else:
+                continue
+            清理文本 = str(原始文本).replace('O', '0').replace('o', '0').replace(' ', '')
             数字 = ''.join(filter(str.isdigit, 清理文本))
             if 数字:
                 候选.append(数字)

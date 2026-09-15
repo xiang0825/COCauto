@@ -5,9 +5,21 @@ from unittest.mock import Mock, patch
 import numpy as np
 
 from 任务流程.更新主世界账号资源状态 import 更新家乡资源状态任务
+from 工具包.工具函数 import 单行资源识别
 
 
 class 资源状态测试(unittest.TestCase):
+    def test_单行资源只使用轻量识别模型(self):
+        引擎 = Mock(return_value=([("123456", 0.99)], None))
+        图像 = np.zeros((24, 120, 3), dtype=np.uint8)
+
+        self.assertEqual(单行资源识别(引擎, 图像), 123456)
+        引擎.assert_called_once()
+        self.assertEqual(
+            引擎.call_args.kwargs,
+            {"use_det": False, "use_cls": False},
+        )
+
     def test_OCR连续失败时不覆盖数据库(self):
         任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
         上下文 = SimpleNamespace(

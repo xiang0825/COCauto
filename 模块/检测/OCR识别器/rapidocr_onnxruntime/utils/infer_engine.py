@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Tuple, Union
 
 import numpy as np
 from onnxruntime import (
+    ExecutionMode,
     GraphOptimizationLevel,
     InferenceSession,
     SessionOptions,
@@ -52,14 +53,18 @@ class OrtInferSession:
         sess_opt = SessionOptions()
         sess_opt.log_severity_level = 4
         sess_opt.enable_cpu_mem_arena = False
-        sess_opt.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
+        # 资源有限的模拟器环境优先避免大块临时分配，而不是追求最高吞吐。
+        # FULL 优化和并发执行会显著增加 OCR 三模型的峰值内存。
+        sess_opt.enable_mem_pattern = False
+        sess_opt.execution_mode = ExecutionMode.ORT_SEQUENTIAL
+        sess_opt.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_BASIC
 
         cpu_nums = os.cpu_count()
-        intra_op_num_threads = config.get("intra_op_num_threads", -1)
+        intra_op_num_threads = config.get("intra_op_num_threads", 1)
         if intra_op_num_threads != -1 and 1 <= intra_op_num_threads <= cpu_nums:
             sess_opt.intra_op_num_threads = intra_op_num_threads
 
-        inter_op_num_threads = config.get("inter_op_num_threads", -1)
+        inter_op_num_threads = config.get("inter_op_num_threads", 1)
         if inter_op_num_threads != -1 and 1 <= inter_op_num_threads <= cpu_nums:
             sess_opt.inter_op_num_threads = inter_op_num_threads
 

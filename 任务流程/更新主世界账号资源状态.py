@@ -72,7 +72,13 @@ class 更新家乡资源状态任务(基础任务):
             except Exception as e:
                 最后异常 = e
                 if 尝试次数 < 2:
-                    上下文.置脚本状态("资源 OCR 暂时失败，释放推理内存后重试一次")
+                    上下文.置脚本状态("资源 OCR 暂时失败，释放并重建轻量识别会话后重试一次")
+                    重置会话 = getattr(self.ocr引擎, "重置会话", None)
+                    if callable(重置会话):
+                        try:
+                            重置会话()
+                        except Exception as 重置异常:
+                            上下文.置脚本状态(f"资源 OCR 会话重置失败：{重置异常}")
                     gc.collect()
                     上下文.脚本延时(350)
 
