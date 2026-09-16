@@ -53,8 +53,9 @@ def _启动或唤醒已有窗口():
         return False
 
     # 关闭窗口时后台线程异常退出，可能短暂留下互斥锁但没有主窗口。
-    # 等待一小段时间给正常启动完成；仍没有窗口则放行新实例，避免
-    # 残留进程把用户永久锁在“无法启动”的状态。
+    # 等待一小段时间给正常启动完成；仍没有窗口也不能放行第二个实例，
+    # 否则会产生两个无响应的 Tk/数据库进程。正常关闭路径会回收线程并
+    # 释放互斥锁，异常退出则由 Windows 自动释放互斥锁。
     for _ in range(20):
         time.sleep(0.1)
         窗口句柄 = user32.FindWindowW("TkTopLevel", "部落冲突")
@@ -63,7 +64,7 @@ def _启动或唤醒已有窗口():
             user32.BringWindowToTop(窗口句柄)
             user32.SetForegroundWindow(窗口句柄)
             return False
-    return True
+    return False
 
 
 class 增强型机器人控制界面:
