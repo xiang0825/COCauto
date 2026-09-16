@@ -84,7 +84,7 @@ class 增强型机器人控制界面:
         选项卡.add(自动启动, text="自动启动")
 
         # 右栏：日志常驻显示，拖动分隔条即可扩大，不再挤在窗口底部。
-        日志框 = ttk.LabelFrame(内容区, text="运行日志 · 实时", padding=6, width=500)
+        日志框 = ttk.LabelFrame(内容区, text="运行日志 · 实时", padding=6, width=560)
         内容区.add(日志框, weight=2)
         self.日志面板 = 日志面板(
             父容器=日志框,
