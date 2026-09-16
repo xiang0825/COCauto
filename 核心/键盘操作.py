@@ -4,6 +4,14 @@ import win32gui
 import time
 
 class 键盘控制器:
+    # 这些是 Windows/电视遥控器功能键，映射到 Android 后并不是游戏内
+    # 的缩放操作，部分模拟器会把它们交给桌面或系统应用处理。ADB 模式
+    # 下必须直接丢弃，不能把 Windows 的 F5 等按键码发送进模拟器。
+    _ADB禁止系统功能键 = {
+        "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
+        "home", "win", "option", "print",
+    }
+
     def __init__(self,窗口句柄=None , 模式='Windows消息模式',):
         self._adb设备 = None
         self._窗口句柄 = None
@@ -50,6 +58,8 @@ class 键盘控制器:
 
     def 按键按下(self, 按键码):
         if self._adb设备 is not None:
+            if isinstance(按键码, str) and 按键码.lower() in self._ADB禁止系统功能键:
+                return False
             return self._adb设备.按键(self._转换ADB按键码(按键码))
         按键码 = self._按键映射.get(按键码.lower(), ord(按键码.upper())) if isinstance(按键码, str) else 按键码
         返回值 = 0
@@ -106,6 +116,8 @@ class 键盘控制器:
     def 按字符按压(self, 字符码):
         字符码 = 字符码.lower()
         if self._adb设备 is not None:
+            if 字符码 in self._ADB禁止系统功能键:
+                return False
             return self._adb设备.按键(self._转换ADB按键码(字符码))
         按键码 = self._按键映射.get(字符码, ord(字符码[0]))
         return self.按键按压(按键码)

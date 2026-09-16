@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from 线程.自动化机器人 import 自动化机器人
+from 任务流程.基础任务框架 import 任务上下文
 
 
 class 心跳超时测试(unittest.TestCase):
@@ -36,6 +37,24 @@ class 心跳超时测试(unittest.TestCase):
 
         self.assertTrue(超时)
         self.assertIn("含5秒宽限", 原因)
+
+    def test_战斗异常不会把游戏切到前台或重启(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.机器人标志 = "robot_1"
+        上下文.置脚本状态 = Mock()
+        上下文.发送企业微信通知 = Mock()
+        上下文.发送死亡通知 = Mock()
+        上下文.雷电模拟器 = Mock()
+        上下文._战斗中 = True
+
+        上下文.处理异常("进攻任务", RuntimeError("战斗页面操作超时"))
+
+        上下文.雷电模拟器.打开应用.assert_not_called()
+        上下文.发送死亡通知.assert_called_once()
+        self.assertTrue(
+            any("异常恢复安全锁" in 调用.args[0]
+                for 调用 in 上下文.置脚本状态.call_args_list)
+        )
 
 
 if __name__ == "__main__":

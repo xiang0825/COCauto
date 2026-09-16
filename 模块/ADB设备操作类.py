@@ -57,6 +57,10 @@ class ADB设备操作类:
 
     参考宽度 = 800
     参考高度 = 600
+    # Android 的系统/电视功能键不能用于 CoC 的画面操作；误发时可能
+    # 离开游戏、切换到启动器或打开模拟器的其他应用。底层再次拦截，
+    # 防止绕过键盘控制器的调用把这类按键发送出去。
+    禁止系统按键码 = frozenset({3, 82, 187, *range(131, 143)})
 
     def __init__(
             self,
@@ -465,7 +469,15 @@ class ADB设备操作类:
 
     def 按键(self, 按键码: int | str) -> bool:
         self._验证目标()
-        self.执行(["shell", "input", "keyevent", str(按键码)], timeout=8)
+        try:
+            数字按键码 = int(按键码)
+        except (TypeError, ValueError) as 异常:
+            raise ADB错误(f"ADB 输入按键非法：{按键码}") from 异常
+        if 数字按键码 in self.禁止系统按键码:
+            # 这是安全拒绝，不抛异常，避免把一次无效的缩放请求升级成
+            # 任务重启；调用方会自然继续当前识别流程。
+            return False
+        self.执行(["shell", "input", "keyevent", str(数字按键码)], timeout=8)
         return True
 
     def 获取属性(self, 属性名: str) -> str:
@@ -519,8 +531,15 @@ class ADB设备操作类:
         if isinstance(解析输出, bytes):
             解析输出 = 解析输出.decode("utf-8", errors="replace")
         组件 = next(
-            (行.strip() for 行 in str(解析输出).splitlines()
-             if "/" in 行 and not 行.strip().startswith("priority=")),
+            (
+                行.strip()
+                for 行 in str(解析输出).splitlines()
+                if "/" in 行
+                and not 行.strip().startswith("priority=")
+                # resolve-activity 的输出必须属于目标包名；不能因为
+                # 厂商 ROM 返回额外组件行就把其他应用切到前台。
+                and 行.strip().split("/", 1)[0] == 包名
+            ),
             "",
         )
         if 组件:

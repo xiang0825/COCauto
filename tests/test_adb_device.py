@@ -206,6 +206,33 @@ class ADB设备测试(unittest.TestCase):
         )
         self.assertFalse(any("monkey" in 命令 for 命令 in runner.命令))
 
+    def test_解析到其他包的组件时绝不启动其他应用(self):
+        runner = 假Runner(
+            结果(在线模拟器),
+            结果(b"mResumedActivity: ActivityRecord{1 com.android.launcher3/.Launcher}\n"),
+            结果(b"priority=0\ncom.android.settings/.Settings\n"),
+            结果(),
+        )
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        设备.打开应用("com.supercell.clashofclans")
+        self.assertEqual(
+            runner.命令[-1][1:],
+            ["-s", "emulator-5554", "shell", "am", "start", "-a",
+             "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER",
+             "-p", "com.supercell.clashofclans"],
+        )
+        self.assertFalse(any("com.android.settings" in 命令 for 命令 in runner.命令))
+
+    def test_ADB模式拒绝F5和系统功能键(self):
+        runner = 假Runner(结果(在线模拟器))
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        键盘 = 键盘控制器(设备)
+        self.assertFalse(键盘.按字符按压("f5"))
+        self.assertFalse(键盘.按字符按压("home"))
+        self.assertEqual(len(runner.命令), 0)  # 安全拒绝不发送任何 ADB 命令
+        self.assertFalse(设备.按键(136))
+        self.assertEqual(len(runner.命令), 1)
+
     def test_ADB安全保护拒绝结束游戏和模拟器(self):
         runner = 假Runner(结果(在线模拟器))
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
