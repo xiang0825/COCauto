@@ -42,7 +42,9 @@ def _启动或唤醒已有窗口():
     if kernel32.GetLastError() != 183:  # ERROR_ALREADY_EXISTS
         return True
 
-    窗口句柄 = user32.FindWindowW(None, "部落冲突")
+    # Tk 窗口在部分 Windows 环境中无法仅按标题查找，限定 TkTopLevel
+    # 可以稳定找到真正的主窗口，避免双击后既不唤醒也不给提示。
+    窗口句柄 = user32.FindWindowW("TkTopLevel", "部落冲突")
     if 窗口句柄:
         user32.ShowWindow(窗口句柄, 9)  # SW_RESTORE
         user32.BringWindowToTop(窗口句柄)
