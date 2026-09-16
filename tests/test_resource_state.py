@@ -20,6 +20,12 @@ class 资源状态测试(unittest.TestCase):
             {"use_det": False, "use_cls": False},
         )
 
+    def test_圈号数字不会让资源识别抛出转换异常(self):
+        引擎 = Mock(return_value=([("①②③", 0.99)], None))
+        图像 = np.zeros((24, 120, 3), dtype=np.uint8)
+
+        self.assertEqual(单行资源识别(引擎, 图像), 123)
+
     def test_OCR连续失败时不覆盖数据库(self):
         任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
         上下文 = SimpleNamespace(

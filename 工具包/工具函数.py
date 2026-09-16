@@ -1,5 +1,6 @@
 import functools
 import time
+import unicodedata
 
 import cv2
 import tkinter as tk
@@ -114,8 +115,11 @@ def 单行资源识别(ocr引擎, img):
                 原始文本 = 项[0]
             else:
                 continue
-            清理文本 = str(原始文本).replace('O', '0').replace('o', '0').replace(' ', '')
-            数字 = ''.join(filter(str.isdigit, 清理文本))
+            # OCR 可能返回全角/圈号数字；先做兼容性归一化，再只保留
+            # ASCII 数字，避免 str.isdigit() 接受“①”却无法 int() 转换。
+            清理文本 = unicodedata.normalize("NFKC", str(原始文本))
+            清理文本 = 清理文本.replace('O', '0').replace('o', '0').replace(' ', '')
+            数字 = ''.join(字符 for 字符 in 清理文本 if 字符 in "0123456789")
             if 数字:
                 候选.append(数字)
         return int(max(候选, key=len)) if 候选 else 0
