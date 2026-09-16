@@ -105,6 +105,7 @@ class 任务计划面板(ttk.Frame):
         底栏.pack(fill=tk.X, pady=(10, 0))
         self.状态 = tk.StringVar(value="请选择机器人")
         ttk.Label(底栏, textvariable=self.状态).pack(side=tk.LEFT)
+        ttk.Button(底栏, text="立即保存", command=self._保存内部).pack(side=tk.RIGHT, padx=(0, 6))
         ttk.Button(底栏, text="刷新观察", command=self.刷新).pack(side=tk.RIGHT)
 
     def 载入机器人(self, 机器人ID: Optional[str]):
@@ -121,6 +122,11 @@ class 任务计划面板(ttk.Frame):
 
     def 刷新(self, _机器人ID: Optional[str] = None):
         机器人ID = _机器人ID or self.当前机器人ID or self.获取机器人回调()
+        if not 机器人ID:
+            # 只有一个机器人时自动恢复它，避免列表被误点空白后任务页失去配置。
+            所有配置 = self.数据库.查询所有机器人设置()
+            if len(所有配置) == 1:
+                机器人ID = next(iter(所有配置))
         self.当前机器人ID = 机器人ID
         if not 机器人ID:
             self.载入机器人(None)
@@ -203,6 +209,7 @@ class 任务计划面板(ttk.Frame):
         ttk.Label(行, text=标签, width=18).pack(side=tk.LEFT)
         输入 = ttk.Entry(行, width=宽度)
         输入.insert(0, str(值 if 值 is not None else ""))
+        输入.bind("<KeyRelease>", lambda _event: self._安排自动保存())
         输入.bind("<FocusOut>", lambda _event: self._安排自动保存())
         输入.bind("<Return>", lambda _event: self._安排自动保存())
         输入.pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -345,4 +352,13 @@ class 任务计划面板(ttk.Frame):
             return True
         except (TypeError, ValueError) as 异常:
             self.状态.set(f"未保存：{异常}")
+            return False
+        except Exception as 异常:
+            # 数据库锁定、权限或迁移异常不能让 Tk 回调静默失败。
+            self.状态.set(f"保存失败：{异常}")
+            if self.操作日志回调:
+                try:
+                    self.操作日志回调(f"{self.当前机器人ID}：任务设置保存失败：{异常}")
+                except Exception:
+                    pass
             return False

@@ -69,13 +69,14 @@ class 机器人管理面板(ttk.LabelFrame):
         return None
 
     def _处理列表点击(self, event):
-        """处理列表点击事件以实现取消选择"""
+        """处理列表点击。
+
+        机器人列表通常只有一个默认机器人；点击列表空白处不应意外清空当前
+        配置，否则任务计划页会立刻变成“请选择机器人”，看起来像所有配置失效。
+        """
         item = self.机器人列表框.identify_row(event.y)
-        if not item:  # 点击空白处
-            self.机器人列表框.selection_remove(self.机器人列表框.selection())
-            self.当前机器人ID = None
-            self.更新状态显示()
-            self.选择变化回调(None)
+        if not item:
+            return
 
     def _更新当前选择(self, event):
         """处理列表选择变化"""
