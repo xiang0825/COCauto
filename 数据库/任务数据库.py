@@ -413,6 +413,13 @@ class 任务数据库:
     def 默认数据库路径():
         if getattr(sys, "frozen", False):
             # 单文件 EXE 的 _MEIPASS 是临时解包目录；数据库必须放在 EXE 旁边才能持久保存。
+            # 维护/升级界面时可通过环境变量临时接入正在运行的任务引擎数据库，
+            # 这样新版界面仍能实时观察当前任务，而不会复制正在写入的 SQLite 文件。
+            共享数据库 = os.environ.get("COCAUTO_DB_PATH", "").strip()
+            if 共享数据库:
+                共享数据库 = os.path.abspath(os.path.expandvars(共享数据库))
+                os.makedirs(os.path.dirname(共享数据库), exist_ok=True)
+                return 共享数据库
             数据目录 = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "数据库")
             os.makedirs(数据目录, exist_ok=True)
             return os.path.join(数据目录, "任务系统.db")

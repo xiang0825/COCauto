@@ -8,7 +8,7 @@ from typing import Callable, Optional
 
 
 class 日志面板(ttk.Frame):
-    """主界面底部的运行观察区。"""
+    """主界面右侧的运行观察区。"""
 
     def __init__(
         self,
@@ -34,7 +34,7 @@ class 日志面板(ttk.Frame):
     def _创建界面(self):
         顶栏 = ttk.Frame(self)
         顶栏.pack(fill=tk.X, padx=5, pady=(4, 0))
-        ttk.Label(顶栏, text="运行观察（全部机器人）").pack(side=tk.LEFT)
+        ttk.Label(顶栏, text="实时输出（全部机器人）").pack(side=tk.LEFT)
         self.状态标签 = ttk.Label(顶栏, text="等待日志…", foreground="#6b7280")
         self.状态标签.pack(side=tk.RIGHT)
 
