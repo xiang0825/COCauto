@@ -400,9 +400,46 @@ class 城墙升级任务(基础任务):
             # 219,57,595,398；使用完整逻辑画布，OCR 坐标天然为绝对坐标。
             if 屏幕图像 is None:
                 屏幕图像 = 上下文.op.获取屏幕图像cv(0, 0, 800, 600)
-            # 使用OCR引擎识别
-            ocr结果, _ = self.ocr引擎(屏幕图像)
-            return ocr结果 or []
+            # 城墙标题、费用和确认按钮都位于中下部面板。每个候选墙段
+            # 都会触发一次 OCR，长期把整张 800×600 画面送入 ONNX 会
+            # 放大内存峰值，曾出现 bad allocation/进程无日志退出。限定
+            # 到面板区域，同时把 OCR 坐标恢复成 800×600 绝对坐标，
+            # 不改变既有解析逻辑。
+            偏移x, 偏移y = 0, 0
+            待识别图像 = 屏幕图像
+            if (
+                isinstance(屏幕图像, np.ndarray)
+                and 屏幕图像.ndim == 3
+                and 屏幕图像.shape[0] >= 550
+                and 屏幕图像.shape[1] >= 790
+            ):
+                偏移x, 偏移y = 120, 40
+                待识别图像 = np.ascontiguousarray(
+                    屏幕图像[偏移y:550, 偏移x:790]
+                )
+            上下文.置脚本状态(
+                f"城墙OCR开始：区域={偏移x},{偏移y},{偏移x + 待识别图像.shape[1]},"
+                f"{偏移y + 待识别图像.shape[0]}"
+            )
+            ocr结果, _ = self.ocr引擎(待识别图像)
+            ocr结果 = ocr结果 or []
+            if 偏移x or 偏移y:
+                恢复结果 = []
+                for 识别项 in ocr结果:
+                    if len(识别项) < 2:
+                        continue
+                    修复项 = list(识别项)
+                    try:
+                        修复项[0] = [
+                            [float(点[0]) + 偏移x, float(点[1]) + 偏移y]
+                            for 点 in 识别项[0]
+                        ]
+                    except (TypeError, ValueError, IndexError):
+                        continue
+                    恢复结果.append(修复项)
+                ocr结果 = 恢复结果
+            上下文.置脚本状态(f"城墙OCR完成：识别到{len(ocr结果)}项")
+            return ocr结果
         except Exception as e:
             上下文.置脚本状态(f"OCR识别失败: {str(e)}")
             return []
@@ -870,7 +907,13 @@ class 城墙升级任务(基础任务):
 
     def 确认城墙升级提交(self, 上下文) -> bool:
         """处理资源按钮之后出现的升级确认框，并验证确认框已消失。"""
+        上下文.置脚本状态("城墙升级确认OCR开始")
         确认OCR = self.执行OCR识别(上下文)
+        if not 确认OCR:
+            # OCR 没有返回结果时不能把“未知”当成已提交，否则确认框
+            # 会留在屏幕上，下一轮可能把普通坐标误当成升级入口。
+            上下文.置脚本状态("城墙升级确认OCR无结果，保留确认框并结束本轮")
+            return False
         合并文本 = " ".join(
             self._规范OCR文本(项[1])
             for 项 in (确认OCR or [])
@@ -897,6 +940,7 @@ class 城墙升级任务(基础任务):
             延时=650,
             是否精确点击=True,
         )
+        上下文.置脚本状态("城墙升级确认按钮已点击，开始验证确认框消失")
         for _ in range(3):
             上下文.脚本延时(300)
             验证OCR = self.执行OCR识别(上下文)
