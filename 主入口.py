@@ -48,6 +48,18 @@ class 机器人监控中心:
         self.创建机器人(机器人标志,初始设置)
         self.机器人池[机器人标志].启动()
 
+    def 关闭(self):
+        """关闭监控中心，确保桌面程序退出时不留下后台进程。"""
+        self.运行标志 = False
+        for 机器人 in list(self.机器人池.values()):
+            try:
+                机器人.停止("控制台关闭", 等待=False)
+            except Exception:
+                pass
+        if hasattr(self, "监控线程") and self.监控线程.is_alive():
+            # 监控循环最多每秒检查一次；短等待即可释放数据库和互斥锁。
+            self.监控线程.join(timeout=2)
+
     def _监控循环(self):
         """持续监控所有机器人的状态"""
         while self.运行标志:

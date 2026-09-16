@@ -2,6 +2,7 @@
 import ctypes
 import queue
 import sys
+import time
 import tkinter as tk
 from tkinter import ttk, messagebox
 
@@ -51,8 +52,18 @@ def _启动或唤醒已有窗口():
         user32.SetForegroundWindow(窗口句柄)
         return False
 
-    # 主窗口可能还在创建，不能因为暂时找不到句柄而放行第二个实例。
-    return False
+    # 关闭窗口时后台线程异常退出，可能短暂留下互斥锁但没有主窗口。
+    # 等待一小段时间给正常启动完成；仍没有窗口则放行新实例，避免
+    # 残留进程把用户永久锁在“无法启动”的状态。
+    for _ in range(20):
+        time.sleep(0.1)
+        窗口句柄 = user32.FindWindowW("TkTopLevel", "部落冲突")
+        if 窗口句柄:
+            user32.ShowWindow(窗口句柄, 9)
+            user32.BringWindowToTop(窗口句柄)
+            user32.SetForegroundWindow(窗口句柄)
+            return False
+    return True
 
 
 class 增强型机器人控制界面:
@@ -237,12 +248,14 @@ class 增强型机器人控制界面:
         )
 
     def _窗口关闭处理(self):
-        for 机器人 in self.监控中心.机器人池.values():
-            try:
-                机器人.停止(等待=False)
-            except Exception:
-                pass
-        self.监控中心.运行标志 = False
+        if getattr(self, "_正在关闭", False):
+            return
+        self._正在关闭 = True
+        try:
+            self.监控中心.关闭()
+        except Exception:
+            self.监控中心.运行标志 = False
+        self.master.quit()
         self.master.destroy()
 
 
@@ -251,7 +264,24 @@ if __name__ == "__main__":
         sys.exit(0)
     获取本地版本号()
     日志队列 = queue.Queue()
-    监控中心 = 机器人监控中心(日志队列)
-    root = tk.Tk()
-    界面 = 增强型机器人控制界面(root, 监控中心)
-    root.mainloop()
+    监控中心 = None
+    root = None
+    try:
+        监控中心 = 机器人监控中心(日志队列)
+        root = tk.Tk()
+        界面 = 增强型机器人控制界面(root, 监控中心)
+        root.mainloop()
+    except Exception as 异常:
+        错误文本 = f"{type(异常).__name__}: {异常}"
+        try:
+            if root is not None:
+                messagebox.showerror("部落冲突启动失败", 错误文本, parent=root)
+            elif sys.platform == "win32":
+                ctypes.windll.user32.MessageBoxW(None, 错误文本, "部落冲突启动失败", 0x10)
+        finally:
+            raise
+    finally:
+        # 无论窗口是正常关闭还是初始化异常，都回收后台监控线程，
+        # 避免只剩无窗口进程继续占用单实例互斥体。
+        if 监控中心 is not None:
+            监控中心.关闭()
