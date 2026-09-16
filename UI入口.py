@@ -1,5 +1,7 @@
 """部落冲突桌面控制台入口。"""
+import ctypes
 import queue
+import sys
 import tkinter as tk
 from tkinter import ttk, messagebox
 
@@ -15,6 +17,40 @@ from 界面.日志面板 import 日志面板
 from 界面.机器人管理面板 import 机器人管理面板
 from 界面.设备连接面板 import 设备连接面板
 from 界面.任务计划面板 import 任务计划面板
+
+
+_单实例句柄 = None
+
+
+def _启动或唤醒已有窗口():
+    """避免重复启动造成“进程在后台、窗口却找不到”的假象。
+
+    只在 Windows 打包版启用命名互斥体。若已经有可见的主窗口，
+    将它恢复并置顶后结束本次重复启动；若旧实例只有残留进程而没有
+    主窗口，则允许当前实例继续启动，给用户一个可用窗口。
+    """
+    global _单实例句柄
+    if sys.platform != "win32":
+        return True
+
+    kernel32 = ctypes.windll.kernel32
+    user32 = ctypes.windll.user32
+    _单实例句柄 = kernel32.CreateMutexW(None, False, "Local\\COCAUTO_DESKTOP_CONSOLE")
+    if not _单实例句柄:
+        return True
+
+    if kernel32.GetLastError() != 183:  # ERROR_ALREADY_EXISTS
+        return True
+
+    窗口句柄 = user32.FindWindowW(None, "部落冲突")
+    if 窗口句柄:
+        user32.ShowWindow(窗口句柄, 9)  # SW_RESTORE
+        user32.BringWindowToTop(窗口句柄)
+        user32.SetForegroundWindow(窗口句柄)
+        return False
+
+    # 旧进程可能只剩下无窗口的残留实例；继续启动，保证用户能打开界面。
+    return True
 
 
 class 增强型机器人控制界面:
@@ -209,6 +245,8 @@ class 增强型机器人控制界面:
 
 
 if __name__ == "__main__":
+    if not _启动或唤醒已有窗口():
+        sys.exit(0)
     获取本地版本号()
     日志队列 = queue.Queue()
     监控中心 = 机器人监控中心(日志队列)
