@@ -179,6 +179,69 @@ class 模板匹配引擎:
             return (*匹配结果, 调试图像)
         return (*匹配结果, None)
 
+    def 执行最佳匹配(
+        self,
+        底图: np.ndarray,
+        模板路径: Union[str, list],
+        匹配算法=cv2.TM_CCOEFF_NORMED,
+    ) -> Tuple[float, Tuple[int, int], Optional[str]]:
+        """返回多个模板中的最佳分数、中心坐标和模板路径。
+
+        ``执行匹配`` 为兼容旧任务仍然只返回是否命中；世界识别需要知道
+        两套资源图标的相对分数，才能拒绝“两个世界都很像”的误判，因此
+        增加这个只读评分接口。它不改变旧接口的阈值和返回值，也不在识别
+        失败时抛出异常。
+        """
+        if not isinstance(底图, np.ndarray) or 底图.ndim < 2 or 底图.size == 0:
+            return 0.0, (0, 0), None
+
+        if isinstance(模板路径, str):
+            模板路径列表 = 模板路径.split("|")
+        else:
+            模板路径列表 = 模板路径
+
+        最佳值 = float("-inf")
+        最佳位置 = (0, 0)
+        最佳路径 = None
+
+        for 相对路径 in 模板路径列表:
+            模板 = self._安全加载模板(相对路径)
+            if 模板 is None:
+                continue
+
+            模板高, 模板宽 = 模板.shape[:2]
+            if 模板高 > 底图.shape[0] or 模板宽 > 底图.shape[1]:
+                continue
+
+            try:
+                匹配度图 = cv2.matchTemplate(底图, 模板, 匹配算法)
+                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(匹配度图)
+                if 匹配算法 in (cv2.TM_SQDIFF, cv2.TM_SQDIFF_NORMED):
+                    当前值 = 1.0 - float(min_val)
+                    当前位置 = min_loc
+                else:
+                    当前值 = float(max_val)
+                    当前位置 = max_loc
+
+                if 当前值 > 最佳值:
+                    最佳值 = 当前值
+                    最佳位置 = 当前位置
+                    最佳路径 = 相对路径
+            except Exception:
+                continue
+
+        if 最佳路径 is None:
+            return 0.0, (0, 0), None
+
+        模板 = self._安全加载模板(最佳路径)
+        if 模板 is None:
+            return 0.0, (0, 0), None
+        中心点 = (
+            最佳位置[0] + 模板.shape[1] // 2,
+            最佳位置[1] + 模板.shape[0] // 2,
+        )
+        return max(0.0, min(1.0, 最佳值)), 中心点, 最佳路径
+
 
 # 使用示例
 if __name__ == "__main__":
