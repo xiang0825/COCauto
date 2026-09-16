@@ -111,6 +111,11 @@ class 任务计划面板(ttk.Frame):
     def 载入机器人(self, 机器人ID: Optional[str]):
         self.当前机器人ID = 机器人ID
         if not 机器人ID:
+            所有配置 = self.数据库.查询所有机器人设置()
+            if len(所有配置) == 1:
+                # 列表空白、窗口重载或删除回调传入 None 时，单机器人直接恢复配置。
+                self.刷新(next(iter(所有配置)))
+                return
             self._设置 = None
             self.当前配置.set("未选择机器人")
             self.服务器变量.set("")
