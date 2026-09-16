@@ -223,6 +223,25 @@ class ADB设备测试(unittest.TestCase):
         )
         self.assertFalse(any("com.android.settings" in 命令 for 命令 in runner.命令))
 
+    def test_能读取前台包名但不执行切换(self):
+        runner = 假Runner(
+            结果(b"topResumedActivity=ActivityRecord{1 u0 com.ldmnq.launcher3/com.android.launcher3.Launcher t6}\n"),
+        )
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        self.assertEqual(设备.获取当前前台包名(), "com.ldmnq.launcher3")
+        self.assertFalse(any("am" in 命令 and "start" in 命令 for 命令 in runner.命令))
+
+    def test_前台不是目标包时拒绝触控且不操作其他应用(self):
+        runner = 假Runner(
+            结果(在线模拟器),
+            结果(b"topResumedActivity=ActivityRecord{1 u0 com.ldmnq.launcher3/com.android.launcher3.Launcher t6}\n"),
+        )
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        设备.设置目标包名("com.supercell.clashofclans")
+        with self.assertRaisesRegex(ADB错误, "不在前台"):
+            设备.触控(100, 100)
+        self.assertFalse(any("input" in 命令 for 命令 in runner.命令))
+
     def test_ADB模式拒绝F5和系统功能键(self):
         runner = 假Runner(结果(在线模拟器))
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)

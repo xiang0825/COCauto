@@ -90,7 +90,7 @@ class 任务计划测试(unittest.TestCase):
         回主世界.assert_not_called()
         self.assertFalse(机器人.停止事件.is_set())
 
-    def test_启动刷资源前至少两次ESC并确认主世界主页(self):
+    def test_非主页时最多单次ESC并确认主世界主页(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
         键盘 = Mock()
         上下文 = SimpleNamespace(
@@ -106,9 +106,25 @@ class 任务计划测试(unittest.TestCase):
                 (True, (0, 0), None),
                 (True, (0, 0), None),
             ]
-            self.assertTrue(机器人._确保主世界主页面(上下文, 2, 5))
+            self.assertTrue(机器人._确保主世界主页面(上下文))
 
-        self.assertEqual(键盘.按字符按压.call_count, 2)
+        self.assertEqual(键盘.按字符按压.call_count, 1)
+        self.assertFalse(上下文.页面恢复失败)
+
+    def test_已经是主世界主页时不发送ESC(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        键盘 = Mock()
+        上下文 = SimpleNamespace(
+            键盘=键盘,
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=object())),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        with patch("线程.自动化机器人.模板匹配引擎") as 引擎工厂:
+            引擎工厂.return_value.执行匹配.return_value = (True, (0, 0), None)
+            self.assertTrue(机器人._确保主世界主页面(上下文))
+
+        键盘.按字符按压.assert_not_called()
         self.assertFalse(上下文.页面恢复失败)
 
     def test_主世界主页确认失败时禁止继续(self):

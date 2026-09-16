@@ -43,7 +43,7 @@ class 宝石安全保护测试(unittest.TestCase):
         self.assertTrue(上下文.检查宝石商店危险页面(强制=True))
         self.assertEqual(
             [调用.args[0] for 调用 in 上下文.键盘.按字符按压.call_args_list],
-            ["esc", "esc", "esc"],
+            ["esc"],
         )
         上下文.停止事件.set.assert_not_called()
         self.assertFalse(上下文.页面恢复失败)

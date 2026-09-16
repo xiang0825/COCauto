@@ -75,6 +75,12 @@ class ADB设备操作类:
         self._runner = runner
         self._屏幕尺寸: tuple[int, int] | None = None
         self._目标已验证 = False
+        # 运行期输入只能发给这个包所在的前台窗口。空值表示兼容仅做
+        # ADB/截图的工具调用；正式机器人启动时会立即设置为 CoC 包名。
+        self._目标包名 = ""
+        self._前台包名缓存 = ""
+        self._前台包名缓存时间 = 0.0
+        self._前台包名缓存有效秒数 = 0.20
 
     @staticmethod
     def _候选ADB路径() -> list[Path]:
@@ -384,6 +390,30 @@ class ADB设备操作类:
         if not self._目标已验证:
             self.确认在线()
 
+    def 设置目标包名(self, 包名: str) -> None:
+        """绑定运行期输入目标；不执行启动、切换或关闭应用。"""
+        self._目标包名 = str(包名 or "").strip()
+        self._前台包名缓存 = ""
+        self._前台包名缓存时间 = 0.0
+
+    def _验证输入前台(self) -> None:
+        """拒绝把触控/按键发给启动器或其他 Android 应用。"""
+        目标包名 = str(getattr(self, "_目标包名", "") or "")
+        if not 目标包名:
+            return
+        当前时间 = time.monotonic()
+        if 当前时间 - self._前台包名缓存时间 <= self._前台包名缓存有效秒数:
+            当前包名 = self._前台包名缓存
+        else:
+            当前包名 = self.获取当前前台包名()
+            self._前台包名缓存 = 当前包名
+            self._前台包名缓存时间 = 当前时间
+        if 当前包名 != 目标包名:
+            raise ADB错误(
+                f"安全保护已拒绝输入：CoC不在前台（当前={当前包名 or '未知'}，"
+                f"目标={目标包名}）；不会点击其他应用或发送返回键。"
+            )
+
     def 获取屏幕图像cv(self, 左边: int = 0, 顶边: int = 0, 右边: int = 2000, 底边: int = 2000):
         import cv2
         import numpy as np
@@ -422,6 +452,7 @@ class ADB设备操作类:
 
     def 触控(self, x: int, y: int) -> bool:
         self._验证目标()
+        self._验证输入前台()
         x, y = self.参考坐标转设备坐标(x, y)
         self.执行(["shell", "input", "tap", str(x), str(y)], timeout=8)
         return True
@@ -429,6 +460,7 @@ class ADB设备操作类:
     def 连续触控(self, 位置列表: Iterable[tuple[int, int]], 间隔毫秒: int = 0) -> bool:
         """在一次 ADB shell 会话内连续点击多个位置，减少逐次启动 adb 的开销。"""
         self._验证目标()
+        self._验证输入前台()
         try:
             点位 = [(int(位置[0]), int(位置[1])) for 位置 in 位置列表]
         except (TypeError, ValueError, IndexError) as 异常:
@@ -451,6 +483,7 @@ class ADB设备操作类:
     def 长按触控(self, x: int, y: int, 时长毫秒: int = 220) -> bool:
         """通过同点 swipe 发送一次短长按，供游戏的按住连续部署手势使用。"""
         self._验证目标()
+        self._验证输入前台()
         时长毫秒 = max(120, min(1500, int(时长毫秒)))
         x, y = self.参考坐标转设备坐标(x, y)
         self.执行([
@@ -461,6 +494,7 @@ class ADB设备操作类:
 
     def 滑动(self, 起点: tuple[int, int], 终点: tuple[int, int], 时长毫秒: int = 350) -> bool:
         self._验证目标()
+        self._验证输入前台()
         起点 = self.参考坐标转设备坐标(*起点)
         终点 = self.参考坐标转设备坐标(*终点)
         self.执行(["shell", "input", "swipe", str(起点[0]), str(起点[1]),
@@ -477,6 +511,7 @@ class ADB设备操作类:
             # 这是安全拒绝，不抛异常，避免把一次无效的缩放请求升级成
             # 任务重启；调用方会自然继续当前识别流程。
             return False
+        self._验证输入前台()
         self.执行(["shell", "input", "keyevent", str(数字按键码)], timeout=8)
         return True
 
@@ -550,6 +585,20 @@ class ADB设备操作类:
             "shell", "am", "start", "-a", "android.intent.action.MAIN",
             "-c", "android.intent.category.LAUNCHER", "-p", 包名
         ], timeout=20)
+
+    def 获取当前前台包名(self) -> str:
+        """读取当前前台 Activity 所属包名，不执行任何切换操作。"""
+        当前前台 = self.执行(["shell", "dumpsys", "activity", "activities"], timeout=12)
+        if isinstance(当前前台, bytes):
+            当前前台 = 当前前台.decode("utf-8", errors="replace")
+        for 行 in str(当前前台).splitlines():
+            if "mResumedActivity" not in 行 and "topResumedActivity" not in 行:
+                continue
+            # 兼容：ActivityRecord{... u0 package/activity ...}
+            匹配 = re.search(r"\bu\d+\s+([A-Za-z0-9_.$-]+)/", 行)
+            if 匹配:
+                return 匹配.group(1)
+        return ""
 
     def 关闭模拟器中的应用(self, 包名: str) -> None:
         raise ADB错误(

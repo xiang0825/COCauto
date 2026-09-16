@@ -223,7 +223,12 @@ class 城墙升级任务(基础任务):
         键盘 = getattr(上下文, "键盘", None)
         按字符按压 = getattr(键盘, "按字符按压", None)
         if callable(按字符按压):
-            按字符按压("esc")
+            安全返回键 = getattr(上下文, "安全返回键", None)
+            if callable(安全返回键):
+                if not 安全返回键("退出城墙面板"):
+                    return
+            else:
+                按字符按压("esc")
             上下文.脚本延时(500)
             上下文.置脚本状态("已退出城墙面板，准备启动主世界刷资源任务")
         else:

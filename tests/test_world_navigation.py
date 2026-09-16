@@ -39,8 +39,8 @@ class 世界跳转测试(unittest.TestCase):
             模块.time.time = 原时间函数
 
         按键列表 = [调用.args[0] for 调用 in 键盘.按字符按压.call_args_list]
-        self.assertEqual(按键列表[:2], ["esc", "esc"])
-        self.assertIn("f5", 按键列表)
+        self.assertEqual(按键列表[:1], ["esc"])
+        self.assertNotIn("f5", 按键列表)
         self.assertTrue(
             any("ESC关闭误触页面" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
         )

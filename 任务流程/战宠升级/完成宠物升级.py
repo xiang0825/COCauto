@@ -13,8 +13,7 @@ class 完成宠物升级任务(基础任务):
         )
         if 是否有红色调偏粉色块:
             self.上下文.置脚本状态("战宠升级：资源不足")
-            self.上下文.键盘.按字符按压("esc")#关闭升级页面
-            self.上下文.键盘.按字符按压("esc")#关闭战宠小屋
+            self._安全关闭面板("关闭战宠升级页面", "关闭战宠小屋")
             return False
 
         ocr结果=self.执行OCR识别((514,465,654,517))
@@ -23,6 +22,16 @@ class 完成宠物升级任务(基础任务):
             return False
 
         self.上下文.点击(577,492)#点击升级
-        self.上下文.键盘.按字符按压("esc")  # 关闭升级页面
-        self.上下文.键盘.按字符按压("esc")  # 关闭战宠小屋
+        self._安全关闭面板("关闭战宠升级页面", "关闭战宠小屋")
+        return True
+
+    def _安全关闭面板(self, *说明列表):
+        安全返回键 = getattr(self.上下文, "安全返回键", None)
+        if callable(安全返回键):
+            for 说明 in 说明列表:
+                if not 安全返回键(说明):
+                    return False
+            return True
+        for _ in 说明列表:
+            self.上下文.键盘.按字符按压("esc")
         return True

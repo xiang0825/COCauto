@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 
 from 线程.自动化机器人 import 自动化机器人
 from 任务流程.基础任务框架 import 任务上下文
+from 任务流程.检测游戏登录状态 import 检测游戏登录状态任务
 
 
 class 心跳超时测试(unittest.TestCase):
@@ -53,6 +54,32 @@ class 心跳超时测试(unittest.TestCase):
         上下文.发送死亡通知.assert_called_once()
         self.assertTrue(
             any("异常恢复安全锁" in 调用.args[0]
+                for 调用 in 上下文.置脚本状态.call_args_list)
+        )
+
+    def test_登录识别超时不发送ESC并安全停止(self):
+        任务 = object.__new__(检测游戏登录状态任务)
+        上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            键盘=SimpleNamespace(按字符按压=Mock()),
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=object()),
+                设备=SimpleNamespace(获取当前前台包名=Mock(return_value="com.ldmnq.launcher3")),
+            ),
+            停止事件=threading.Event(),
+        )
+        任务.上下文 = 上下文
+        任务.第一次检测游戏登录 = False
+
+        现在 = iter((0.0, 201.0))
+        with patch("任务流程.检测游戏登录状态.time.monotonic", side_effect=lambda: next(现在)):
+            self.assertFalse(任务.执行())
+
+        上下文.键盘.按字符按压.assert_not_called()
+        self.assertTrue(上下文.停止事件.is_set())
+        self.assertTrue(
+            any("禁止发送ESC" in 调用.args[0]
                 for 调用 in 上下文.置脚本状态.call_args_list)
         )
 
