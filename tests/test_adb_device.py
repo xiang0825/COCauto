@@ -156,8 +156,8 @@ class ADB设备测试(unittest.TestCase):
         self.assertTrue(设备.连续触控([(12, 34), (12, 34)], 间隔毫秒=8))
         self.assertEqual(
             runner.命令[-1][1:],
-            ["-s", "emulator-5554", "shell", "sh", "-c",
-             "input tap 12 34; sleep 0.008; input tap 12 34"],
+             ["-s", "emulator-5554", "shell", "sh", "-c",
+              "input tap 12 34; sleep 0.040; input tap 12 34"],
         )
 
     def test_ADB长按使用同点swipe(self):

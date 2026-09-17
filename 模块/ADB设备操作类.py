@@ -512,7 +512,12 @@ class ADB设备操作类:
         if len(点位) > 32:
             raise ADB错误("单次连续触控最多支持 32 个点。")
 
+        # 雷电 Android 14 在短时间内连续 fork ``input tap`` 会把 guest
+        # 标记为无响应，LMKD 随后可能直接杀掉正在前台的 CoC。多点输入
+        # 统一保留至少 40ms 的呼吸间隔；单点不额外延迟。
         间隔毫秒 = max(0, min(80, int(间隔毫秒)))
+        if len(点位) > 1:
+            间隔毫秒 = max(40, 间隔毫秒)
         点位 = [self.参考坐标转设备坐标(x, y) for x, y in 点位]
         间隔命令 = f"; sleep {间隔毫秒 / 1000:.3f}" if 间隔毫秒 else ""
         脚本 = "; ".join(

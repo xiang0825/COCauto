@@ -1,5 +1,6 @@
 import queue
 import random
+import gc
 
 import threading
 import time
@@ -358,6 +359,22 @@ class 自动化机器人:
                 )
                 return False
             if 本场战斗成功 and not self.停止事件.is_set():
+                # 雷电的 Android 系统日志显示：上一场大量截图/连点后立刻
+                # 打开下一场，guest 会短暂失去响应，LMKD 会杀掉 CoC 并回到
+                # 启动器。先释放大截图、给游戏和模拟器 10 秒稳定窗口；
+                # 这不是盲等，期间不再运行 OCR/YOLO/ADB 输入。
+                for 属性名 in (
+                    "_战斗开始兵栏画面", "_战斗结束截图", "_点击识别截图",
+                    "_部署红色掩码", "当前兵栏清单",
+                ):
+                    setattr(上下文, 属性名, None)
+                gc.collect()
+                上下文.置脚本状态(
+                    "战后稳定窗口：已释放截图缓存，暂停10秒避免模拟器无响应杀掉游戏"
+                )
+                上下文.脚本延时(10_000)
+                if self.停止事件.is_set():
+                    return False
                 战后资源识别成功 = 更新家乡资源状态任务(上下文).执行()
                 战后状态 = 上下文.数据库.获取最新完整状态(self.机器人标志)
                 战后资源 = self._取已确认家乡资源(战后状态)
