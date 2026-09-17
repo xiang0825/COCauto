@@ -225,7 +225,7 @@ class 城墙升级任务(基础任务):
         if callable(按字符按压):
             安全返回键 = getattr(上下文, "安全返回键", None)
             if callable(安全返回键):
-                if not 安全返回键("退出城墙面板"):
+                if not 安全返回键("退出城墙面板", 已确认可关闭面板=True):
                     return
             else:
                 按字符按压("esc")

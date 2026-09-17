@@ -27,6 +27,7 @@ def 创建上下文(屏幕图像: np.ndarray):
     上下文.停止事件 = Mock()
     上下文.停止事件.set = Mock()
     上下文._宝石保护确认主页面 = Mock(return_value=False)
+    上下文._战斗中 = False
     return 上下文
 
 
@@ -92,6 +93,18 @@ class 宝石安全保护测试(unittest.TestCase):
         self.assertFalse(上下文.点击(400, 300, 延时=1, 是否精确点击=True))
         上下文.鼠标.移动到.assert_not_called()
         上下文.鼠标.左键点击.assert_not_called()
+
+    def test_战斗中即使误命中危险模板也绝不发送返回键(self):
+        模板 = 读取模板("宝石.bmp")
+        模板1 = 读取模板("宝石1.bmp")
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        屏幕[230:230 + 模板.shape[0], 390:390 + 模板.shape[1]] = 模板
+        屏幕[230:230 + 模板1.shape[0], 414:414 + 模板1.shape[1]] = 模板1
+        上下文 = 创建上下文(屏幕)
+        上下文._战斗中 = True
+
+        self.assertFalse(上下文.检查宝石商店危险页面(强制=True))
+        上下文.键盘.按字符按压.assert_not_called()
 
     def test_点击完成后强制再次检查危险页面(self):
         上下文 = 创建上下文(np.zeros((600, 800, 3), dtype=np.uint8))

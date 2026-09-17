@@ -102,8 +102,30 @@ class 任务上下文:
         except TypeError:
             self.置脚本状态("[错误] " + 文本, 超时的时间)
 
-    def 安全返回键(self, 说明: str = "") -> bool:
-        """仅在 CoC 仍位于 Android 前台时发送一次返回键。"""
+    def 安全返回键(self, 说明: str = "", *, 已确认可关闭面板: bool = False) -> bool:
+        """受限地发送 Android BACK，默认拒绝。
+
+        Android 的 BACK 在 CoC 根页面会直接把游戏退回模拟器启动器。过去的
+        ``世界切换超时`` / ``主页校验`` 把“页面未知”当成可恢复状态，因此
+        会在识别抖动时触发这个危险动作。现在只有调用方已经用专用模板确认
+        了一个可关闭的游戏内面板时才允许一次 BACK；战斗、结算、未知页面一律
+        不发送，保留画面并停止后续点击。
+        """
+        if not 已确认可关闭面板:
+            self.置脚本状态(
+                f"安全返回键已拒绝{('（' + 说明 + '）') if 说明 else ''}："
+                "未确认可关闭面板；页面未知时禁止用ESC/返回键恢复"
+            )
+            self.页面恢复失败 = True
+            return False
+
+        if bool(getattr(self, "_战斗中", False)):
+            self.置脚本状态(
+                f"安全返回键已拒绝{('（' + 说明 + '）') if 说明 else ''}："
+                "战斗期间禁止发送ESC/返回键，保留当前战斗画面"
+            )
+            self.页面恢复失败 = True
+            return False
         设备 = getattr(getattr(self, "op", None), "设备", None)
         获取前台包名 = getattr(设备, "获取当前前台包名", None)
         if callable(获取前台包名):
@@ -383,7 +405,11 @@ class 任务上下文:
             # 测试和上层可注入确认器；生产环境走真实截图模板匹配。
             # 一次只关闭最上层危险面板；若仍未回到主页，保持锁定并
             # 交给上层下一次安全检查，绝不能连续多次 BACK 退出游戏。
-            按字符按压("esc")
+            安全返回键 = getattr(self, "安全返回键", None)
+            if not callable(安全返回键) or not 安全返回键(
+                "宝石保护预设确认", 已确认可关闭面板=True
+            ):
+                return False
             self.置脚本状态("[安全拦截] 已发送1次ESC退出危险页面，不执行第二选择")
             return bool(预设确认器())
 
@@ -394,10 +420,11 @@ class 任务上下文:
         序号 = 1
         安全返回键 = getattr(self, "安全返回键", None)
         if callable(安全返回键):
-            if not 安全返回键(f"宝石保护第{序号}次"):
+            if not 安全返回键(f"宝石保护第{序号}次", 已确认可关闭面板=True):
                 return False
         else:
-            按字符按压("esc")
+            self.置脚本状态("[安全拦截] 缺少安全返回键入口，未发送ESC")
+            return False
         self.脚本延时(180)
         try:
             屏幕图像 = self.op.获取屏幕图像cv(0, 0, 800, 600)
