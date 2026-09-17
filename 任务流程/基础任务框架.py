@@ -4,6 +4,7 @@ import queue
 import random
 import threading
 import time
+import gc
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Tuple, Any, Optional
@@ -36,6 +37,46 @@ class 任务上下文:
     上次上报时间: float = 0.0  # 新增：上次上报的时间戳
     上报间隔秒: int = 0  # 新增：上报间隔（秒）
     上次检查上报时间: float = 0.0  # 新增：上次检查上报的时间戳（避免频繁检查）
+    def 获取模板识别器(self):
+        """每个机器人运行上下文只保留一个模板识别器引用。"""
+        识别器 = getattr(self, "_共享模板识别器", None)
+        if 识别器 is None:
+            识别器 = 模板匹配引擎()
+            self._共享模板识别器 = 识别器
+        return 识别器
+
+    def 获取OCR引擎(self):
+        """延迟创建并复用 OCR 引擎，避免任务循环重复触碰 native 模型。"""
+        引擎 = getattr(self, "_共享OCR引擎", None)
+        if 引擎 is None:
+            引擎 = 安全OCR引擎()
+            self._共享OCR引擎 = 引擎
+        return 引擎
+
+    def 获取YOLO检测器(self):
+        """延迟创建并复用默认 YOLO 检测器。"""
+        检测器 = getattr(self, "_共享YOLO检测器", None)
+        if 检测器 is None:
+            检测器 = 线程安全YOLO检测器()
+            self._共享YOLO检测器 = 检测器
+        return 检测器
+
+    def 释放识别模型(self) -> None:
+        """机器人停止时释放 ONNX/OpenCV native 对象，避免反复运行逐渐涨内存。"""
+        OCR = getattr(self, "_共享OCR引擎", None)
+        释放OCR = getattr(OCR, "释放模型", None)
+        if callable(释放OCR):
+            try:
+                释放OCR()
+            except Exception:
+                pass
+        # 清除本次运行持有的截图引用；模板缓存本身有固定上限。
+        self._点击识别截图 = None
+        self._最近点击页面结果 = None
+        self._战斗结束截图 = None
+        self._战斗开始兵栏画面 = None
+        gc.collect()
+
     @property
     def 设置(self) -> 机器人设置:
         配置 = self.数据库.获取机器人设置(self.机器人标志)
@@ -96,7 +137,7 @@ class 任务上下文:
         识别器 = getattr(self, "_点击页面识别器", None)
         if 识别器 is None:
             from 模块.检测.页面识别器 import 页面识别器
-            识别器 = 页面识别器(模板匹配引擎())
+            识别器 = 页面识别器(self.获取模板识别器())
             self._点击页面识别器 = 识别器
         return 识别器
 
@@ -208,7 +249,7 @@ class 任务上下文:
             区域左, 区域上 = 180, 130
             区域右, 区域下 = min(宽, 620), min(高, 450)
             危险区域 = 屏幕图像[区域上:区域下, 区域左:区域右]
-            识图引擎 = 模板匹配引擎()
+            识图引擎 = self.获取模板识别器()
             中央命中列表 = []
             for 模板 in ("宝石.bmp", "宝石1.bmp"):
                 命中, 坐标 = self._多尺度匹配宝石图标(
@@ -346,7 +387,7 @@ class 任务上下文:
             self.置脚本状态("[安全拦截] 已发送1次ESC退出危险页面，不执行第二选择")
             return bool(预设确认器())
 
-        识图引擎 = 模板匹配引擎()
+        识图引擎 = self.获取模板识别器()
         # 危险页只允许一次 BACK。第一次通常足以关闭确认框；如果
         # 模板/截图暂时不稳定，保持保护锁并停止后续点击，避免第二次
         # BACK 在已经回到游戏根页面时把 CoC 退到启动器。
@@ -515,17 +556,37 @@ class 任务上下文:
             - 延时期间可以被暂停事件暂停
         """
 
-        for i in range(毫秒数):
-            time.sleep(0.001)
+        try:
+            总秒数 = max(0.0, int(毫秒数 or 0) / 1000.0)
+        except (TypeError, ValueError):
+            总秒数 = 0.0
+        if 总秒数 <= 0:
+            return
 
-            # 每1秒检查一次定时上报（基于实际时间，而不是循环次数）
-            # 这样即使频繁调用短延时，也不会过度检查
+        # 旧实现每毫秒执行一次 Python 循环。战斗等待、页面等待和待机
+        # 累积起来会变成每个机器人每秒约 1000 次唤醒，多个机器人或
+        # Tk/ONNX 同时运行时会明显抬高 CPU。使用 Event.wait 休眠，仍
+        # 保留停止/暂停的及时响应，并把唤醒频率限制在每秒最多 5 次。
+        截止时间 = time.monotonic() + 总秒数
+        while True:
+            if self.停止事件.is_set():
+                self.置脚本状态("收到停止事件")
+                raise SystemExit(f"收到退出请求,主动退出线程,机器人{self.机器人标志}已关闭")
+
+            if not self.继续事件.is_set():
+                # 暂停时也用有界等待，这样停止事件仍能快速唤醒线程。
+                self.继续事件.wait(timeout=0.25)
+                continue
+
+            当前单调时间 = time.monotonic()
+            if 当前单调时间 >= 截止时间:
+                break
+
+            # 每1秒检查一次定时上报（基于实际时间，而不是循环次数）。
             if self.企业微信通知器 and self.上报间隔秒 > 0:
                 当前时间 = time.time()
-                # 距离上次检查超过1秒才再次检查
                 if 当前时间 - self.上次检查上报时间 >= 1.0:
                     self.上次检查上报时间 = 当前时间
-                    # 检查是否到了上报时间
                     if 当前时间 - self.上次上报时间 >= self.上报间隔秒:
                         try:
                             from datetime import datetime
@@ -537,12 +598,10 @@ class 任务上下文:
                         except Exception as e:
                             print(f"定时上报失败: {e}")
 
-            if not self.继续事件.is_set():
-                self.继续事件.wait()
-
-            if self.停止事件.is_set():
-                self.置脚本状态("收到停止事件")
-                raise SystemExit(f"收到退出请求,主动退出线程,机器人{self.机器人标志}已关闭")
+            # 等待停止事件；收到事件后下一轮统一记录并退出。
+            等待秒数 = min(0.25, max(0.0, 截止时间 - time.monotonic()))
+            if 等待秒数 > 0:
+                self.停止事件.wait(timeout=等待秒数)
 
     def 点击(self,x,y,延时=None,是否精确点击=False):
         # 所有任务共用这一入口；危险页面一旦被识别，ESC 并确认主页，
@@ -672,9 +731,18 @@ class 基础任务(ABC):
     def __init__(self, 上下文: '任务上下文'):
         self.上下文 = 上下文
         # 自动初始化常用工具
-        self.模板识别 = 模板匹配引擎()
-        self.ocr引擎 = 安全OCR引擎()
-        self.检测器 = 线程安全YOLO检测器()
+        获取模板识别器 = getattr(上下文, "获取模板识别器", None)
+        获取OCR引擎 = getattr(上下文, "获取OCR引擎", None)
+        获取YOLO检测器 = getattr(上下文, "获取YOLO检测器", None)
+        self.模板识别 = (
+            获取模板识别器() if callable(获取模板识别器) else 模板匹配引擎()
+        )
+        self.ocr引擎 = (
+            获取OCR引擎() if callable(获取OCR引擎) else 安全OCR引擎()
+        )
+        self.检测器 = (
+            获取YOLO检测器() if callable(获取YOLO检测器) else 线程安全YOLO检测器()
+        )
         # 便捷属性
         self.数据库 = 上下文.数据库
         self.机器人标志 = 上下文.机器人标志

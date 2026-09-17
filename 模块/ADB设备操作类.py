@@ -9,6 +9,7 @@ import ipaddress
 import re
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,6 +62,11 @@ class ADB设备操作类:
     # 离开游戏、切换到启动器或打开模拟器的其他应用。底层再次拦截，
     # 防止绕过键盘控制器的调用把这类按键发送出去。
     禁止系统按键码 = frozenset({3, 82, 187, *range(131, 143)})
+    # 同一个模拟器的 ADB server/transport 不适合被多个线程同时执行
+    # screencap、dumpsys 和 input。使用按设备共享的可重入锁，既兼容
+    # UI 连接检测和机器人线程并存，也避免多个 adb.exe 同时抢占通道。
+    _设备命令锁容器: dict[tuple[str, str], threading.RLock] = {}
+    _设备命令锁容器锁 = threading.Lock()
 
     def __init__(
             self,
@@ -81,6 +87,14 @@ class ADB设备操作类:
         self._前台包名缓存 = ""
         self._前台包名缓存时间 = 0.0
         self._前台包名缓存有效秒数 = 0.20
+        self._连续传输失败次数 = 0
+        self._ADB熔断截止时间 = 0.0
+        self._最近恢复时间 = 0.0
+        self._恢复冷却秒数 = 8.0
+        self._ADB熔断秒数 = 30.0
+        锁键 = (os.path.normcase(os.path.abspath(self.adb路径)), self.设备序列号)
+        with self._设备命令锁容器锁:
+            self._命令锁 = self._设备命令锁容器.setdefault(锁键, threading.RLock())
 
     @staticmethod
     def _候选ADB路径() -> list[Path]:
@@ -189,48 +203,64 @@ class ADB设备操作类:
         参数 = list(参数)
         self._拒绝危险结束命令(参数)
         命令 = self.构造设备命令(self.adb路径, self.设备序列号, 参数)
-        for 尝试次数 in range(2):
-            startupinfo = None
-            creationflags = 0
-            if os.name == "nt":
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            try:
-                结果 = self._runner(
-                    命令,
-                    capture_output=True,
-                    timeout=timeout,
-                    check=False,
-                    startupinfo=startupinfo,
-                    creationflags=creationflags,
+        with self._命令锁:
+            当前时间 = time.monotonic()
+            if 当前时间 < self._ADB熔断截止时间:
+                剩余 = max(1, int(self._ADB熔断截止时间 - 当前时间))
+                raise ADB错误(
+                    f"ADB 传输连续失败，已进入{剩余}秒安全冷却；"
+                    "不会继续创建 adb 进程，避免电脑和模拟器被拖垮。"
                 )
-            except FileNotFoundError as 异常:
-                raise ADB错误(f"无法启动 ADB：{self.adb路径}") from 异常
-            except subprocess.TimeoutExpired as 异常:
-                # screencap 偶尔会因为模拟器渲染忙或 ADB 传输通道卡住而超时。
-                # 第一次超时只重置传输通道并重试，不能立即杀掉机器人线程。
-                if 尝试次数 == 0:
+
+            for 尝试次数 in range(2):
+                startupinfo = None
+                creationflags = 0
+                if os.name == "nt":
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                try:
+                    结果 = self._runner(
+                        命令,
+                        capture_output=True,
+                        timeout=timeout,
+                        check=False,
+                        startupinfo=startupinfo,
+                        creationflags=creationflags,
+                    )
+                except FileNotFoundError as 异常:
+                    raise ADB错误(f"无法启动 ADB：{self.adb路径}") from 异常
+                except subprocess.TimeoutExpired as 异常:
+                    # 截图超时意味着底层 transport 可能已经卡住。最多恢复
+                    # 一次；第二次失败立即熔断，避免长时间运行时不断创建
+                    # adb.exe、reconnect 和 screencap 进程，把整台电脑拖死。
+                    self._记录传输失败()
+                    if 尝试次数 == 0:
+                        self._尝试恢复ADB连接()
+                        continue
+                    raise ADB错误(f"ADB 命令超时：{' '.join(命令[1:])}") from 异常
+
+                stdout = 结果.stdout or (b"" if binary else "")
+                stderr = 结果.stderr or (b"" if binary else "")
+                if not 结果.returncode:
+                    self._连续传输失败次数 = 0
+                    self._ADB熔断截止时间 = 0.0
+                    return stdout
+
+                if isinstance(stderr, bytes):
+                    错误文本 = stderr.decode("utf-8", errors="replace").strip()
+                else:
+                    错误文本 = str(stderr).strip()
+                if (
+                    尝试次数 == 0
+                    and self._是ADB传输错误(错误文本)
+                ):
+                    self._记录传输失败()
                     self._尝试恢复ADB连接()
                     continue
-                raise ADB错误(f"ADB 命令超时：{' '.join(命令[1:])}") from 异常
-
-            stdout = 结果.stdout or (b"" if binary else "")
-            stderr = 结果.stderr or (b"" if binary else "")
-            if not 结果.returncode:
-                return stdout
-
-            if isinstance(stderr, bytes):
-                错误文本 = stderr.decode("utf-8", errors="replace").strip()
-            else:
-                错误文本 = str(stderr).strip()
-            if (
-                尝试次数 == 0
-                and self._是ADB传输错误(错误文本)
-            ):
-                self._尝试恢复ADB连接()
-                continue
-            raise ADB错误(错误文本 or f"ADB 命令失败，退出码 {结果.returncode}")
+                if self._是ADB传输错误(错误文本):
+                    self._记录传输失败()
+                raise ADB错误(错误文本 or f"ADB 命令失败，退出码 {结果.returncode}")
 
         raise ADB错误(f"ADB 命令失败：{' '.join(命令[1:])}")
 
@@ -252,6 +282,10 @@ class ADB设备操作类:
 
     def _尝试恢复ADB连接(self) -> None:
         """只重置 ADB 传输通道，不重启游戏或模拟器。"""
+        当前时间 = time.monotonic()
+        if 当前时间 - self._最近恢复时间 < self._恢复冷却秒数:
+            return
+        self._最近恢复时间 = 当前时间
         命令 = [self.adb路径, "reconnect", "offline"]
         startupinfo = None
         creationflags = 0
@@ -272,6 +306,12 @@ class ADB设备操作类:
             # 恢复命令失败时让原始命令的第二次尝试给出最终错误。
             pass
         time.sleep(0.35)
+
+    def _记录传输失败(self) -> None:
+        """记录 ADB transport 失败，并在连续失败时短暂熔断。"""
+        self._连续传输失败次数 += 1
+        if self._连续传输失败次数 >= 2:
+            self._ADB熔断截止时间 = time.monotonic() + self._ADB熔断秒数
 
     @staticmethod
     def _拒绝危险结束命令(参数: Iterable[str]) -> None:
@@ -420,6 +460,8 @@ class ADB设备操作类:
 
         self._验证目标()
         原始PNG = self.执行(["exec-out", "screencap", "-p"], timeout=15, binary=True)
+        if len(原始PNG) > 20 * 1024 * 1024:
+            raise ADB错误("ADB 截图数据异常过大，已拒绝继续解码以保护内存。")
         图像 = cv2.imdecode(np.frombuffer(原始PNG, dtype=np.uint8), cv2.IMREAD_COLOR)
         if 图像 is None or 图像.size == 0:
             raise ADB错误("ADB 截图无法解码；请确认设备已启动并允许 ADB 调试。")

@@ -147,13 +147,29 @@ class 自动化机器人:
 
         # 发送到UI日志队列（携带结构化级别，便于实时渲染）
         if self.日志队列:
-            self.日志队列.put({
-                '内容': f"[{time.strftime('%H:%M:%S')}] {带级别前缀的内容}",
-                '机器人ID': self.机器人标志,
-                '类型': '运行',
-                '级别': 级别,
-                '记录时间': 记录时间,
-            })
+            try:
+                self.日志队列.put_nowait({
+                    '内容': f"[{time.strftime('%H:%M:%S')}] {带级别前缀的内容}",
+                    '机器人ID': self.机器人标志,
+                    '类型': '运行',
+                    '级别': 级别,
+                    '记录时间': 记录时间,
+                })
+            except queue.Full:
+                # 实时队列只服务 UI；满载时丢弃最旧的实时显示消息，
+                # 不能让机器人线程阻塞在日志上。完整记录已经写入 SQLite。
+                try:
+                    self.日志队列.get_nowait()
+                    self.日志队列.task_done()
+                    self.日志队列.put_nowait({
+                        '内容': f"[{time.strftime('%H:%M:%S')}] {带级别前缀的内容}",
+                        '机器人ID': self.机器人标志,
+                        '类型': '运行',
+                        '级别': 级别,
+                        '记录时间': 记录时间,
+                    })
+                except (queue.Empty, queue.Full):
+                    pass
 
         # Windows 的 time.strftime 使用系统 locale，不能在格式串里放中文字符。
         # 控制台只是辅助输出；即使终端编码异常，也不能中断机器人任务线程。
@@ -668,7 +684,16 @@ class 自动化机器人:
             except Exception as e:
                 print(f"发送停止通知失败: {e}")
 
+            try:
+                上下文.释放识别模型()
+            except Exception as e:
+                print(f"释放识别模型失败: {e}")
             上下文.op.安全清理()
+            try:
+                if 企业微信通知器实例:
+                    企业微信通知器实例.关闭()
+            except Exception as e:
+                print(f"关闭企业微信通知线程失败: {e}")
 
     def 检查超时(self) -> tuple[bool, str]:
         """检查是否超时，返回 (是否超时, 原因)。未超时返回 (False, '')"""

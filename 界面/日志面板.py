@@ -150,7 +150,9 @@ class 日志面板(ttk.Frame):
     def _定时刷新日志(self):
         """持续消费实时队列，不因当前选中机器人而丢弃消息。"""
         有变化 = False
-        while True:
+        # 每次 UI tick 最多消费固定数量；即使生产者短时集中写日志，
+        # 也不让 Tk 主线程一次性渲染几千条消息而假死。
+        for _ in range(250):
             try:
                 日志消息 = self.日志队列.get_nowait()
             except queue.Empty:
@@ -167,6 +169,10 @@ class 日志面板(ttk.Frame):
                 self._实时日志.append((记录时间, 机器人ID, 内容, 级别))
             else:
                 self._实时日志.append((当前时间, "系统", str(日志消息), "正常"))
+            try:
+                self.日志队列.task_done()
+            except ValueError:
+                pass
             有变化 = True
         # 长时间运行只保留近期实时消息，历史仍由数据库按需读取。
         self._实时日志 = self._实时日志[-3000:]

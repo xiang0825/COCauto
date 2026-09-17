@@ -438,6 +438,11 @@ class 任务数据库:
             timeout=15
         )
         conn.execute("PRAGMA journal_mode=WAL")
+        # 日志是高频读写路径；固定 checkpoint 和 NORMAL 同步模式，
+        # 避免 WAL 在长期运行/异常断线时无限膨胀，同时降低每条日志
+        # 都打开连接所产生的磁盘同步压力。
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA wal_autocheckpoint=1000")
         return conn
 
     def _初始化表结构(self):
@@ -463,6 +468,14 @@ class 任务数据库:
                     记录时间 REAL NOT NULL,
                     下次超时 REAL NOT NULL
                 )""")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_任务日志_机器人记录 "
+                "ON 任务日志 (机器人标志, 记录ID DESC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_任务日志_机器人时间 "
+                "ON 任务日志 (机器人标志, 记录时间 DESC)"
+            )
 
             # 机器人设置表
             conn.execute("""

@@ -264,7 +264,8 @@ if __name__ == "__main__":
     if not _启动或唤醒已有窗口():
         sys.exit(0)
     获取本地版本号()
-    日志队列 = queue.Queue()
+    # 实时日志只保留有限的待显示消息，避免窗口卡顿时无限占用内存。
+    日志队列 = queue.Queue(maxsize=2000)
     监控中心 = None
     root = None
     try:

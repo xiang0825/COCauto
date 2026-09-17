@@ -1,5 +1,6 @@
 import threading
 import gc
+import time
 from functools import wraps
 
 import cv2
@@ -43,6 +44,8 @@ class 安全OCR引擎:
         self._配置文件路径 = 配置文件路径
         self._配置参数 = dict(配置参数)
         self._原始引擎 = RapidOCR(配置文件路径, **配置参数)  # 真正的OCR引擎
+        self._最近重置时间 = 0.0
+        self._重置冷却秒数 = 20.0
 
     def __call__(self, *输入参数, **动态参数):
         """代理所有方法调用并自动加锁"""
@@ -50,12 +53,32 @@ class 安全OCR引擎:
 
             return self._原始引擎(*输入参数, **动态参数)
 
-    def 重置会话(self) -> None:
-        """释放发生 ONNX 内存错误的会话，下次调用按需重新加载模型。"""
+    def 重置会话(self) -> bool:
+        """释放发生 ONNX 内存错误的会话，下次调用按需重新加载模型。
+
+        OCR 失败时不能在每一轮循环都创建一套新的 ONNX 对象。重置有
+        冷却窗口：短时间内的重复失败沿用当前会话并由调用方结束本轮，
+        防止 native session 分配/释放抖动最终把进程和分页文件耗尽。
+        """
         with self._操作锁:
+            当前时间 = time.monotonic()
+            if 当前时间 - self._最近重置时间 < self._重置冷却秒数:
+                return False
             旧引擎 = self._原始引擎
-            self._原始引擎 = RapidOCR(self._配置文件路径, **self._配置参数)
+            新引擎 = RapidOCR(self._配置文件路径, **self._配置参数)
+            self._原始引擎 = 新引擎
+            self._最近重置时间 = 当前时间
             del 旧引擎
+            gc.collect()
+            return True
+
+    def 释放模型(self) -> None:
+        """在机器人线程结束时释放 RapidOCR 持有的 native ONNX 会话。"""
+        with self._操作锁:
+            引擎 = self._原始引擎
+            释放 = getattr(引擎, "释放模型", None)
+            if callable(释放):
+                释放()
             gc.collect()
 
     def __getattr__(self, 属性名):

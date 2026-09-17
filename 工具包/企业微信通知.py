@@ -5,6 +5,7 @@
 """
 import base64
 import hashlib
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
@@ -31,6 +32,10 @@ class 企业微信通知器:
         self.线程池 = ThreadPoolExecutor(max_workers=2, thread_name_prefix="企业微信通知")
         self.上次发送时间 = 0
         self.最小发送间隔 = 1.0  # 秒，防止频率过高
+        self._任务锁 = threading.Lock()
+        self._排队任务数 = 0
+        self._最大排队任务数 = 4
+        self._已关闭 = False
 
     def 发送文本(self, 内容: str) -> bool:
         """发送文本消息（同步）
@@ -155,7 +160,27 @@ class 企业微信通知器:
             状态文本: 状态描述文本
             截图: 可选的屏幕截图（OpenCV 格式）
         """
-        self.线程池.submit(self._同步发送状态消息, 机器人标志, 状态文本, 截图)
+        # ThreadPoolExecutor 的内部工作队列无界。网络异常或 webhook
+        # 限流时，如果每次状态上报都携带 ndarray，未完成任务会把截图
+        # 一直留在内存中。限制“运行中+排队”最多 4 个，满载时丢弃
+        # 可选的异步通知，不影响游戏控制线程。
+        with self._任务锁:
+            if self._已关闭 or self._排队任务数 >= self._最大排队任务数:
+                return False
+            self._排队任务数 += 1
+        try:
+            任务 = self.线程池.submit(
+                self._同步发送状态消息, 机器人标志, 状态文本, 截图
+            )
+            任务.add_done_callback(lambda _任务: self._任务完成())
+            return True
+        except Exception:
+            self._任务完成()
+            return False
+
+    def _任务完成(self):
+        with self._任务锁:
+            self._排队任务数 = max(0, self._排队任务数 - 1)
 
     def _同步发送状态消息(self, 机器人标志: str, 状态文本: str, 截图: Optional[np.ndarray]):
         """同步发送状态消息（内部方法）
@@ -183,5 +208,9 @@ class 企业微信通知器:
             print(f"发送状态消息异常 (机器人: {机器人标志}): {e}")
 
     def 关闭(self):
-        """关闭线程池，等待所有任务完成"""
-        self.线程池.shutdown(wait=True)
+        """关闭线程池并取消尚未开始的通知，避免退出时无限等待网络。"""
+        with self._任务锁:
+            self._已关闭 = True
+        # 已在 requests 中运行的任务自身有 10/30 秒超时；未开始的
+        # 截图通知直接取消，避免桌面程序关闭时仍保留大量后台工作。
+        self.线程池.shutdown(wait=False, cancel_futures=True)

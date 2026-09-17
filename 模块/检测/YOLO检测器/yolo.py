@@ -172,7 +172,23 @@ class ONNX推理模型:
     """ONNX模型基础推理类"""
 
     def __init__(self, 模型路径):
-        self.推理会话 = onnxruntime.InferenceSession(模型路径)
+        self.模型路径 = str(模型路径)
+        # ONNX Runtime 默认会按 CPU 核数创建线程池并启用内存 arena。
+        # 长时间运行的模拟器通常只需要一张 800×600 截图的单次检测，
+        # 默认配置会造成不必要的 CPU 抢占、线程栈和 native 内存常驻。
+        # 与 OCR 保持同一套保守配置，降低整机卡顿和 bad allocation 风险。
+        会话选项 = onnxruntime.SessionOptions()
+        会话选项.enable_cpu_mem_arena = False
+        会话选项.enable_mem_pattern = False
+        会话选项.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+        会话选项.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_BASIC
+        会话选项.intra_op_num_threads = 1
+        会话选项.inter_op_num_threads = 1
+        self.推理会话 = onnxruntime.InferenceSession(
+            self.模型路径,
+            sess_options=会话选项,
+            providers=["CPUExecutionProvider"],
+        )
         self.输入名称 = self.获取输入名称()
         self.输出名称 = self.获取输出名称()
 

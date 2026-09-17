@@ -1,4 +1,5 @@
 import sys
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -114,6 +115,27 @@ class ADB设备测试(unittest.TestCase):
             runner.命令[-1][1:],
             ["-s", "emulator-5554", "shell", "input", "tap", "12", "34"],
         )
+
+    def test_ADB连续截图超时会熔断而不是无限创建进程(self):
+        class 超时Runner:
+            def __init__(self):
+                self.命令 = []
+
+            def __call__(self, 命令, **_参数):
+                self.命令.append(命令)
+                if 命令[1:] == ["reconnect", "offline"]:
+                    return 结果()
+                raise subprocess.TimeoutExpired(命令, 1)
+
+        runner = 超时Runner()
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        with self.assertRaisesRegex(ADB错误, "命令超时"):
+            设备.执行(["exec-out", "screencap", "-p"], timeout=1, binary=True)
+
+        已调用次数 = len(runner.命令)
+        with self.assertRaisesRegex(ADB错误, "安全冷却"):
+            设备.执行(["exec-out", "screencap", "-p"], timeout=1, binary=True)
+        self.assertEqual(len(runner.命令), 已调用次数)
 
     def test_实际分辨率自动映射参考坐标(self):
         runner = 假Runner(

@@ -195,6 +195,14 @@ class RapidOCR:
 
             self.text_rec = TextRecognizer(self._config["Rec"])
 
+    def 释放模型(self) -> None:
+        """释放 ONNX native session，保留配置以便下次调用懒加载。"""
+        self.text_det = None
+        self.text_cls = None
+        self.text_rec = None
+        self.cal_rec_boxes = None
+        self.load_img = None
+
     def _load_image(self, img_content):
         """numpy 截图无需加载 Pillow；文件输入才按需导入加载器。"""
         if isinstance(img_content, np.ndarray):
