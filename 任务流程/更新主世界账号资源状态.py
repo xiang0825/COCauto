@@ -71,8 +71,14 @@ class 更新家乡资源状态任务(基础任务):
                 }
             except Exception as e:
                 最后异常 = e
+                判断内存异常 = getattr(上下文, "是否内存异常", None)
+                触发内存保护 = getattr(上下文, "触发内存保护", None)
+                if callable(判断内存异常) and 判断内存异常(e):
+                    if callable(触发内存保护):
+                        触发内存保护("资源OCR", e)
+                    break
                 if 尝试次数 < 2:
-                    上下文.置脚本状态("资源 OCR 暂时失败，释放并重建轻量识别会话后重试一次")
+                    上下文.置脚本状态("资源 OCR 暂时失败，释放会话后重试一次")
                     重置会话 = getattr(self.ocr引擎, "重置会话", None)
                     已重置 = False
                     if callable(重置会话):

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import ctypes
 import ipaddress
 import re
 import shutil
@@ -68,6 +69,35 @@ class ADB设备操作类:
     _设备命令锁容器: dict[tuple[str, str], threading.RLock] = {}
     _设备命令锁容器锁 = threading.Lock()
 
+    @staticmethod
+    def _获取主机内存状态() -> dict[str, int] | None:
+        """读取 Windows 的实际可用内存和提交额度，不依赖额外第三方库。"""
+        if os.name != "nt":
+            return None
+
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        状态 = MEMORYSTATUSEX()
+        状态.dwLength = ctypes.sizeof(状态)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(状态)):
+            return None
+        return {
+            "内存负载": int(状态.dwMemoryLoad),
+            "可用物理内存": int(状态.ullAvailPhys),
+            "可用提交额度": int(状态.ullAvailPageFile),
+        }
+
     def __init__(
             self,
             adb路径: str = "",
@@ -92,6 +122,8 @@ class ADB设备操作类:
         self._最近恢复时间 = 0.0
         self._恢复冷却秒数 = 8.0
         self._ADB熔断秒数 = 30.0
+        self._主机内存状态缓存: dict[str, int] | None = None
+        self._主机内存检查时间 = 0.0
         锁键 = (os.path.normcase(os.path.abspath(self.adb路径)), self.设备序列号)
         with self._设备命令锁容器锁:
             self._命令锁 = self._设备命令锁容器.setdefault(锁键, threading.RLock())
@@ -458,6 +490,7 @@ class ADB设备操作类:
         import cv2
         import numpy as np
 
+        self._检查主机内存预算()
         self._验证目标()
         原始PNG = self.执行(["exec-out", "screencap", "-p"], timeout=15, binary=True)
         if len(原始PNG) > 20 * 1024 * 1024:
@@ -472,6 +505,33 @@ class ADB设备操作类:
         if 右边 <= 左边 or 底边 <= 顶边:
             raise ADB错误(f"截图区域超出设备屏幕 {宽}×{高}：{左边},{顶边},{右边},{底边}")
         return 图像[顶边:底边, 左边:右边].copy()
+
+    def _检查主机内存预算(self) -> None:
+        """在创建 screencap/OCR 临时缓冲前拒绝低内存状态。
+
+        雷电发生低虚拟内存时继续发起截图会让 ADB 客户端堆积，最终连
+        模拟器主进程也可能被拖垮。这里每两秒检查一次；若接近耗尽，只
+        停止本次自动化，不关闭 Android、CoC 或模拟器。
+        """
+        当前时间 = time.monotonic()
+        if 当前时间 - self._主机内存检查时间 >= 2.0:
+            self._主机内存状态缓存 = self._获取主机内存状态()
+            self._主机内存检查时间 = 当前时间
+        状态 = self._主机内存状态缓存
+        if not 状态:
+            return
+        MB = 1024 * 1024
+        物理内存不足 = 状态["可用物理内存"] < 900 * MB
+        提交额度不足 = 状态["可用提交额度"] < 1536 * MB
+        负载过高 = 状态["内存负载"] >= 92
+        if 物理内存不足 or 提交额度不足 or 负载过高:
+            raise ADB错误(
+                "主机内存保护已触发："
+                f"负载{状态['内存负载']}%，"
+                f"可用物理内存{状态['可用物理内存'] // MB}MB，"
+                f"可用提交额度{状态['可用提交额度'] // MB}MB；"
+                "禁止继续截图/OCR，已保留模拟器和游戏进程。"
+            )
 
     def 取屏幕尺寸(self) -> tuple[int, int]:
         if self._屏幕尺寸 is None:

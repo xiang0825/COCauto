@@ -53,7 +53,7 @@ class 页面识别测试(unittest.TestCase):
         第一张 = 上下文._获取点击识别截图(强制=True)
         第二张 = 上下文._获取点击识别截图(强制=False)
         self.assertIs(第一张, 第二张)
-        上下文.op.获取屏幕图像cv.assert_called_once_with(0, 0, 800, 600)
+        上下文.op.获取屏幕图像cv.assert_called_once_with(0, 0, 800, 600, 强制刷新=True)
 
     def test_战斗结算页阻止原始鼠标输入且不发送ESC(self):
         上下文 = 任务上下文.__new__(任务上下文)
@@ -64,6 +64,30 @@ class 页面识别测试(unittest.TestCase):
         self.assertTrue(上下文.输入前安全检查())
         self.assertTrue(上下文._战斗结束已确认)
         self.assertTrue(any("阻止继续下兵" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
+    def test_战斗护栏截图失败时阻止输入(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = True
+        上下文.置脚本状态 = Mock()
+        上下文.识别点击画面 = Mock(return_value=None)
+
+        self.assertTrue(上下文.检查宝石商店危险页面())
+        上下文.识别点击画面.assert_called_once()
+        self.assertTrue(any("阻止后续下兵" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
+    def test_内存错误释放资源并停止任务(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.停止事件 = Mock()
+        上下文.置脚本状态 = Mock()
+        上下文.释放识别模型 = Mock()
+
+        上下文.触发内存保护("测试OCR", RuntimeError("bad allocation"))
+
+        self.assertTrue(上下文._内存保护已触发)
+        self.assertTrue(上下文.页面恢复失败)
+        上下文.释放识别模型.assert_called_once()
+        上下文.停止事件.set.assert_called_once()
+        self.assertTrue(any("不关闭CoC" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
 
     def test_普通点击前后都会记录页面识别(self):
         屏幕 = self._读取截图("runtime_observation_after10s.png")

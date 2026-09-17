@@ -201,6 +201,12 @@ class ONNX推理模型:
     def 构造输入字典(self, 输入数据):
         return {名称: 输入数据 for 名称 in self.输入名称}
 
+    def 释放模型(self):
+        """释放 ONNX native session，防止任务结束后模型继续占用提交额度。"""
+        self.推理会话 = None
+        self.输入名称 = []
+        self.输出名称 = []
+
     def 预处理图像(self, 输入源, 目标尺寸, 灰度模式=False):
         """将输入图像转换为模型需要的张量格式"""
         if isinstance(输入源, np.ndarray):
@@ -420,6 +426,13 @@ class 线程安全YOLO检测器(ONNX推理模型):
                 类别列表=self.类别列表
             )
             return 最终结果
+
+    def 释放模型(self):
+        """释放单例的 native session；下次构造时允许按需重新初始化。"""
+        with self._实例锁:
+            super().释放模型()
+            if hasattr(self, "_已初始化"):
+                del self._已初始化
 
 
 # 使用方法示例

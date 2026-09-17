@@ -446,6 +446,10 @@ class 城墙升级任务(基础任务):
             上下文.置脚本状态(f"城墙OCR完成：识别到{len(ocr结果)}项")
             return ocr结果
         except Exception as e:
+            判断内存异常 = getattr(上下文, "是否内存异常", None)
+            触发内存保护 = getattr(上下文, "触发内存保护", None)
+            if callable(判断内存异常) and 判断内存异常(e) and callable(触发内存保护):
+                触发内存保护("城墙OCR", e)
             上下文.置脚本状态(f"OCR识别失败: {str(e)}")
             return []
 

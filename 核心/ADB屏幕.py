@@ -7,8 +7,13 @@ class ADB屏幕:
     def __init__(self, 设备: ADB设备操作类):
         self.设备 = 设备
         self.是否已绑定 = True
+        self._原始截图缓存 = None
+        self._原始截图缓存时间 = 0.0
+        # 一张 800×600 画面足以覆盖同一批点击护栏检测。限制为每秒
+        # 最多约三帧，避免高频 screencap 把雷电 ADB transport 堵死。
+        self._最短截图间隔秒 = 0.35
 
-    def 获取屏幕图像cv(self, 左边=0, 顶边=0, 右边=2000, 底边=2000):
+    def 获取屏幕图像cv(self, 左边=0, 顶边=0, 右边=2000, 底边=2000, *, 强制刷新=False):
         try:
             import cv2
 
@@ -24,7 +29,19 @@ class ADB屏幕:
                 底边 = max(顶边 + 1, min(参考高度, int(底边)))
 
             设备宽度, 设备高度 = self.设备.取屏幕尺寸()
-            原图 = self.设备.获取屏幕图像cv(0, 0, 设备宽度, 设备高度)
+            import time
+            当前时间 = time.monotonic()
+            可复用缓存 = (
+                not 强制刷新
+                and self._原始截图缓存 is not None
+                and 当前时间 - self._原始截图缓存时间 <= self._最短截图间隔秒
+            )
+            if 可复用缓存:
+                原图 = self._原始截图缓存
+            else:
+                原图 = self.设备.获取屏幕图像cv(0, 0, 设备宽度, 设备高度)
+                self._原始截图缓存 = 原图
+                self._原始截图缓存时间 = 当前时间
             设备左边 = round(左边 * 设备宽度 / 参考宽度)
             设备顶边 = round(顶边 * 设备高度 / 参考高度)
             设备右边 = round(右边 * 设备宽度 / 参考宽度)
@@ -41,6 +58,7 @@ class ADB屏幕:
 
     def 安全清理(self):
         self.是否已绑定 = False
+        self._原始截图缓存 = None
 
     def 绑定(self, 设备, *args, **kwargs):
         if not isinstance(设备, ADB设备操作类):

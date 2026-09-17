@@ -64,11 +64,15 @@ class 安全OCR引擎:
             当前时间 = time.monotonic()
             if 当前时间 - self._最近重置时间 < self._重置冷却秒数:
                 return False
+            # 内存不足时不能先创建新 RapidOCR 再删除旧会话：那会短暂
+            # 同时持有两套 ONNX session，正好会把低内存问题放大成崩溃。
+            # RapidOCR 已支持懒加载，只释放旧 session，后续真正需要 OCR
+            # 时再按需创建一套即可。
             旧引擎 = self._原始引擎
-            新引擎 = RapidOCR(self._配置文件路径, **self._配置参数)
-            self._原始引擎 = 新引擎
+            释放 = getattr(旧引擎, "释放模型", None)
+            if callable(释放):
+                释放()
             self._最近重置时间 = 当前时间
-            del 旧引擎
             gc.collect()
             return True
 

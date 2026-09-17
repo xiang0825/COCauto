@@ -70,12 +70,50 @@ class 任务上下文:
                 释放OCR()
             except Exception:
                 pass
+        YOLO = getattr(self, "_共享YOLO检测器", None)
+        释放YOLO = getattr(YOLO, "释放模型", None)
+        if callable(释放YOLO):
+            try:
+                释放YOLO()
+            except Exception:
+                pass
         # 清除本次运行持有的截图引用；模板缓存本身有固定上限。
         self._点击识别截图 = None
         self._最近点击页面结果 = None
         self._战斗结束截图 = None
         self._战斗开始兵栏画面 = None
+        self._共享OCR引擎 = None
+        self._共享YOLO检测器 = None
         gc.collect()
+
+    @staticmethod
+    def 是否内存异常(异常: Exception | str) -> bool:
+        文本 = str(异常 or "").lower()
+        return any(
+            关键词 in 文本
+            for 关键词 in (
+                "bad allocation", "outofmemory", "out of memory",
+                "insufficient memory", "memoryerror", "low virtual memory",
+                "主机内存保护", "资源耗尽",
+            )
+        )
+
+    def 触发内存保护(self, 来源: str, 异常: Exception | str) -> None:
+        """内存故障后只释放本进程资源并停止输入，绝不重启游戏。"""
+        if getattr(self, "_内存保护已触发", False):
+            return
+        self._内存保护已触发 = True
+        self.释放识别模型()
+        self.页面恢复失败 = True
+        try:
+            self.停止事件.set()
+        except Exception:
+            pass
+        self.置脚本状态(
+            f"[资源保护] {来源}检测到内存异常：{异常}；"
+            "已释放OCR/YOLO与截图缓存，停止所有后续截图和点击；"
+            "不关闭CoC、不关闭模拟器、不重启ADB"
+        )
 
     @property
     def 设置(self) -> 机器人设置:
@@ -176,7 +214,7 @@ class 任务上下文:
             and 当前时间 - 上次时间 <= 0.16
         ):
             return 上次截图
-        屏幕图像 = self.op.获取屏幕图像cv(0, 0, 800, 600)
+        屏幕图像 = self.op.获取屏幕图像cv(0, 0, 800, 600, 强制刷新=强制)
         self._点击识别截图 = 屏幕图像
         self._点击识别截图时间 = 当前时间
         return 屏幕图像
@@ -208,10 +246,14 @@ class 任务上下文:
             if 现在 - 上次错误时间 >= 2.0:
                 self.置脚本状态(f"点击护栏画面识别暂时失败：{异常}")
                 self._点击页面识别错误时间 = 现在
+            if self.是否内存异常(异常):
+                self.触发内存保护("点击护栏", 异常)
             return None
 
     def 输入前安全检查(self) -> bool:
         """供原始鼠标路径使用；返回 True 表示必须阻断本次输入。"""
+        if getattr(self, "_内存保护已触发", False):
+            return True
         if self.检查宝石商店危险页面():
             return True
         结果 = getattr(self, "_最近点击页面结果", None)
@@ -246,7 +288,14 @@ class 任务上下文:
         # 每次输入都能知道自己是否还在战斗；但不运行宝石模板的重检查，
         # 避免高频下兵时增加 ADB/CPU 压力或误发 ESC 中断战斗。
         if getattr(self, "_战斗中", False):
-            self.识别点击画面(强制=强制)
+            结果 = self.识别点击画面(强制=强制)
+            # 战斗中无法取到新画面时，不能继续盲目下兵：这会不断创建
+            # ADB 客户端并扩大 transport 卡死。保留战斗，不再发送输入。
+            if 结果 is None:
+                if not getattr(self, "_战斗护栏失败已记录", False):
+                    self.置脚本状态("战斗护栏无法确认当前画面，阻止后续下兵并等待任务安全停止")
+                    self._战斗护栏失败已记录 = True
+                return True
             return False
 
         当前时间 = time.monotonic()
@@ -256,6 +305,8 @@ class 任务上下文:
             屏幕图像 = self._获取点击识别截图(强制=强制)
             self.识别点击画面()
         except Exception as 异常:
+            if self.是否内存异常(异常):
+                self.触发内存保护("点击护栏截图", 异常)
             self.置脚本状态(f"点击护栏截图失败，阻止本次输入：{异常}")
             return True
 
@@ -820,5 +871,7 @@ class 基础任务(ABC):
             ocr结果, _ = self.ocr引擎(屏幕图像)
             return ocr结果 if ocr结果 is not None else []
         except Exception as e:
+            if self.上下文.是否内存异常(e):
+                self.上下文.触发内存保护("OCR", e)
             self.上下文.置脚本状态(f"OCR识别失败: {str(e)}")
             return []

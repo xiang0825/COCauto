@@ -438,6 +438,10 @@ class 搜索目标敌人任务(基础任务):
                 "资源易窃取评分依据": {},
             }
         except Exception as e:
+            判断内存异常 = getattr(self.上下文, "是否内存异常", None)
+            触发内存保护 = getattr(self.上下文, "触发内存保护", None)
+            if callable(判断内存异常) and 判断内存异常(e) and callable(触发内存保护):
+                触发内存保护("敌方资源OCR", e)
             上下文.置脚本状态(f"资源识别失败: {str(e)}")
             return {
                 "金币": 0,
