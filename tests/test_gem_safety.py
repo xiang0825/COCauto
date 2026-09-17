@@ -116,6 +116,17 @@ class 宝石安全保护测试(unittest.TestCase):
             [call(), call(强制=True)],
         )
 
+    def test_战斗点击后不强制全屏检查(self):
+        上下文 = 创建上下文(np.zeros((600, 800, 3), dtype=np.uint8))
+        上下文._战斗中 = True
+        上下文.检查宝石商店危险页面 = Mock(return_value=False)
+
+        self.assertTrue(上下文.点击(400, 300, 延时=1, 是否精确点击=True))
+        self.assertEqual(
+            上下文.检查宝石商店危险页面.call_args_list,
+            [call(), call(强制=False)],
+        )
+
     def test_已确认安全按钮绕过重复保护但恢复原回调(self):
         上下文 = 创建上下文(np.zeros((600, 800, 3), dtype=np.uint8))
         原回调 = Mock(return_value=True)

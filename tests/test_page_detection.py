@@ -55,6 +55,19 @@ class 页面识别测试(unittest.TestCase):
         self.assertIs(第一张, 第二张)
         上下文.op.获取屏幕图像cv.assert_called_once_with(0, 0, 800, 600, 强制刷新=True)
 
+    def test_战斗护栏强制复核不绕过ADB截图节流(self):
+        """战斗输入不能因“强制检查”在每次下兵都重新抓全屏。"""
+        上下文 = 任务上下文.__new__(任务上下文)
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文.op = SimpleNamespace(获取屏幕图像cv=Mock(return_value=屏幕))
+        上下文._战斗中 = True
+        上下文._点击识别截图时间 = 0.0
+        上下文._点击识别截图 = None
+
+        上下文._获取点击识别截图(强制=True)
+
+        上下文.op.获取屏幕图像cv.assert_called_once_with(0, 0, 800, 600, 强制刷新=False)
+
     def test_战斗结算页阻止原始鼠标输入且不发送ESC(self):
         上下文 = 任务上下文.__new__(任务上下文)
         上下文.检查宝石商店危险页面 = Mock(return_value=False)
