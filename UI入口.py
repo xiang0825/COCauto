@@ -1,7 +1,9 @@
 """部落冲突桌面控制台入口。"""
 import ctypes
+import os
 import queue
 import sys
+import threading
 import time
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -21,6 +23,7 @@ from 界面.任务计划面板 import 任务计划面板
 
 
 _单实例句柄 = None
+_启动窗口就绪事件 = threading.Event()
 
 
 def _启动或唤醒已有窗口():
@@ -263,14 +266,49 @@ class 增强型机器人控制界面:
 if __name__ == "__main__":
     if not _启动或唤醒已有窗口():
         sys.exit(0)
-    获取本地版本号()
     # 实时日志只保留有限的待显示消息，避免窗口卡顿时无限占用内存。
     日志队列 = queue.Queue(maxsize=2000)
     监控中心 = None
     root = None
+
+    def _无窗口启动超时保护():
+        """不允许无窗口进程永久占住单实例互斥体。
+
+        过去的顺序会先打开数据库/监控线程，之后才创建 Tk。任意前置
+        初始化卡住时，进程会继续存活、窗口句柄却始终为空，之后双击 EXE
+        都会被单实例逻辑拦截。窗口创建完成后立即取消该保护；否则在
+        30 秒后退出，让用户可以正常重新启动。
+        """
+        if _启动窗口就绪事件.wait(timeout=30):
+            return
+        try:
+            if 监控中心 is not None:
+                监控中心.关闭()
+        except Exception:
+            pass
+        os._exit(1)
+
+    启动保护线程 = threading.Thread(
+        target=_无窗口启动超时保护,
+        name="控制台启动保护",
+        daemon=True,
+    )
+    启动保护线程.start()
     try:
-        监控中心 = 机器人监控中心(日志队列)
+        # 必须先创建一个可见的窗口。即使后续数据库或后台服务初始化被
+        # 外部程序拖慢，用户也不会遇到“进程存在但 EXE 打不开”的假象。
         root = tk.Tk()
+        # 保持与单实例唤醒逻辑相同的标题；启动期间再次双击时可以准确
+        # 找到并恢复这个早期窗口，而不会误判为“没有窗口”。
+        root.title("部落冲突")
+        root.minsize(760, 460)
+        root.geometry("960x620")
+        root.update_idletasks()
+        root.deiconify()
+        _启动窗口就绪事件.set()
+
+        获取本地版本号()
+        监控中心 = 机器人监控中心(日志队列)
         界面 = 增强型机器人控制界面(root, 监控中心)
         root.mainloop()
     except Exception as 异常:
@@ -283,6 +321,7 @@ if __name__ == "__main__":
         finally:
             raise
     finally:
+        _启动窗口就绪事件.set()
         # 无论窗口是正常关闭还是初始化异常，都回收后台监控线程，
         # 避免只剩无窗口进程继续占用单实例互斥体。
         if 监控中心 is not None:
