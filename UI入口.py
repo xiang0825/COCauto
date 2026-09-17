@@ -24,6 +24,7 @@ from 界面.任务计划面板 import 任务计划面板
 
 _单实例句柄 = None
 _启动窗口就绪事件 = threading.Event()
+_控制台退出事件 = threading.Event()
 
 
 def _启动或唤醒已有窗口():
@@ -288,12 +289,41 @@ if __name__ == "__main__":
             pass
         os._exit(1)
 
+    def _运行期窗口守护():
+        """主窗口异常消失时释放单实例锁，避免 EXE 永久“打不开”。"""
+        if not _启动窗口就绪事件.wait(timeout=31):
+            return
+        user32 = ctypes.windll.user32
+        连续无窗口秒数 = 0
+        while not _控制台退出事件.wait(timeout=1):
+            窗口句柄 = user32.FindWindowW("TkTopLevel", "部落冲突")
+            if 窗口句柄:
+                连续无窗口秒数 = 0
+                continue
+            连续无窗口秒数 += 1
+            # 用户正常关闭时 finally 会先设置退出事件；只有异常情况留下
+            # 无窗口进程超过 8 秒，才强制结束本桌面控制台。不会操作游戏、
+            # 模拟器或 ADB，目的仅为释放命名互斥体让 EXE 能再次启动。
+            if 连续无窗口秒数 >= 8:
+                try:
+                    if 监控中心 is not None:
+                        监控中心.关闭()
+                except Exception:
+                    pass
+                os._exit(1)
+
     启动保护线程 = threading.Thread(
         target=_无窗口启动超时保护,
         name="控制台启动保护",
         daemon=True,
     )
     启动保护线程.start()
+    窗口守护线程 = threading.Thread(
+        target=_运行期窗口守护,
+        name="控制台窗口守护",
+        daemon=True,
+    )
+    窗口守护线程.start()
     try:
         # 必须先创建一个可见的窗口。即使后续数据库或后台服务初始化被
         # 外部程序拖慢，用户也不会遇到“进程存在但 EXE 打不开”的假象。
@@ -321,6 +351,7 @@ if __name__ == "__main__":
         finally:
             raise
     finally:
+        _控制台退出事件.set()
         _启动窗口就绪事件.set()
         # 无论窗口是正常关闭还是初始化异常，都回收后台监控线程，
         # 避免只剩无窗口进程继续占用单实例互斥体。
