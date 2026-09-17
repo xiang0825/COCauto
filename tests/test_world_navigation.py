@@ -7,7 +7,7 @@ from 任务流程.世界跳转.进入世界基类 import 进入世界任务基�
 
 
 class 世界跳转测试(unittest.TestCase):
-    def test_切换世界超时会先发送ESC关闭误触页面(self):
+    def test_世界未知时不发送任何输入(self):
         模块 = importlib.import_module("任务流程.世界跳转.进入世界基类")
         时钟 = SimpleNamespace(当前时间=0.0)
         键盘 = Mock()
@@ -29,20 +29,20 @@ class 世界跳转测试(unittest.TestCase):
         任务.模板识别 = Mock()
         任务.模板识别.执行匹配.return_value = (False, (0, 0), None)
         任务.滑动屏幕 = Mock()
-        任务.是否在目标世界 = Mock(side_effect=[False, False, False, False, False, True])
+        任务.是否在目标世界 = Mock(return_value=False)
+        任务.识别当前世界 = Mock(return_value=SimpleNamespace(当前世界="未知"))
 
         原时间函数 = 模块.time.time
         模块.time.time = lambda: 时钟.当前时间
         try:
-            self.assertTrue(任务.执行())
+            self.assertFalse(任务.执行())
         finally:
             模块.time.time = 原时间函数
 
-        按键列表 = [调用.args[0] for 调用 in 键盘.按字符按压.call_args_list]
-        self.assertEqual(按键列表[:1], ["esc"])
-        self.assertNotIn("f5", 按键列表)
+        键盘.按字符按压.assert_not_called()
+        任务.滑动屏幕.assert_not_called()
         self.assertTrue(
-            any("ESC关闭误触页面" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
+            any("禁止点击、滑动、ESC或返回键" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
         )
 
 
