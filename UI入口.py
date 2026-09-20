@@ -8,19 +8,6 @@ import time
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from 主入口 import 机器人监控中心
-from 工具包.版本管理 import 获取本地版本号
-from 数据库.任务数据库 import 机器人设置, 任务数据库
-from sv_ttk import set_theme
-
-from 界面.自动启动界面 import 自动启动界面
-from 界面.CoC标识 import 创建CoC标识
-from 界面.样式配置 import 配置现代化样式
-from 界面.日志面板 import 日志面板
-from 界面.机器人管理面板 import 机器人管理面板
-from 界面.设备连接面板 import 设备连接面板
-from 界面.任务计划面板 import 任务计划面板
-
 
 _单实例句柄 = None
 _启动窗口就绪事件 = threading.Event()
@@ -336,6 +323,23 @@ if __name__ == "__main__":
         root.update_idletasks()
         root.deiconify()
         _启动窗口就绪事件.set()
+
+        # 先显示可操作的主窗口，再加载监控中心、OCR/模型和各面板。
+        # 这些模块在低内存或 DLL 初始化异常时可能耗时很久；若在创建
+        # Tk 之前导入，用户只能看到“进程存在但没有窗口”，启动守护也
+        # 无法及时接管。延后导入后，窗口至少可以显示启动状态/错误。
+        from 主入口 import 机器人监控中心
+        from 工具包.版本管理 import 获取本地版本号
+        from 数据库.任务数据库 import 机器人设置, 任务数据库
+        from sv_ttk import set_theme
+
+        from 界面.自动启动界面 import 自动启动界面
+        from 界面.CoC标识 import 创建CoC标识
+        from 界面.样式配置 import 配置现代化样式
+        from 界面.日志面板 import 日志面板
+        from 界面.机器人管理面板 import 机器人管理面板
+        from 界面.设备连接面板 import 设备连接面板
+        from 界面.任务计划面板 import 任务计划面板
 
         获取本地版本号()
         监控中心 = 机器人监控中心(日志队列)
