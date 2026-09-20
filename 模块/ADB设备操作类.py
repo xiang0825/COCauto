@@ -121,6 +121,8 @@ class ADB设备操作类:
         self._ADB熔断截止时间 = 0.0
         self._最近恢复时间 = 0.0
         self._恢复冷却秒数 = 8.0
+        self._最近ADB服务重置时间 = 0.0
+        self._ADB服务重置冷却秒数 = 20.0
         self._ADB熔断秒数 = 30.0
         self._主机内存状态缓存: dict[str, int] | None = None
         self._主机内存检查时间 = 0.0
@@ -288,7 +290,9 @@ class ADB设备操作类:
                     and self._是ADB传输错误(错误文本)
                 ):
                     self._记录传输失败()
-                    self._尝试恢复ADB连接()
+                    self._尝试恢复ADB连接(
+                        重置ADB服务=self._需要重置ADB服务(错误文本)
+                    )
                     continue
                 if self._是ADB传输错误(错误文本):
                     self._记录传输失败()
@@ -312,8 +316,54 @@ class ADB设备操作类:
             )
         )
 
-    def _尝试恢复ADB连接(self) -> None:
-        """只重置 ADB 传输通道，不重启游戏或模拟器。"""
+    @staticmethod
+    def _需要重置ADB服务(错误文本: str) -> bool:
+        """设备从列表消失时，单纯 reconnect 往往无法唤醒 adb server。"""
+        文本 = str(错误文本 or "").lower()
+        return any(
+            标记 in 文本
+            for 标记 in (
+                "device not found",
+                "no devices/emulators found",
+                "cannot connect",
+                "adb server",
+            )
+        )
+
+    def _运行ADB服务命令(self, 子命令: str, *, timeout: float = 8) -> None:
+        """运行 adb server 控制命令；不向 Android 发送任何输入。"""
+        命令 = [self.adb路径, 子命令]
+        startupinfo = None
+        creationflags = 0
+        if os.name == "nt":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        self._runner(
+            命令,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+            startupinfo=startupinfo,
+            creationflags=creationflags,
+        )
+
+    def _重置ADB服务(self) -> None:
+        """仅重启本机 adb server，不关闭游戏、不重启模拟器。"""
+        当前时间 = time.monotonic()
+        if 当前时间 - self._最近ADB服务重置时间 < self._ADB服务重置冷却秒数:
+            return
+        self._最近ADB服务重置时间 = 当前时间
+        try:
+            self._运行ADB服务命令("kill-server")
+            self._运行ADB服务命令("start-server")
+        except Exception:
+            # 后续的 devices 查询会给出更准确的最终错误；这里不吞掉查询结果。
+            pass
+        time.sleep(0.35)
+
+    def _尝试恢复ADB连接(self, *, 重置ADB服务: bool = False) -> None:
+        """优先恢复 transport；设备消失时再重置 adb server，不动游戏或模拟器。"""
         当前时间 = time.monotonic()
         if 当前时间 - self._最近恢复时间 < self._恢复冷却秒数:
             return
@@ -326,14 +376,17 @@ class ADB设备操作类:
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
-            self._runner(
-                命令,
-                capture_output=True,
-                timeout=5,
-                check=False,
-                startupinfo=startupinfo,
-                creationflags=creationflags,
-            )
+            if 重置ADB服务:
+                self._重置ADB服务()
+            else:
+                self._runner(
+                    命令,
+                    capture_output=True,
+                    timeout=5,
+                    check=False,
+                    startupinfo=startupinfo,
+                    creationflags=creationflags,
+                )
         except Exception:
             # 恢复命令失败时让原始命令的第二次尝试给出最终错误。
             pass
@@ -446,6 +499,16 @@ class ADB设备操作类:
             自动检测路径=self.自动检测路径,
         )
         当前设备 = next((设备 for 设备 in 设备列表 if 设备.序列号 == self.设备序列号), None)
+        if 当前设备 is None:
+            # 雷电运行时偶发会保留虚拟机但让 adb server 丢失设备记录。
+            # 只重启本机 server，再扫描一次；绝不重启模拟器或关闭 CoC。
+            self._重置ADB服务()
+            设备列表 = self.扫描设备(
+                self.adb路径,
+                runner=self._runner,
+                自动检测路径=self.自动检测路径,
+            )
+            当前设备 = next((设备 for 设备 in 设备列表 if 设备.序列号 == self.设备序列号), None)
         if 当前设备 is None:
             raise ADB错误(f"所选设备 {self.设备序列号} 未出现在 ADB 设备列表中。")
         if 当前设备.状态 != "device":

@@ -116,6 +116,37 @@ class ADB设备测试(unittest.TestCase):
             ["-s", "emulator-5554", "shell", "input", "tap", "12", "34"],
         )
 
+    def test_设备从列表消失时重启ADB服务但不重启模拟器(self):
+        runner = 假Runner(
+            结果(b"List of devices attached\n"),
+            结果(),
+            结果(),
+            结果(在线模拟器),
+        )
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        self.assertEqual(设备.确认在线().序列号, "emulator-5554")
+        self.assertEqual(runner.命令[0][1:], ["devices", "-l"])
+        self.assertEqual(runner.命令[1][1:], ["kill-server"])
+        self.assertEqual(runner.命令[2][1:], ["start-server"])
+        self.assertEqual(runner.命令[3][1:], ["devices", "-l"])
+        self.assertFalse(any("force-stop" in 命令 or "reboot" in 命令 for 命令 in runner.命令))
+
+    def test_运行期设备消失时重置ADB服务后重试(self):
+        runner = 假Runner(
+            结果(code=1, 错误=b"error: device not found"),
+            结果(),
+            结果(),
+            结果(b"ok"),
+        )
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        self.assertTrue(设备.执行(["shell", "input", "tap", "12", "34"]))
+        self.assertEqual(runner.命令[1][1:], ["kill-server"])
+        self.assertEqual(runner.命令[2][1:], ["start-server"])
+        self.assertEqual(
+            runner.命令[-1][1:],
+            ["-s", "emulator-5554", "shell", "input", "tap", "12", "34"],
+        )
+
     def test_ADB连续截图超时会熔断而不是无限创建进程(self):
         class 超时Runner:
             def __init__(self):
