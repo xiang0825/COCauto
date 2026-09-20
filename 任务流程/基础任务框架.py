@@ -273,7 +273,10 @@ class 任务上下文:
 
         当前时间 = time.monotonic()
         上次检查 = float(getattr(self, "_升级完成弹窗检查时间", 0.0))
-        if 当前时间 - 上次检查 < 1.5:
+        # 升级完成弹窗会持续显示，不需要高频 OCR。5 秒一帧可以明显
+        # 降低 RapidOCR native session 和 ADB screencap 的长期提交内存，
+        # 同时保留两帧确认，避免误点。
+        if 当前时间 - 上次检查 < 5.0:
             return False
         self._升级完成弹窗检查时间 = 当前时间
         self._升级完成弹窗检查中 = True
@@ -287,7 +290,9 @@ class 任务上下文:
             if 页面结果 is not None and 页面结果.页面 in {"战斗中", "战斗结算", "战斗过渡"}:
                 return False
 
-            屏幕图像 = self._获取点击识别截图(强制=True)
+            # 宝石护栏刚刚已经拿过一张画面；这里复用短缓存，避免一次
+            # 检查连续启动两次 screencap，尤其避免长期运行时拖高模拟器。
+            屏幕图像 = self._获取点击识别截图(强制=False)
             候选 = self._识别升级完成弹窗(屏幕图像)
             if not 候选:
                 self._升级完成弹窗候选 = None
