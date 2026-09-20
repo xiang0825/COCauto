@@ -490,8 +490,11 @@ class ADB设备操作类:
         import cv2
         import numpy as np
 
-        self._检查主机内存预算()
+        # 先验证目标设备，再读取主机内存。这样在实体手机、未授权设备等
+        # 不应被触碰的目标上，始终返回明确的设备安全错误，而不会被主机
+        # 当前内存状态遮蔽；通过验证后才允许创建截图缓冲。
         self._验证目标()
+        self._检查主机内存预算()
         原始PNG = self.执行(["exec-out", "screencap", "-p"], timeout=15, binary=True)
         if len(原始PNG) > 20 * 1024 * 1024:
             raise ADB错误("ADB 截图数据异常过大，已拒绝继续解码以保护内存。")

@@ -102,6 +102,19 @@ class 页面识别测试(unittest.TestCase):
         上下文.停止事件.set.assert_called_once()
         self.assertTrue(any("不关闭CoC" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
 
+    def test_内存保护异常不触发截图通知或自动恢复(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.停止事件 = Mock()
+        上下文.置脚本状态 = Mock()
+        上下文.释放识别模型 = Mock()
+        上下文.发送企业微信通知 = Mock()
+        上下文.是否内存异常 = 任务上下文.是否内存异常
+        上下文.处理异常("检查图像任务", RuntimeError("主机内存保护已触发"))
+
+        上下文.发送企业微信通知.assert_called_once()
+        self.assertFalse(上下文.发送企业微信通知.call_args.kwargs["包含截图"])
+        self.assertTrue(any("不是普通ADB断线" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
     def test_普通点击前后都会记录页面识别(self):
         屏幕 = self._读取截图("runtime_observation_after10s.png")
         if 屏幕 is None:

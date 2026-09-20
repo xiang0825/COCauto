@@ -177,12 +177,17 @@ class ADB设备测试(unittest.TestCase):
         self.assertTrue(编码成功)
         runner = 假Runner(结果(在线模拟器), 结果(编码.tobytes()))
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
-        裁剪 = 设备.获取屏幕图像cv(40, 50, 90, 100)
+        with patch.object(ADB设备操作类, "_获取主机内存状态", return_value={
+            "内存负载": 50,
+            "可用物理内存": 8 * 1024 * 1024 * 1024,
+            "可用提交额度": 8 * 1024 * 1024 * 1024,
+        }):
+            裁剪 = 设备.获取屏幕图像cv(40, 50, 90, 100)
         self.assertEqual(裁剪.shape, (50, 50, 3))
         self.assertEqual(runner.命令[1][1:], ["-s", "emulator-5554", "exec-out", "screencap", "-p"])
 
     def test_低内存时不创建截图ADB进程(self):
-        runner = 假Runner()
+        runner = 假Runner(结果(在线模拟器))
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
         with patch.object(
             ADB设备操作类,
@@ -192,7 +197,9 @@ class ADB设备测试(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ADB错误, "主机内存保护"):
                 设备.获取屏幕图像cv()
-        self.assertEqual(runner.命令, [])
+        # 目标验证仍会查询设备列表；真正的截图进程不能被创建。
+        self.assertEqual(len(runner.命令), 1)
+        self.assertEqual(runner.命令[0][1:], ["devices", "-l"])
 
     def test_ADB屏幕把任意实际分辨率归一化到逻辑画布(self):
         图像 = np.zeros((720, 1280, 3), dtype=np.uint8)
@@ -205,7 +212,12 @@ class ADB设备测试(unittest.TestCase):
         )
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
         屏幕 = ADB屏幕(设备)
-        结果图 = 屏幕.获取屏幕图像cv(0, 0, 800, 600)
+        with patch.object(ADB设备操作类, "_获取主机内存状态", return_value={
+            "内存负载": 50,
+            "可用物理内存": 8 * 1024 * 1024 * 1024,
+            "可用提交额度": 8 * 1024 * 1024 * 1024,
+        }):
+            结果图 = 屏幕.获取屏幕图像cv(0, 0, 800, 600)
         self.assertEqual(结果图.shape, (600, 800, 3))
 
     def test_ADB屏幕短窗口复用同一截图(self):
@@ -215,8 +227,13 @@ class ADB设备测试(unittest.TestCase):
         runner = 假Runner(结果(在线模拟器), 结果(b"Physical size: 800x600"), 结果(编码.tobytes()))
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
         屏幕 = ADB屏幕(设备)
-        屏幕.获取屏幕图像cv(0, 0, 800, 600)
-        屏幕.获取屏幕图像cv(20, 20, 100, 100)
+        with patch.object(ADB设备操作类, "_获取主机内存状态", return_value={
+            "内存负载": 50,
+            "可用物理内存": 8 * 1024 * 1024 * 1024,
+            "可用提交额度": 8 * 1024 * 1024 * 1024,
+        }):
+            屏幕.获取屏幕图像cv(0, 0, 800, 600)
+            屏幕.获取屏幕图像cv(20, 20, 100, 100)
         self.assertEqual(len(runner.命令), 3)
 
     def test_打开已在前台的游戏不会重启或force_stop(self):
