@@ -25,13 +25,16 @@ def _启动或唤醒已有窗口():
     if sys.platform != "win32":
         return True
 
-    kernel32 = ctypes.windll.kernel32
-    user32 = ctypes.windll.user32
+    # 必须通过 use_last_error=True 读取 CreateMutexW 的线程错误码；
+    # 直接调用 ctypes.windll 后，GetLastError 可能残留其它 API 的 183，
+    # 把首次启动误判成已有实例，留下“进程存在但没有窗口”的假象。
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
     _单实例句柄 = kernel32.CreateMutexW(None, False, "Local\\COCAUTO_DESKTOP_CONSOLE")
     if not _单实例句柄:
         return True
 
-    if kernel32.GetLastError() != 183:  # ERROR_ALREADY_EXISTS
+    if ctypes.get_last_error() != 183:  # ERROR_ALREADY_EXISTS
         return True
 
     # Tk 窗口在部分 Windows 环境中无法仅按标题查找，限定 TkTopLevel
@@ -44,9 +47,9 @@ def _启动或唤醒已有窗口():
         return False
 
     # 关闭窗口时后台线程异常退出，可能短暂留下互斥锁但没有主窗口。
-    # 等待一小段时间给正常启动完成；仍没有窗口也不能放行第二个实例，
-    # 否则会产生两个无响应的 Tk/数据库进程。正常关闭路径会回收线程并
-    # 释放互斥锁，异常退出则由 Windows 自动释放互斥锁。
+    # 等待一小段时间给正常启动完成；仍没有窗口时按孤立实例处理，
+    # 允许本次启动继续创建窗口。否则一个无窗口的旧进程会永久拦截用户
+    # 后续每次启动。新实例出现窗口后，后续双击仍会被上面的唤醒逻辑拦截。
     for _ in range(20):
         time.sleep(0.1)
         窗口句柄 = user32.FindWindowW("TkTopLevel", "部落冲突")
@@ -55,7 +58,7 @@ def _启动或唤醒已有窗口():
             user32.BringWindowToTop(窗口句柄)
             user32.SetForegroundWindow(窗口句柄)
             return False
-    return False
+    return True
 
 
 class 增强型机器人控制界面:
