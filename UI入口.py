@@ -46,11 +46,11 @@ def _启动或唤醒已有窗口():
         user32.SetForegroundWindow(窗口句柄)
         return False
 
-    # 关闭窗口时后台线程异常退出，可能短暂留下互斥锁但没有主窗口。
-    # 等待一小段时间给正常启动完成；仍没有窗口时按孤立实例处理，
-    # 允许本次启动继续创建窗口。否则一个无窗口的旧进程会永久拦截用户
-    # 后续每次启动。新实例出现窗口后，后续双击仍会被上面的唤醒逻辑拦截。
-    for _ in range(20):
+    # 命名互斥体由 Windows 在进程退出时自动释放，不会因为崩溃留下
+    # 永久“孤立锁”。因此这里不能在短等待后继续创建第二个控制台，
+    # 否则两个机器人会同时操作同一个模拟器。等待窗口初始化完成；
+    # 仍找不到时也退出本次启动，交给原进程的窗口守护释放互斥体。
+    for _ in range(300):
         time.sleep(0.1)
         窗口句柄 = user32.FindWindowW("TkTopLevel", "部落冲突")
         if 窗口句柄:
@@ -58,7 +58,7 @@ def _启动或唤醒已有窗口():
             user32.BringWindowToTop(窗口句柄)
             user32.SetForegroundWindow(窗口句柄)
             return False
-    return True
+    return False
 
 
 class 增强型机器人控制界面:
@@ -285,22 +285,30 @@ if __name__ == "__main__":
             return
         user32 = ctypes.windll.user32
         连续无窗口秒数 = 0
-        while not _控制台退出事件.wait(timeout=1):
-            窗口句柄 = user32.FindWindowW("TkTopLevel", "部落冲突")
-            if 窗口句柄:
-                连续无窗口秒数 = 0
-                continue
-            连续无窗口秒数 += 1
-            # 用户正常关闭时 finally 会先设置退出事件；只有异常情况留下
-            # 无窗口进程超过 8 秒，才强制结束本桌面控制台。不会操作游戏、
-            # 模拟器或 ADB，目的仅为释放命名互斥体让 EXE 能再次启动。
-            if 连续无窗口秒数 >= 8:
-                try:
-                    if 监控中心 is not None:
-                        监控中心.关闭()
-                except Exception:
-                    pass
-                os._exit(1)
+    while not _控制台退出事件.wait(timeout=1):
+        窗口句柄 = user32.FindWindowW("TkTopLevel", "部落冲突")
+        当前进程窗口 = False
+        if 窗口句柄:
+            窗口进程ID = ctypes.c_ulong()
+            user32.GetWindowThreadProcessId(
+                窗口句柄,
+                ctypes.byref(窗口进程ID),
+            )
+            当前进程窗口 = 窗口进程ID.value == os.getpid()
+        if 当前进程窗口:
+            连续无窗口秒数 = 0
+            continue
+        连续无窗口秒数 += 1
+        # 用户正常关闭时 finally 会先设置退出事件；只有异常情况留下
+        # 无窗口进程超过 8 秒，才强制结束本桌面控制台。不会操作游戏、
+        # 模拟器或 ADB，目的仅为释放命名互斥体让 EXE 能再次启动。
+        if 连续无窗口秒数 >= 8:
+            try:
+                if 监控中心 is not None:
+                    监控中心.关闭()
+            except Exception:
+                pass
+            os._exit(1)
 
     启动保护线程 = threading.Thread(
         target=_无窗口启动超时保护,
