@@ -285,30 +285,30 @@ if __name__ == "__main__":
             return
         user32 = ctypes.windll.user32
         连续无窗口秒数 = 0
-    while not _控制台退出事件.wait(timeout=1):
-        窗口句柄 = user32.FindWindowW("TkTopLevel", "部落冲突")
-        当前进程窗口 = False
-        if 窗口句柄:
-            窗口进程ID = ctypes.c_ulong()
-            user32.GetWindowThreadProcessId(
-                窗口句柄,
-                ctypes.byref(窗口进程ID),
-            )
-            当前进程窗口 = 窗口进程ID.value == os.getpid()
-        if 当前进程窗口:
-            连续无窗口秒数 = 0
-            continue
-        连续无窗口秒数 += 1
-        # 用户正常关闭时 finally 会先设置退出事件；只有异常情况留下
-        # 无窗口进程超过 8 秒，才强制结束本桌面控制台。不会操作游戏、
-        # 模拟器或 ADB，目的仅为释放命名互斥体让 EXE 能再次启动。
-        if 连续无窗口秒数 >= 8:
-            try:
-                if 监控中心 is not None:
-                    监控中心.关闭()
-            except Exception:
-                pass
-            os._exit(1)
+        while not _控制台退出事件.wait(timeout=1):
+            窗口句柄 = user32.FindWindowW("TkTopLevel", "部落冲突")
+            当前进程窗口 = False
+            if 窗口句柄:
+                窗口进程ID = ctypes.c_ulong()
+                user32.GetWindowThreadProcessId(
+                    窗口句柄,
+                    ctypes.byref(窗口进程ID),
+                )
+                当前进程窗口 = 窗口进程ID.value == os.getpid()
+            if 当前进程窗口:
+                连续无窗口秒数 = 0
+                continue
+            连续无窗口秒数 += 1
+            # 用户正常关闭时 finally 会先设置退出事件；只有异常情况留下
+            # 无窗口进程超过 8 秒，才强制结束本桌面控制台。不会操作游戏、
+            # 模拟器或 ADB，目的仅为释放命名互斥体让 EXE 能再次启动。
+            if 连续无窗口秒数 >= 8:
+                try:
+                    if 监控中心 is not None:
+                        监控中心.关闭()
+                except Exception:
+                    pass
+                os._exit(1)
 
     启动保护线程 = threading.Thread(
         target=_无窗口启动超时保护,
