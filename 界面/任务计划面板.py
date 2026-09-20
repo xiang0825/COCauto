@@ -32,6 +32,7 @@ def 生成任务计划(设置) -> list[dict[str, str]]:
         {"名称": "战宠升级", "状态": "已启用" if 战宠 else "未启用", "说明": "目标：" + (战宠 or "未设置目标")},
         {"名称": "兵种或法术研究", "状态": "已启用" if 研究 else "未启用", "说明": "目标：" + (研究 or "未设置目标")},
         {"名称": "资源打满后的行为", "状态": getattr(设置, "资源打满后动作", "退出"), "说明": "资源达到目标后退出任务或保持待机"},
+        {"名称": "升级完成弹窗确认", "状态": "已启用" if 布尔字段("是否自动确认升级完成") else "未启用", "说明": "仅在明确识别升级完成文字和确认按钮后自动确认"},
     ]
 
 
@@ -51,6 +52,7 @@ class 任务计划面板(ttk.Frame):
     _配置任务 = {
         "resource_policy": "资源打满后的行为",
         "combat_options": "进攻选项",
+        "upgrade_popup": "升级完成弹窗确认",
         "notification": "通知与状态上报",
     }
 
@@ -296,6 +298,21 @@ class 任务计划面板(ttk.Frame):
             ttk.Label(self._参数内容, text="战斗结果统计：强制启用（胜负、星数、摧毁率和战利品分析）", foreground="#2563eb", wraplength=560).pack(anchor=tk.W, pady=5)
             self._增加勾选项("采集进攻界面图像", "是否采集进攻界面图像", getattr(self._设置, "是否采集进攻界面图像", False))
             ttk.Label(self._参数内容, text="这些开关会直接影响主世界和夜世界的进攻流程，修改后立即保存。", wraplength=560, foreground="#6b7280").pack(anchor=tk.W, pady=5)
+        elif 任务名称 == "升级完成弹窗确认" or 任务名称 == "upgrade_popup":
+            self._增加勾选项(
+                "自动确认升级完成弹窗",
+                "是否自动确认升级完成",
+                getattr(self._设置, "是否自动确认升级完成", False),
+            )
+            ttk.Label(
+                self._参数内容,
+                text=(
+                    "安全规则：必须连续两次识别到升级/研究完成文字和底部确认按钮才会点击；"
+                    "战斗中、商店、宝石、立即完成或识别不清时只记录日志并保持不动。"
+                ),
+                foreground="#2563eb",
+                wraplength=560,
+            ).pack(anchor=tk.W, pady=5)
         elif 任务名称 == "通知与状态上报" or 任务名称 == "notification":
             self._增加输入项("企业微信 Webhook", "企业微信webhook", getattr(self._设置, "企业微信webhook", ""), 46)
             self._增加输入项("状态上报间隔（分钟）", "状态上报间隔分钟", getattr(self._设置, "状态上报间隔分钟", 30))
@@ -307,7 +324,7 @@ class 任务计划面板(ttk.Frame):
             return
         for 字段, 控件 in self._编辑控件.items():
             值 = 控件.get()
-            if 字段 in ("是否快速刷资源", "是否启用高速下兵", "是否自动配兵", "是否采集进攻界面图像"):
+            if 字段 in ("是否快速刷资源", "是否启用高速下兵", "是否自动配兵", "是否采集进攻界面图像", "是否自动确认升级完成"):
                 setattr(self._设置, 字段, bool(值))
             elif 字段 == "欲升级的英雄或建筑":
                 项目 = str(值).replace("\n", "、").replace(",", "、").split("、")

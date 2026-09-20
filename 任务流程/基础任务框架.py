@@ -140,6 +140,191 @@ class 任务上下文:
         except TypeError:
             self.置脚本状态("[错误] " + 文本, 超时的时间)
 
+    @staticmethod
+    def _规范升级弹窗OCR文本(文本: Any) -> str:
+        """把升级弹窗 OCR 文本压缩成便于安全匹配的形式。"""
+        return str(文本 or "").strip().lower().replace(" ", "").replace("\n", "")
+
+    @staticmethod
+    def _解析升级弹窗OCR框(识别项) -> tuple[float, float, float, float] | None:
+        """兼容 RapidOCR 四点框和测试中常用的矩形框格式。"""
+        if not isinstance(识别项, (list, tuple)) or len(识别项) < 2:
+            return None
+        框 = 识别项[0]
+        try:
+            if len(框) == 4 and all(
+                isinstance(点, (list, tuple)) and len(点) >= 2 for 点 in 框
+            ):
+                xs = [float(点[0]) for 点 in 框]
+                ys = [float(点[1]) for 点 in 框]
+                return min(xs), min(ys), max(xs), max(ys)
+            if len(框) == 4 and all(isinstance(值, (int, float)) for 值 in 框):
+                x1, y1, x2, y2 = (float(值) for 值 in 框)
+                return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+        except (TypeError, ValueError, IndexError):
+            return None
+        return None
+
+    def _识别升级完成弹窗(self, 屏幕图像) -> dict[str, Any] | None:
+        """只返回经过文字和位置双重确认的升级完成弹窗候选。
+
+        这里故意不使用“确定”按钮模板单独做触发条件。CoC 的胜利、
+        登录、商店和购买页面都可能有相同按钮，必须先看到明确的升级/能力
+        完成文字，才能把底部按钮交给自动确认流程。
+        """
+        if 屏幕图像 is None or not hasattr(屏幕图像, "shape"):
+            return None
+        try:
+            高, 宽 = 屏幕图像.shape[:2]
+            左, 上 = 80, 45
+            右, 下 = min(int(宽), 780), min(int(高), 590)
+            if 右 <= 左 or 下 <= 上:
+                return None
+            区域 = 屏幕图像[上:下, 左:右]
+            OCR返回 = self.获取OCR引擎()(区域)
+            OCR结果 = OCR返回[0] if isinstance(OCR返回, tuple) else OCR返回
+            OCR结果 = OCR结果 or []
+        except Exception as 异常:
+            if self.是否内存异常(异常):
+                self.触发内存保护("升级完成弹窗OCR", 异常)
+            else:
+                上次错误 = float(getattr(self, "_升级完成弹窗错误时间", 0.0))
+                当前时间 = time.monotonic()
+                if 当前时间 - 上次错误 >= 5.0:
+                    self.置脚本状态(f"升级完成弹窗识别暂时失败：{异常}")
+                    self._升级完成弹窗错误时间 = 当前时间
+            return None
+
+        规范项 = []
+        for 识别项 in OCR结果:
+            if not isinstance(识别项, (list, tuple)) or len(识别项) < 2:
+                continue
+            文本 = self._规范升级弹窗OCR文本(识别项[1])
+            if not 文本:
+                continue
+            框 = self._解析升级弹窗OCR框(识别项)
+            if 框 is None:
+                continue
+            x1, y1, x2, y2 = 框
+            规范项.append((文本, (x1 + 左, y1 + 上, x2 + 左, y2 + 上)))
+
+        if not 规范项:
+            return None
+        全部文本 = "".join(文本 for 文本, _ in 规范项)
+        # “立即完成/使用宝石/商店”优先级最高，哪怕 OCR 同时误识别出
+        # “升级完成”，也绝不能自动点击。
+        危险词 = (
+            "宝石", "商店", "购买", "补充", "使用宝石", "花费宝石",
+            "立即完成", "立即升级", "gems", "shop", "buy", "finishnow",
+        )
+        if any(词 in 全部文本 for 词 in 危险词):
+            return None
+
+        完成词 = (
+            "升级完成", "升级完毕", "研究完成", "研究完毕", "建筑完成",
+            "建筑升级完成", "英雄升级完成", "战宠升级完成", "能力已解锁",
+            "解锁能力", "能力升级完成", "upgradecomplete", "upgradecompleted",
+            "researchcomplete", "buildingcomplete", "abilityunlocked",
+            "给予能力", "授予能力", "获得能力", "giveability",
+        )
+        命中完成词 = next((词 for 词 in 完成词 if 词 in 全部文本), None)
+        if not 命中完成词:
+            return None
+
+        确认词 = ("确认", "确定", "继续", "confirm", "ok")
+        候选按钮 = []
+        for 文本, (x1, y1, x2, y2) in 规范项:
+            if not any(词 in 文本 for 词 in 确认词):
+                continue
+            中心x = (x1 + x2) / 2
+            中心y = (y1 + y2) / 2
+            # 只接受中央弹窗下方的按钮，屏蔽资源栏、地图和右上角控件。
+            if 250 <= 中心x <= 760 and 385 <= 中心y <= 570:
+                候选按钮.append((中心y, 中心x, int(round(中心x)), int(round(中心y)), 文本))
+        if not 候选按钮:
+            return None
+
+        _, _, 按钮x, 按钮y, 按钮文本 = max(候选按钮)
+        return {
+            "完成词": 命中完成词,
+            "确认文本": 按钮文本,
+            "确认点": (按钮x, 按钮y),
+            "摘要": f"{命中完成词}+{按钮文本}",
+        }
+
+    def 自动确认升级完成弹窗(self) -> bool:
+        """低频检查并安全确认升级完成弹窗，返回本次是否点击。
+
+        默认关闭，用户在“任务计划 -> 升级完成弹窗确认”中开启后才运行。
+        同一弹窗必须连续两次识别成功才会点击，避免过渡帧或 OCR 偶发误报。
+        """
+        if getattr(self, "_升级完成弹窗检查中", False):
+            return False
+        try:
+            if not bool(getattr(self.设置, "是否自动确认升级完成", False)):
+                return False
+        except Exception:
+            return False
+        if (
+            getattr(self, "_内存保护已触发", False)
+            or bool(getattr(self, "_战斗中", False))
+        ):
+            return False
+
+        当前时间 = time.monotonic()
+        上次检查 = float(getattr(self, "_升级完成弹窗检查时间", 0.0))
+        if 当前时间 - 上次检查 < 1.5:
+            return False
+        self._升级完成弹窗检查时间 = 当前时间
+        self._升级完成弹窗检查中 = True
+        try:
+            # 先执行现有宝石/商店护栏。它只会在明确危险模板命中时发送
+            # 一次安全 ESC；命中后本次升级确认检查立即结束，绝不抢点。
+            if self.检查宝石商店危险页面():
+                self._升级完成弹窗候选 = None
+                return False
+            页面结果 = getattr(self, "_最近点击页面结果", None)
+            if 页面结果 is not None and 页面结果.页面 in {"战斗中", "战斗结算", "战斗过渡"}:
+                return False
+
+            屏幕图像 = self._获取点击识别截图(强制=True)
+            候选 = self._识别升级完成弹窗(屏幕图像)
+            if not 候选:
+                self._升级完成弹窗候选 = None
+                return False
+
+            确认点 = 候选["确认点"]
+            指纹 = (候选["完成词"], 候选["确认文本"], round(确认点[0] / 8), round(确认点[1] / 8))
+            上次候选 = getattr(self, "_升级完成弹窗候选", None)
+            if not isinstance(上次候选, tuple) or len(上次候选) != 2:
+                self._升级完成弹窗候选 = (指纹, 当前时间)
+                self.置脚本状态(f"升级完成弹窗待二次确认：{候选['摘要']}")
+                return False
+            旧指纹, 旧时间 = 上次候选
+            if 旧指纹 != 指纹 or 当前时间 - float(旧时间) > 4.0:
+                self._升级完成弹窗候选 = (指纹, 当前时间)
+                self.置脚本状态(f"升级完成弹窗识别已更新，等待稳定确认：{候选['摘要']}")
+                return False
+
+            self._升级完成弹窗点击中 = True
+            try:
+                点击成功 = self.点击已确认安全按钮(
+                    确认点[0], 确认点[1], 延时=180
+                )
+            finally:
+                self._升级完成弹窗点击中 = False
+            if 点击成功:
+                self._升级完成弹窗候选 = None
+                self.置脚本状态(
+                    f"升级完成弹窗已确认：{候选['摘要']}，点击{确认点[0]},{确认点[1]}"
+                )
+                return True
+            self.置脚本状态("升级完成弹窗确认按钮输入被拒绝，保持当前画面不重复点击")
+            self._升级完成弹窗候选 = None
+            return False
+        finally:
+            self._升级完成弹窗检查中 = False
+
     def 安全返回键(self, 说明: str = "", *, 已确认可关闭面板: bool = False) -> bool:
         """受限地发送 Android BACK，默认拒绝。
 
@@ -689,6 +874,20 @@ class 任务上下文:
             当前单调时间 = time.monotonic()
             if 当前单调时间 >= 截止时间:
                 break
+
+            # 升级完成弹窗只做低频、双帧确认，不参与战斗输入路径。这样
+            # 可在主世界等待期间自动处理确认，同时不会给下兵循环增加 OCR。
+            if 当前单调时间 - float(getattr(self, "_升级完成弹窗调度时间", 0.0)) >= 0.5:
+                self._升级完成弹窗调度时间 = 当前单调时间
+                try:
+                    self.自动确认升级完成弹窗()
+                except SystemExit:
+                    raise
+                except Exception as 异常:
+                    上次错误 = float(getattr(self, "_升级完成弹窗调度错误时间", 0.0))
+                    if 当前单调时间 - 上次错误 >= 5.0:
+                        self.置脚本状态(f"升级完成弹窗处理暂时失败：{异常}")
+                        self._升级完成弹窗调度错误时间 = 当前单调时间
 
             # 每1秒检查一次定时上报（基于实际时间，而不是循环次数）。
             if self.企业微信通知器 and self.上报间隔秒 > 0:
