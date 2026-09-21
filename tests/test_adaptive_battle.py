@@ -272,6 +272,58 @@ class 自适应战斗测试(unittest.TestCase):
             任务.执行下兵流程(上下文, [{"中心坐标": 坐标(100, 100)}])
         self.assertEqual(点击记录, [(35, 35)])
 
+    def test_补下读取统一兵栏区域的x0并跳过彩色空卡(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        日志 = []
+        读取区域 = []
+        设置 = SimpleNamespace(漏下兵种检测格数=1)
+        上下文 = SimpleNamespace(
+            机器人标志="测试",
+            数据库=SimpleNamespace(获取机器人设置=lambda _标志: 设置),
+            当前兵栏清单=[{
+                "槽位": 1,
+                "类别": "兵种",
+                "数量": 117,
+                "区域": (56, 493, 112, 594),
+                "名称": "兵种_超级哥布林",
+            }],
+            op=SimpleNamespace(
+                获取屏幕图像cv=lambda *_区域: np.zeros((36, 56, 3), dtype=np.uint8),
+            ),
+            置脚本状态=日志.append,
+            点击=lambda *_参数, **_关键字: self.fail("x0空卡不应再次点击"),
+            脚本延时=lambda _毫秒: None,
+        )
+        任务.准备可下兵区域 = lambda *_参数, **_关键字: None
+        任务.战斗是否仍在进行 = lambda _上下文: True
+        任务.是否为灰色图片 = lambda _图像: False
+
+        def 读取当前数量(_上下文, 区域):
+            读取区域.append(tuple(区域))
+            return 0
+
+        任务.读取槽位显示兵量 = 读取当前数量
+        任务.执行漏下兵种下兵流程(
+            上下文,
+            [{"中心坐标": 坐标(100, 100)}],
+        )
+
+        self.assertEqual(读取区域, [(56, 493, 112, 594)])
+        self.assertTrue(any("当前数量已确认0" in 文本 for 文本 in 日志))
+
+    def test_读取槽位显示兵量能把OCR的XO识别为零(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        任务._识别槽位文本 = lambda _图像: "XO|12"
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=lambda *_区域: np.zeros((101, 56, 3), dtype=np.uint8),
+            ),
+        )
+        self.assertEqual(
+            任务.读取槽位显示兵量(上下文, (56, 493, 112, 594)),
+            0,
+        )
+
     def test_回营模板没有结果页标记时仍视为战斗中(self):
         class 匹配器:
             def 执行匹配(self, _图像, 模板路径, **_参数):
