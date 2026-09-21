@@ -8,6 +8,7 @@ import numpy as np
 from 任务流程.主世界打鱼.打开进攻页面 import 打开进攻页面任务
 from 任务流程.主世界打鱼.搜索页面识别 import 搜索页面识别器
 from 任务流程.主世界打鱼.进攻 import 进攻任务
+from 任务流程.夜世界.夜世界打鱼.打开进攻页面任务 import 打开进攻页面
 
 
 class 打开进攻页面测试(unittest.TestCase):
@@ -72,6 +73,28 @@ class 打开进攻页面测试(unittest.TestCase):
     def test_兵栏空槽OCR的XO不会把等级读成兵量(self):
         任务 = 进攻任务.__new__(进攻任务)
         self.assertEqual(任务._识别槽位数量(np.zeros((20, 20, 3), dtype=np.uint8), "XO|12"), 0)
+
+    def test_夜世界开始进攻兼容简体和繁体OCR(self):
+        self.assertTrue(打开进攻页面._OCR包含文本(
+            [[[[0, 0], [100, 0], [100, 30], [0, 30]], "開始進攻", 0.93]],
+            ("开始进攻", "開始進攻"),
+        ))
+        self.assertTrue(打开进攻页面._OCR包含文本(
+            [[[[0, 0], [100, 0], [100, 30], [0, 30]], "开始进攻", 0.93]],
+            ("开始进攻", "開始進攻"),
+        ))
+
+    def test_夜世界立即寻找按钮补回OCR裁剪偏移(self):
+        任务 = 打开进攻页面.__new__(打开进攻页面)
+        任务.执行OCR识别 = Mock(return_value=[
+            [[[150, 60], [230, 60], [230, 92], [150, 92]], "立即尋找！", 0.91]
+        ])
+        self.assertEqual(任务._查找立即寻找按钮中心(), (620, 396))
+
+    def test_夜世界立即寻找OCR不命中时使用参考坐标(self):
+        任务 = 打开进攻页面.__new__(打开进攻页面)
+        任务.执行OCR识别 = Mock(return_value=[])
+        self.assertIsNone(任务._查找立即寻找按钮中心())
 
 
 if __name__ == "__main__":
