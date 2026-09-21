@@ -481,6 +481,14 @@ class 自动化机器人:
             if not 到主世界任务(上下文).执行():
                 上下文.置脚本状态(f"{阶段说明 or '任务'}：主世界转场失败")
                 return False
+            关闭升级面板 = getattr(上下文, "关闭升级详情弹窗", None)
+            if callable(关闭升级面板):
+                关闭升级面板()
+                if getattr(上下文, "页面恢复失败", False):
+                    上下文.置脚本状态(
+                        f"{阶段说明 or '任务'}：升级详情弹窗关闭后未确认主世界主页"
+                    )
+                    return False
             return self._确保主世界主页面(上下文)
         except Exception as 异常:
             上下文.页面恢复失败 = True

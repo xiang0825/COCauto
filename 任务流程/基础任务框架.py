@@ -339,6 +339,161 @@ class 任务上下文:
         finally:
             self._升级完成弹窗检查中 = False
 
+    @staticmethod
+    def _检测升级详情弹窗关闭点(屏幕图像) -> tuple[int, int] | None:
+        """只检测升级详情弹窗右上角的红色关闭按钮。
+
+        CoC 的“正在升级/立即完成”面板没有稳定的文字模板，而且不同
+        版本的标题会在简体、繁体和活动名称之间变化。宝石按钮绝不能
+        作为恢复目标，所以这里不做 OCR 点击，也不返回底部绿色按钮；
+        只有同时满足中央灰色标题栏、右上角红色方形按钮和尺寸约束时，
+        才返回一个可安全关闭的参考坐标。
+        """
+        if 屏幕图像 is None or not hasattr(屏幕图像, "shape"):
+            return None
+        try:
+            高, 宽 = 屏幕图像.shape[:2]
+            if 高 < 120 or 宽 < 240 or len(屏幕图像.shape) < 3:
+                return None
+            hsv = cv2.cvtColor(屏幕图像, cv2.COLOR_BGR2HSV)
+
+            # 升级详情弹窗的标题栏位于中央上方，颜色偏灰且饱和度低；
+            # 这一步用于排除主世界右侧其它红色控件。
+            标题栏 = hsv[
+                int(高 * 0.035):int(高 * 0.14),
+                int(宽 * 0.08):int(宽 * 0.82),
+            ]
+            if 标题栏.size == 0:
+                return None
+            低饱和明亮像素 = cv2.inRange(
+                标题栏,
+                (0, 0, 55),
+                (180, 105, 235),
+            )
+            标题栏支持度 = cv2.countNonZero(低饱和明亮像素) / float(
+                标题栏.shape[0] * 标题栏.shape[1]
+            )
+            if 标题栏支持度 < 0.60:
+                return None
+
+            色相 = hsv[:, :, 0]
+            红色遮罩 = (
+                ((色相 <= 15) | (色相 >= 165))
+                & (hsv[:, :, 1] >= 100)
+                & (hsv[:, :, 2] >= 100)
+            ).astype("uint8")
+            # 只看中央弹窗预期的右上角，排除最右侧主世界控件。
+            x起点, x终点 = int(宽 * 0.80), int(宽 * 0.95)
+            y终点 = int(高 * 0.20)
+            区域 = 红色遮罩[:y终点, x起点:x终点]
+            if 区域.size == 0:
+                return None
+            区域 = cv2.morphologyEx(
+                区域,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
+            )
+            _, _, 统计, 重心 = cv2.connectedComponentsWithStats(区域, 8)
+            候选 = []
+            for 序号 in range(1, len(统计)):
+                x, y, 方宽, 方高, 面积 = [int(值) for 值 in 统计[序号]]
+                全局x = x + x起点
+                全局y = y
+                中心x, 中心y = [float(值) for 值 in 重心[序号]]
+                中心x += x起点
+                if not (
+                    宽 * 0.83 <= 中心x <= 宽 * 0.925
+                    and 高 * 0.025 <= 中心y <= 高 * 0.16
+                    and 宽 * 0.025 <= 方宽 <= 宽 * 0.085
+                    and 高 * 0.045 <= 方高 <= 高 * 0.14
+                    and 面积 >= 方宽 * 方高 * 0.25
+                    and 方宽 / max(1, 方高) <= 1.8
+                ):
+                    continue
+                候选.append((面积, 全局x, 全局y, 方宽, 方高, 中心x, 中心y))
+            if not 候选:
+                return None
+
+            _, _, _, _, _, 中心x, 中心y = max(候选, key=lambda 项: 项[0])
+            # 上层所有输入都使用 800×600 参考画布；这里统一换算，
+            # 因而 1280×720、1920×1080 等截图仍能点击同一视觉位置。
+            return (
+                int(round(中心x * 800 / 宽)),
+                int(round(中心y * 600 / 高)),
+            )
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return None
+
+    def 关闭升级详情弹窗(self, 屏幕图像=None) -> bool:
+        """安全关闭升级详情弹窗；绝不点击宝石或立即完成。
+
+        返回 True 只表示已经点过关闭按钮并重新确认主世界主页。没有
+        检测到该弹窗时返回 False 且不改变页面状态；检测到但关闭后无法
+        确认主页时设置 ``页面恢复失败``，调用方必须停止后续输入。
+        """
+        if bool(getattr(self, "_战斗中", False)):
+            return False
+        try:
+            if 屏幕图像 is None:
+                try:
+                    屏幕图像 = self.op.获取屏幕图像cv(
+                        0, 0, 800, 600, 强制刷新=True
+                    )
+                except TypeError:
+                    屏幕图像 = self.op.获取屏幕图像cv(0, 0, 800, 600)
+            关闭点 = self._检测升级详情弹窗关闭点(屏幕图像)
+        except Exception as 异常:
+            self.置脚本状态(f"升级详情弹窗预检失败，未发送输入：{异常}")
+            self.页面恢复失败 = True
+            return False
+
+        if 关闭点 is None:
+            return False
+
+        self.置脚本状态(
+            f"检测到升级详情弹窗，安全点击右上角关闭{关闭点[0]},{关闭点[1]}；"
+            "禁止点击立即完成、宝石和商店"
+        )
+        if not self.点击已确认安全按钮(关闭点[0], 关闭点[1], 延时=220):
+            self.页面恢复失败 = True
+            self.置脚本状态("升级详情弹窗关闭按钮输入失败，禁止继续点击")
+            return False
+
+        # 清掉弹窗之前的页面缓存，强制用新帧确认，不把未知/旧画面
+        # 当成主页继续打开进攻页。
+        self._点击识别截图 = None
+        self._点击识别截图时间 = 0.0
+        截止时间 = time.monotonic() + 2.5
+        while time.monotonic() < 截止时间:
+            try:
+                try:
+                    新画面 = self.op.获取屏幕图像cv(
+                        0, 0, 800, 600, 强制刷新=True
+                    )
+                except TypeError:
+                    新画面 = self.op.获取屏幕图像cv(0, 0, 800, 600)
+                结果 = self._获取点击页面识别器().识别(
+                    新画面,
+                    战斗中=False,
+                )
+                self._最近点击页面结果 = 结果
+                if 结果.页面 == "主世界主页":
+                    self.页面恢复失败 = False
+                    self.置脚本状态(
+                        f"升级详情弹窗已关闭，已确认回到主世界主页（{结果.摘要()}）"
+                    )
+                    return True
+            except Exception as 异常:
+                self.置脚本状态(f"升级详情弹窗关闭后的主页复核失败：{异常}")
+            self.脚本延时(180)
+
+        self.页面恢复失败 = True
+        self.置脚本状态(
+            "升级详情弹窗已尝试关闭，但未确认主世界主页；"
+            "保留当前画面并禁止后续点击"
+        )
+        return False
+
     def 安全返回键(self, 说明: str = "", *, 已确认可关闭面板: bool = False) -> bool:
         """受限地发送 Android BACK，默认拒绝。
 
@@ -472,6 +627,19 @@ class 任务上下文:
         结果 = getattr(self, "_最近点击页面结果", None)
         if 结果 is None:
             结果 = self.识别点击画面()
+        # 升级详情面板会把主世界入口遮住，但不一定命中宝石/商店模板。
+        # 只有在轻量页面识别已经判为未知时才运行这个几何预检，避免
+        # 给战斗和普通主世界点击增加一张额外截图；检测到后只关闭红色
+        # X，并阻断当前点击，等待下一次调用重新确认页面。
+        if (
+            not getattr(self, "_战斗中", False)
+            and 结果 is not None
+            and 结果.页面 == "未知"
+        ):
+            if self.关闭升级详情弹窗():
+                return True
+            if getattr(self, "页面恢复失败", False):
+                return True
         # 结果页出现后，禁止战斗线程继续点击兵栏/法术栏；这里不发送
         # ESC，避免把正常结算页误退出，回营任务负责后续处理。
         if (
