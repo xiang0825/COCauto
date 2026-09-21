@@ -80,6 +80,19 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertTrue(all(任务.下兵点是否位于可下兵区域(上下文, 点) for 点 in 候选点))
         self.assertFalse(任务.下兵点是否位于可下兵区域(上下文, (400, 285)))
 
+    def test_下兵点不会落入兵栏或放弃按钮(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        上下文 = SimpleNamespace(
+            _部署区域已初始化=True,
+            _部署红色掩码=None,
+            本场可下兵区域={
+                "边界顶点": [(394, 20), (745, 293), (405, 549), (68, 278)],
+                "边界带宽": 58.0,
+            },
+        )
+        self.assertFalse(任务.下兵点是否位于可下兵区域(上下文, (300, 498)))
+        self.assertFalse(任务.下兵点是否位于可下兵区域(上下文, (60, 440)))
+
     def test_兵栏变化才视为下兵成功(self):
         任务 = 进攻任务.__new__(进攻任务)
         前图 = np.zeros((36, 31, 3), dtype=np.uint8)

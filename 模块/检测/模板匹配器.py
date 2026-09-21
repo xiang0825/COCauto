@@ -26,7 +26,11 @@ class 模板匹配引擎:
         """兼容 PyInstaller 打包后的资源目录"""
         if hasattr(sys, "_MEIPASS"):
             return Path(sys._MEIPASS)
-        return Path.cwd()  # 或者 Path(__file__).parent
+        # 源码运行时不能依赖当前工作目录。桌面启动器通常会先切换目录，
+        # 但从命令行、任务计划或其他进程启动机器人时 cwd 可能仍是上级
+        # 目录，导致模板库被错误解析为 ``cwd/img``，机器人在线程初始化
+        # 阶段直接退出。模板匹配器自身的位置才是稳定的源码根目录。
+        return Path(__file__).resolve().parents[2]
 
     def __init__(self, 最大缓存数=50, 图片库路径: Union[str, Path] = None):
         """初始化模板匹配引擎

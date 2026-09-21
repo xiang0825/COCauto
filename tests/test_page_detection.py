@@ -1,4 +1,5 @@
 import pathlib
+import sys
 import threading
 import unittest
 from types import SimpleNamespace
@@ -38,6 +39,29 @@ class 页面识别测试(unittest.TestCase):
         结果 = self.识别器.识别(图像, 战斗中=True)
         self.assertEqual(结果.页面, "战斗中")
         self.assertTrue(any("红色放弃按钮" in 依据 for 依据 in 结果.依据))
+
+    def test_奖励选择横幅优先于左下角战斗按钮(self):
+        """奖励覆盖层仍带放弃按钮时，不能继续被识别为战斗页。"""
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
+        cv2.rectangle(图像, (10, 430), (105, 470), (0, 0, 220), -1)
+        结果 = self.识别器.识别(图像, 战斗中=True)
+        self.assertEqual(结果.页面, "战斗奖励选择")
+        self.assertTrue(any("奖励选择红色横幅" in 依据 for 依据 in 结果.依据))
+
+    def test_源码运行不依赖当前工作目录寻找图片库(self):
+        """从其他 cwd 启动后，模板库仍应定位到源码根目录。"""
+        预期根目录 = self.根目录
+        旧MEIPASS = getattr(sys, "_MEIPASS", None)
+        是否有MEIPASS = hasattr(sys, "_MEIPASS")
+        if 是否有MEIPASS:
+            delattr(sys, "_MEIPASS")
+        try:
+            with patch("模块.检测.模板匹配器.Path.cwd", return_value=pathlib.Path("C:/not-the-project")):
+                self.assertEqual(self.引擎.获取资源目录(), 预期根目录)
+        finally:
+            if 是否有MEIPASS:
+                sys._MEIPASS = 旧MEIPASS
 
     def test_实机主世界截图识别为主世界主页(self):
         图像 = self._读取截图("runtime_observation_after10s.png")
@@ -108,6 +132,21 @@ class 页面识别测试(unittest.TestCase):
 
         self.assertTrue(上下文.检查宝石商店危险页面())
         self.assertTrue(any("尚未确认战斗画面" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
+    def test_奖励选择弹窗阻止输入并停止任务(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = True
+        上下文.停止事件 = Mock()
+        上下文.置脚本状态 = Mock()
+        上下文.识别点击画面 = Mock(
+            return_value=SimpleNamespace(页面="战斗奖励选择")
+        )
+
+        self.assertTrue(上下文.检查宝石商店危险页面())
+        上下文.停止事件.set.assert_called_once()
+        self.assertTrue(上下文._战斗奖励弹窗已确认)
+        self.assertTrue(上下文.页面恢复失败)
+        self.assertTrue(any("奖励选择弹窗" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
 
     def test_内存错误释放资源并停止任务(self):
         上下文 = 任务上下文.__new__(任务上下文)
