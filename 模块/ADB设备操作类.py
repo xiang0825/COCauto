@@ -273,6 +273,10 @@ class ADB设备操作类:
                 )
 
             for 尝试次数 in range(2):
+                # transport 失败后，第一次重试先重新确认原来选择的
+                # 设备仍在线；不能只 reconnect 后继续使用失效 serial。
+                if 尝试次数 > 0 and not self._目标已验证:
+                    self.确认在线()
                 startupinfo = None
                 creationflags = 0
                 if os.name == "nt":
@@ -316,9 +320,10 @@ class ADB设备操作类:
                     and self._是ADB传输错误(错误文本)
                 ):
                     self._记录传输失败()
-                    self._尝试恢复ADB连接(
-                        重置ADB服务=self._需要重置ADB服务(错误文本)
-                    )
+                    # 先走 reconnect，再由下一轮的确认在线决定是否需要
+                    # 重置 server。这样已有其他设备在线时不会被 stale
+                    # serial 的错误连带断开。
+                    self._尝试恢复ADB连接()
                     continue
                 if self._是ADB传输错误(错误文本):
                     self._记录传输失败()
@@ -442,6 +447,7 @@ class ADB设备操作类:
 
     def _记录传输失败(self) -> None:
         """记录 ADB transport 失败，并在连续失败时短暂熔断。"""
+        self._标记目标未验证()
         self._连续传输失败次数 += 1
         if self._连续传输失败次数 >= 2:
             self._ADB熔断截止时间 = time.monotonic() + self._ADB熔断秒数
@@ -541,6 +547,9 @@ class ADB设备操作类:
     def 确认在线(self) -> ADB设备信息:
         if not self.设备序列号:
             raise ADB错误("尚未选择设备序列号。")
+        # 每次重新确认都从当前 ADB 列表开始，不能沿用上一次成功的
+        # transport 状态；模拟器重启后旧 serial 可能已经失效。
+        self._标记目标未验证()
         设备列表 = self.扫描设备(
             self.adb路径,
             runner=self._runner,
@@ -548,18 +557,35 @@ class ADB设备操作类:
         )
         当前设备 = next((设备 for 设备 in 设备列表 if 设备.序列号 == self.设备序列号), None)
         if 当前设备 is None:
-            # 雷电运行时偶发会保留虚拟机但让 adb server 丢失设备记录。
-            # 只重启本机 server，再扫描一次；绝不重启模拟器或关闭 CoC。
-            self._重置ADB服务()
-            self._连接已保存网络设备()
-            设备列表 = self.扫描设备(
-                self.adb路径,
-                runner=self._runner,
-                自动检测路径=self.自动检测路径,
-            )
-            当前设备 = next((设备 for 设备 in 设备列表 if 设备.序列号 == self.设备序列号), None)
+            # 只有完全没有设备时才重置 adb server。若列表中已有其他设备，
+            # 说明当前 serial 已失效；重置 server 会无谓断开仍在线的 MuMu
+            # 或其他设备，必须直接报告并禁止误切换。
+            if not 设备列表:
+                self._重置ADB服务()
+                self._连接已保存网络设备()
+                设备列表 = self.扫描设备(
+                    self.adb路径,
+                    runner=self._runner,
+                    自动检测路径=self.自动检测路径,
+                )
+                当前设备 = next((设备 for 设备 in 设备列表 if 设备.序列号 == self.设备序列号), None)
+            elif re.fullmatch(r"(?:127\.0\.0\.1|localhost):\d+", self.设备序列号):
+                # 已有其他设备在线时，网络 MuMu 只尝试连接保存的本机地址，
+                # 不重启共享的 adb server。
+                self._连接已保存网络设备()
+                设备列表 = self.扫描设备(
+                    self.adb路径,
+                    runner=self._runner,
+                    自动检测路径=self.自动检测路径,
+                )
+                当前设备 = next((设备 for 设备 in 设备列表 if 设备.序列号 == self.设备序列号), None)
         if 当前设备 is None:
-            raise ADB错误(f"所选设备 {self.设备序列号} 未出现在 ADB 设备列表中。")
+            可用设备 = "、".join(设备.显示文本 for 设备 in 设备列表) or "无"
+            raise ADB错误(
+                f"所选设备 {self.设备序列号} 未出现在当前 ADB 设备列表中；"
+                f"当前可用设备：{可用设备}。请重新扫描并选择 MuMu 模拟器，"
+                "程序不会把操作发送到其他设备。"
+            )
         if 当前设备.状态 != "device":
             raise ADB错误(f"所选设备状态为“{当前设备.状态}”；请检查模拟器 ADB 调试授权。")
         if 当前设备.疑似实体设备:
@@ -569,6 +595,18 @@ class ADB设备操作类:
             )
         self._目标已验证 = True
         return 当前设备
+
+    def _标记目标未验证(self) -> None:
+        """使下一次重试先重新扫描设备，避免复用掉线的旧 transport。"""
+        self._目标已验证 = False
+        self._屏幕尺寸 = None
+        self._截图显示ID = None
+        self._截图显示ID更新时间 = 0.0
+        self._输入显示ID = None
+        self._输入显示ID更新时间 = 0.0
+        self._触摸事件设备 = None
+        self._触摸事件原始尺寸 = None
+        self._触摸事件更新时间 = 0.0
 
     def _验证目标(self) -> None:
         if not self._目标已验证:
@@ -901,6 +939,8 @@ class ADB设备操作类:
         最后错误 = None
         图像 = None
         for 尝试次数 in range(self._截图重试上限):
+            if 尝试次数 > 0 and not self._目标已验证:
+                self.确认在线()
             # 内存保护必须在每一次重试前重新检查；不能为了等待模拟器
             # 恢复而绕过宿主机保护。
             self._检查主机内存预算()
@@ -914,12 +954,18 @@ class ADB设备操作类:
                 原始PNG = self.执行(截图参数, timeout=15, binary=True)
                 if len(原始PNG) > 20 * 1024 * 1024:
                     raise ADB错误("ADB 截图数据异常过大，已拒绝继续解码以保护内存。")
+                if not 原始PNG:
+                    raise ADB错误(
+                        "ADB 截图返回空数据；设备可能刚刚断开，已停止解码并准备重新验证。"
+                    )
                 # MuMu Android 15 的 adb.exe 在 exec-out 输出 PNG 前会把
                 # “Multiple displays were found...” 警告写到 stdout，导致
                 # OpenCV 无法解码。只丢弃 PNG 签名以前的这段诊断文本，
                 # 不放宽大小限制，也不吞掉真正的空响应。
                 PNG签名 = b"\x89PNG\r\n\x1a\n"
                 PNG起点 = 原始PNG.find(PNG签名)
+                if PNG起点 < 0:
+                    raise ADB错误("ADB 截图返回的内容不是有效 PNG，已停止解码并准备重试。")
                 if PNG起点 > 0:
                     原始PNG = 原始PNG[PNG起点:]
                 图像 = cv2.imdecode(np.frombuffer(原始PNG, dtype=np.uint8), cv2.IMREAD_COLOR)
@@ -932,6 +978,7 @@ class ADB设备操作类:
                 最后错误 = ADB错误(f"ADB 截图解码失败：{异常}")
 
             if 尝试次数 + 1 < self._截图重试上限:
+                self._标记目标未验证()
                 # 参考 MAA 的“重新连接后重试原命令”语义，但等待和次数
                 # 受控；不会重启模拟器、结束游戏或切换 Android 前台。
                 self._尝试恢复ADB连接()

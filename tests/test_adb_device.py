@@ -233,11 +233,12 @@ Input Reader State:
             结果(b"Physical size: 800x600"),
             结果(code=1, 错误=b"error: protocol fault (couldn't read status): connection reset"),
             结果(),
+            结果(在线模拟器),
             结果(),
         )
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
         self.assertTrue(设备.触控(12, 34))
-        self.assertEqual(runner.命令[-2][1:], ["reconnect", "offline"])
+        self.assertTrue(any(命令[1:] == ["reconnect", "offline"] for 命令 in runner.命令))
         self.assertEqual(
             runner.命令[-1][1:],
             ["-s", "emulator-5554", "shell", "input", "tap", "12", "34"],
@@ -263,16 +264,33 @@ Input Reader State:
             结果(code=1, 错误=b"error: device not found"),
             结果(),
             结果(),
+            结果(),
+            结果(),
+            结果(在线模拟器),
             结果(b"ok"),
         )
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
         self.assertTrue(设备.执行(["shell", "input", "tap", "12", "34"]))
-        self.assertEqual(runner.命令[1][1:], ["kill-server"])
-        self.assertEqual(runner.命令[2][1:], ["start-server"])
+        self.assertEqual(runner.命令[1][1:], ["reconnect", "offline"])
+        self.assertEqual(runner.命令[3][1:], ["kill-server"])
+        self.assertEqual(runner.命令[4][1:], ["start-server"])
         self.assertEqual(
             runner.命令[-1][1:],
             ["-s", "emulator-5554", "shell", "input", "tap", "12", "34"],
         )
+
+    def test_运行期旧设备消失时不会把输入重试到其他设备(self):
+        其他设备 = b"List of devices attached\nemulator-5556 device model:MuMu\n"
+        runner = 假Runner(
+            结果(code=1, 错误=b"error: device not found"),
+            结果(),
+            结果(其他设备),
+        )
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        with self.assertRaisesRegex(ADB错误, "未出现在当前 ADB 设备列表|不会把操作发送到其他设备"):
+            设备.执行(["shell", "input", "tap", "12", "34"])
+        输入命令 = [命令 for 命令 in runner.命令 if 命令[-4:] == ["input", "tap", "12", "34"]]
+        self.assertEqual(len(输入命令), 1, "失效设备不应向其他 serial 重复发送输入")
 
     def test_ADB连续截图超时会熔断而不是无限创建进程(self):
         class 超时Runner:
@@ -281,6 +299,8 @@ Input Reader State:
 
             def __call__(self, 命令, **_参数):
                 self.命令.append(命令)
+                if 命令[1:] == ["devices", "-l"]:
+                    return 结果(在线模拟器)
                 if 命令[1:] == ["reconnect", "offline"]:
                     return 结果()
                 raise subprocess.TimeoutExpired(命令, 1)
@@ -366,6 +386,7 @@ Input Reader State:
             结果(在线模拟器),
             结果(b"not-a-png"),
             结果(),
+            结果(在线模拟器),
             结果(编码.tobytes()),
         )
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
@@ -376,8 +397,8 @@ Input Reader State:
         }):
             结果图 = 设备.获取屏幕图像cv()
         self.assertEqual(结果图.shape, (600, 800, 3))
-        self.assertEqual(runner.命令[2][1:], ["reconnect", "offline"])
-        self.assertEqual(runner.命令[3][1:], ["-s", "emulator-5554", "exec-out", "screencap", "-p"])
+        self.assertTrue(any(命令[1:] == ["reconnect", "offline"] for 命令 in runner.命令))
+        self.assertEqual(runner.命令[-1][1:], ["-s", "emulator-5554", "exec-out", "screencap", "-p"])
 
     def test_MuMu截图前的多屏警告不会破坏PNG解码(self):
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
