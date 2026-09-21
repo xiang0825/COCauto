@@ -377,6 +377,35 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertIn(4, 上下文._本场已释放英雄技能)
         self.assertTrue(any("技能已点击" in 文本 for 文本 in 日志))
 
+    def test_英雄技能首次点击未生效时只复核一次(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        日志 = []
+        点击 = Mock(return_value=True)
+        上下文 = SimpleNamespace(
+            _本场已部署槽位={5},
+            _本场已释放英雄技能=set(),
+            _本场技能复核重试槽位=set(),
+            英雄技能状态={"第5格/英雄_飞盾战神": "可用"},
+            停止事件=SimpleNamespace(is_set=lambda: False),
+            点击=点击,
+            脚本延时=lambda _毫秒: None,
+            置脚本状态=日志.append,
+        )
+        任务.战斗是否仍在进行 = Mock(return_value=True)
+        任务.识别英雄技能状态 = Mock(side_effect=[
+            {"第5格/英雄_飞盾战神": "可用"},
+            {"第5格/英雄_飞盾战神": "已使用/不可用"},
+        ])
+        兵栏项 = {
+            "槽位": 5,
+            "名称": "英雄_飞盾战神",
+            "区域": (316, 493, 372, 594),
+        }
+        self.assertTrue(任务.尝试释放英雄技能(上下文, 兵栏项))
+        self.assertEqual(点击.call_count, 2)
+        self.assertIn(5, 上下文._本场技能复核重试槽位)
+        self.assertTrue(any("复核点击后状态" in 文本 for 文本 in 日志))
+
     def test_同一兵栏槽位连续下兵不会重复点击反选(self):
         任务 = 进攻任务.__new__(进攻任务)
         点击记录 = []
