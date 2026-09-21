@@ -126,6 +126,11 @@ class ADB设备操作类:
         self._ADB熔断秒数 = 30.0
         self._主机内存状态缓存: dict[str, int] | None = None
         self._主机内存检查时间 = 0.0
+        # 截图失败时采用有限重试，而不是把一次短暂的模拟器画面抖动
+        # 直接升级成机器人线程死亡。这里刻意比 MAA 的 20 次上限更保守，
+        # 因为本项目每次 ADB 调用都会创建 adb.exe 子进程；重试必须有界，
+        # 避免在雷电卡顿时继续堆积进程拖垮宿主机。
+        self._截图重试上限 = 3
         锁键 = (os.path.normcase(os.path.abspath(self.adb路径)), self.设备序列号)
         with self._设备命令锁容器锁:
             self._命令锁 = self._设备命令锁容器.setdefault(锁键, threading.RLock())
@@ -557,13 +562,33 @@ class ADB设备操作类:
         # 不应被触碰的目标上，始终返回明确的设备安全错误，而不会被主机
         # 当前内存状态遮蔽；通过验证后才允许创建截图缓冲。
         self._验证目标()
-        self._检查主机内存预算()
-        原始PNG = self.执行(["exec-out", "screencap", "-p"], timeout=15, binary=True)
-        if len(原始PNG) > 20 * 1024 * 1024:
-            raise ADB错误("ADB 截图数据异常过大，已拒绝继续解码以保护内存。")
-        图像 = cv2.imdecode(np.frombuffer(原始PNG, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if 图像 is None or 图像.size == 0:
-            raise ADB错误("ADB 截图无法解码；请确认设备已启动并允许 ADB 调试。")
+        最后错误 = None
+        图像 = None
+        for 尝试次数 in range(self._截图重试上限):
+            # 内存保护必须在每一次重试前重新检查；不能为了等待模拟器
+            # 恢复而绕过宿主机保护。
+            self._检查主机内存预算()
+            try:
+                原始PNG = self.执行(["exec-out", "screencap", "-p"], timeout=15, binary=True)
+                if len(原始PNG) > 20 * 1024 * 1024:
+                    raise ADB错误("ADB 截图数据异常过大，已拒绝继续解码以保护内存。")
+                图像 = cv2.imdecode(np.frombuffer(原始PNG, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if 图像 is None or 图像.size == 0:
+                    raise ADB错误("ADB 截图无法解码；请确认设备已启动并允许 ADB 调试。")
+                break
+            except ADB错误 as 异常:
+                最后错误 = 异常
+            except (cv2.error, ValueError, TypeError) as 异常:
+                最后错误 = ADB错误(f"ADB 截图解码失败：{异常}")
+
+            if 尝试次数 + 1 < self._截图重试上限:
+                # 参考 MAA 的“重新连接后重试原命令”语义，但等待和次数
+                # 受控；不会重启模拟器、结束游戏或切换 Android 前台。
+                self._尝试恢复ADB连接()
+                time.sleep(0.35 * (尝试次数 + 1))
+
+        if 图像 is None:
+            raise 最后错误 or ADB错误("ADB 截图失败。")
         高, 宽 = 图像.shape[:2]
         self._屏幕尺寸 = (宽, 高)
         左边, 顶边 = max(0, int(左边)), max(0, int(顶边))
