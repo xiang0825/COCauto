@@ -509,6 +509,20 @@ class 任务上下文:
                     self.置脚本状态("战斗护栏无法确认当前画面，阻止后续下兵并等待任务安全停止")
                     self._战斗护栏失败已记录 = True
                 return True
+            if 结果.页面 == "战斗结算":
+                self._战斗结束已确认 = True
+                if not getattr(self, "_结算点击已拦截日志", False):
+                    self.置脚本状态("点击护栏：已识别战斗结算页，阻止继续下兵")
+                    self._结算点击已拦截日志 = True
+                return True
+            if 结果.页面 != "战斗中":
+                if not getattr(self, "_战斗过渡已阻止日志", False):
+                    self.置脚本状态(
+                        f"战斗护栏尚未确认战斗画面（当前={结果.页面}），阻止下兵输入"
+                    )
+                    self._战斗过渡已阻止日志 = True
+                return True
+            self._战斗过渡已阻止日志 = False
             return False
 
         当前时间 = time.monotonic()

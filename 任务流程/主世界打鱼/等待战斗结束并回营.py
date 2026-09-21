@@ -52,8 +52,10 @@ class 等待战斗结束并回营任务(基础任务):
             return any(
                 关键词 in 文本
                 for 关键词 in (
-                    "胜利", "获胜", "失败", "战败", "摧毁", "推毁",
-                    "你得", "你获得", "回营", "回誉", "接力赛",
+                    "胜利", "勝利", "获胜", "獲勝", "失败", "失敗",
+                    "战败", "戰敗", "摧毁", "摧毀", "推毁", "推毀",
+                    "你得", "你获得", "你獲得", "回营", "回營", "回誉",
+                    "接力赛", "接力賽",
                 )
             )
         except Exception:
@@ -201,23 +203,39 @@ class 等待战斗结束并回营任务(基础任务):
     @staticmethod
     def 从OCR文本判断战斗结果(OCR文本: str) -> str:
         """从结果页 OCR 文本判断胜负；识别不到时返回未知，不猜测。"""
-        if "胜利" in OCR文本 or "获胜" in OCR文本:
+        if any(词 in OCR文本 for 词 in ("胜利", "勝利", "获胜", "獲勝")):
             return "胜利"
-        if "失败" in OCR文本 or "战败" in OCR文本:
+        if any(词 in OCR文本 for 词 in ("失败", "失敗", "战败", "戰敗")):
             return "失败"
         return "未知"
 
     @staticmethod
     def 从OCR文本提取摧毁率(OCR文本: str):
         """提取带百分号的摧毁率；没有识别到时返回 None。"""
-        文本 = str(OCR文本 or "").replace("％", "%")
+        文本 = (
+            str(OCR文本 or "")
+            .replace("％", "%")
+            .replace("摧毀", "摧毁")
+            .replace("推毀", "摧毁")
+            .replace("推毁", "摧毁")
+            .replace("破壞率", "摧毁率")
+            .replace("破坏率", "摧毁率")
+        )
         百分比列表 = [int(值) for 值 in re.findall(r"(?<!\d)(100|[1-9]?\d)\s*%", 文本)]
         return 百分比列表[0] if 百分比列表 else None
 
     @staticmethod
     def 从OCR结果提取摧毁率(OCR结果, OCR文本: str = ""):
         """兼容 OCR 把“摧毁率”和数字/百分号拆成多个识别框的情况。"""
-        文本 = str(OCR文本 or "").replace("％", "%")
+        文本 = (
+            str(OCR文本 or "")
+            .replace("％", "%")
+            .replace("摧毀", "摧毁")
+            .replace("推毀", "摧毁")
+            .replace("推毁", "摧毁")
+            .replace("破壞率", "摧毁率")
+            .replace("破坏率", "摧毁率")
+        )
         直接值 = 等待战斗结束并回营任务.从OCR文本提取摧毁率(文本)
         if 直接值 is not None:
             return 直接值
@@ -236,13 +254,17 @@ class 等待战斗结束并回营任务(基础任务):
 
         # 先处理“摧毁率 67”或“摧毁率67%”同框的情况。
         for _, _, 内容 in 项目:
-            if "摧毁" in 内容:
+            if any(词 in 内容 for 词 in ("摧毁", "摧毀", "推毁", "推毀", "破坏", "破壞")):
                 匹配 = re.search(r"摧毁[^0-9]{0,8}(100|[1-9]?\d)", 内容)
                 if 匹配:
                     return int(匹配.group(1))
 
         # 再找“摧毁率”标签附近的 0-100 数字，避免把顶部资源数字当结果。
-        标签 = [(x, y) for x, y, 内容 in 项目 if "摧毁" in 内容]
+        标签 = [
+            (x, y)
+            for x, y, 内容 in 项目
+            if any(词 in 内容 for 词 in ("摧毁", "摧毀", "推毁", "推毀", "破坏", "破壞"))
+        ]
         if 标签:
             标签x, 标签y = 标签[0]
             候选 = []
@@ -266,7 +288,10 @@ class 等待战斗结束并回营任务(基础任务):
             return int(匹配.group(1))
         # 战斗进行中也有大量金色建筑，只有结果页明确出现胜负词时
         # 才启用图像兜底，避免把建筑误判成三颗星。
-        if not any(词 in OCR文本 for 词 in ("胜利", "获胜", "失败", "战败")):
+        if not any(
+            词 in OCR文本
+            for 词 in ("胜利", "勝利", "获胜", "獲勝", "失败", "失敗", "战败", "戰敗")
+        ):
             return None
         if 屏幕图像 is None or getattr(屏幕图像, "ndim", 0) != 3:
             return None

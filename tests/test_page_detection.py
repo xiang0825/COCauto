@@ -31,6 +31,14 @@ class 页面识别测试(unittest.TestCase):
         结果 = self.识别器.识别(图像)
         self.assertEqual(结果.页面, "战斗中")
 
+    def test_红色放弃按钮兜底识别战斗页(self):
+        """模板文字变化时仍能用左下角红色按钮识别战斗页。"""
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (10, 430), (105, 470), (0, 0, 220), -1)
+        结果 = self.识别器.识别(图像, 战斗中=True)
+        self.assertEqual(结果.页面, "战斗中")
+        self.assertTrue(any("红色放弃按钮" in 依据 for 依据 in 结果.依据))
+
     def test_实机主世界截图识别为主世界主页(self):
         图像 = self._读取截图("runtime_observation_after10s.png")
         if 图像 is None:
@@ -89,6 +97,17 @@ class 页面识别测试(unittest.TestCase):
         self.assertTrue(上下文.检查宝石商店危险页面())
         上下文.识别点击画面.assert_called_once()
         self.assertTrue(any("阻止后续下兵" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
+    def test_战斗过渡页面阻止输入(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = True
+        上下文.置脚本状态 = Mock()
+        上下文.识别点击画面 = Mock(
+            return_value=SimpleNamespace(页面="战斗过渡")
+        )
+
+        self.assertTrue(上下文.检查宝石商店危险页面())
+        self.assertTrue(any("尚未确认战斗画面" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
 
     def test_内存错误释放资源并停止任务(self):
         上下文 = 任务上下文.__new__(任务上下文)

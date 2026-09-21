@@ -244,6 +244,24 @@ class 自适应战斗测试(unittest.TestCase):
             任务._结束画面有结果标记(np.zeros((600, 800, 3), dtype=np.uint8))
         )
 
+    def test_下兵前会等待战斗过渡完成(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        日志 = []
+        上下文 = SimpleNamespace(
+            停止事件=SimpleNamespace(
+                is_set=lambda: False,
+                wait=lambda timeout: None,
+            ),
+            识别点击画面=Mock(side_effect=[
+                SimpleNamespace(页面="战斗过渡"),
+                SimpleNamespace(页面="战斗中"),
+            ]),
+            置脚本状态=日志.append,
+        )
+
+        self.assertEqual(任务.等待战斗画面确认(上下文, 超时秒=2), "战斗中")
+        self.assertTrue(any("开始下兵" in 文本 for 文本 in 日志))
+
 
 if __name__ == "__main__":
     unittest.main()

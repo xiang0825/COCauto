@@ -102,6 +102,11 @@ class 宝石安全保护测试(unittest.TestCase):
         屏幕[230:230 + 模板1.shape[0], 414:414 + 模板1.shape[1]] = 模板1
         上下文 = 创建上下文(屏幕)
         上下文._战斗中 = True
+        # 战斗护栏现在要求先确认仍在战斗页；这里模拟真实战斗页，
+        # 再验证误命中宝石模板不会触发返回键。
+        上下文.识别点击画面 = Mock(
+            return_value=SimpleNamespace(页面="战斗中")
+        )
 
         self.assertFalse(上下文.检查宝石商店危险页面(强制=True))
         上下文.键盘.按字符按压.assert_not_called()
