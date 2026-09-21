@@ -252,7 +252,7 @@ class 自适应战斗测试(unittest.TestCase):
         设置 = SimpleNamespace(是否启用高速下兵=True)
         上下文 = SimpleNamespace(设置=设置)
         self.assertEqual(任务.取高速下兵批次(上下文, {"类别": "兵种", "数量": 7}, 7), 1)
-        self.assertEqual(任务.取高速下兵批次(上下文, {"类别": "兵种", "数量": 8}, 10), 5)
+        self.assertEqual(任务.取高速下兵批次(上下文, {"类别": "兵种", "数量": 8}, 10), 8)
         self.assertEqual(任务.取高速下兵批次(上下文, {"类别": "英雄", "数量": 20}, 10), 1)
 
     def test_高速模式分别调用连点和短按压(self):
@@ -272,8 +272,9 @@ class 自适应战斗测试(unittest.TestCase):
         日志 = []
         上下文 = SimpleNamespace(鼠标=鼠标对象, 置脚本状态=日志.append)
         任务 = 进攻任务.__new__(进攻任务)
-        # 高速批次最多四次额外点击（合计5个单位），保留40ms呼吸间隔。
-        self.assertEqual(任务.执行高速下兵批次(上下文, (100, 200), 5, "快速连点"), 4)
+        # 高速批次允许最多7次额外点击（合计8个单位），实机通过兵栏
+        # 数量复核是否真的被游戏逐个消费。
+        self.assertEqual(任务.执行高速下兵批次(上下文, (100, 200), 5, "快速连点"), 5)
         self.assertEqual(任务.执行高速下兵批次(上下文, (100, 200), 2, "短按压"), 2)
         self.assertEqual([项[0] for 项 in 鼠标对象.调用], ["连点", "短按"])
 
@@ -404,6 +405,22 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertEqual(
             任务.读取槽位显示兵量(上下文, (56, 493, 112, 594)),
             0,
+        )
+
+    def test_战斗动画粘连的超大兵量会被拒绝(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        任务._识别槽位文本 = lambda _图像: "X1101|9"
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=lambda *_区域: np.zeros((101, 56, 3), dtype=np.uint8),
+            ),
+        )
+        self.assertIsNone(
+            任务.读取槽位显示兵量(
+                上下文,
+                (56, 493, 112, 594),
+                最大数量=117,
+            )
         )
 
     def test_回营模板没有结果页标记时仍视为战斗中(self):
