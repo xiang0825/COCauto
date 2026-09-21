@@ -585,6 +585,34 @@ class ADB设备操作类:
             return 16384 <= 端口 <= 16499
         return False
 
+    @staticmethod
+    def _解析MuMu物理显示ID(显示输出: str, 逻辑显示ID: str) -> str | None:
+        """把 Android logical display 映射为 MuMu ``screencap -d`` 的 ID。
+
+        Android 15 的 ``dumpsys display`` 格式和旧版不同：旧版通常有
+        ``mPrimaryDisplayDevice=...(local:...)``，新版则把映射放在
+        ``mViewports`` 的 ``DisplayViewport`` 中。两种格式都支持，避免
+        在多显示 MuMu 中误截到启动器的主屏。
+        """
+        文本 = str(显示输出 or "")
+        逻辑显示ID = str(逻辑显示ID or "").strip()
+        if not 逻辑显示ID:
+            return None
+
+        # Android 15/MuMu 当前格式，例如：
+        # DisplayViewport{..., displayId=6, uniqueId='local:4619827203584079877', ...}
+        for 匹配 in re.finditer(r"DisplayViewport\{([^}]*)\}", 文本, flags=re.S):
+            内容 = 匹配.group(1)
+            逻辑匹配 = re.search(r"\bdisplayId\s*=\s*(\d+)", 内容)
+            物理匹配 = re.search(r"\buniqueId\s*=\s*['\"]local:(\d+)", 内容)
+            if 逻辑匹配 and 物理匹配 and 逻辑匹配.group(1) == 逻辑显示ID:
+                return 物理匹配.group(1)
+
+        # 兼容旧版 dumpsys display 输出。
+        模式 = rf"mDisplayId={re.escape(逻辑显示ID)}\b.*?mPrimaryDisplayDevice=.*?\(local:(\d+)\)"
+        匹配 = re.search(模式, 文本, flags=re.S)
+        return 匹配.group(1) if 匹配 else None
+
     def _获取MuMu截图显示ID(self) -> str | None:
         """返回当前前台应用所在 MuMu 虚拟显示的 SurfaceFlinger ID。"""
         当前时间 = time.monotonic()
@@ -603,7 +631,12 @@ class ADB设备操作类:
                 if not 匹配:
                     continue
                 逻辑ID = 匹配.group(1)
-                if "mCurrentFocus=" in 块 and "mCurrentFocus=null" not in 块:
+                # 多显示 MuMu 中，游戏所在 display 可能没有 mCurrentFocus，
+                # 但 mFocusedApp 会明确指向游戏；只看 mCurrentFocus 会错误
+                # 选择 display 0 的桌面，导致 OCR 永远读到启动器截图。
+                有窗口焦点 = bool(re.search(r"mCurrentFocus=(?!null\b)", 块))
+                有应用焦点 = bool(re.search(r"mFocusedApp=(?!null\b)", 块))
+                if 有窗口焦点 or 有应用焦点:
                     候选逻辑ID.append(逻辑ID)
                     if self._目标包名 and self._目标包名 in 块:
                         选中逻辑ID = 逻辑ID
@@ -615,9 +648,7 @@ class ADB设备操作类:
             显示输出 = self.执行(["shell", "dumpsys", "display"], timeout=8)
             if isinstance(显示输出, bytes):
                 显示输出 = 显示输出.decode("utf-8", errors="replace")
-            模式 = rf"mDisplayId={re.escape(选中逻辑ID)}\b.*?mPrimaryDisplayDevice=.*?\(local:(\d+)\)"
-            匹配 = re.search(模式, str(显示输出), flags=re.S)
-            self._截图显示ID = 匹配.group(1) if 匹配 else None
+            self._截图显示ID = self._解析MuMu物理显示ID(str(显示输出), 选中逻辑ID)
             return self._截图显示ID
         except (ADB错误, ValueError, TypeError, re.error):
             self._截图显示ID = None

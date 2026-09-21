@@ -1,7 +1,8 @@
 import pathlib
+import threading
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import cv2
 import numpy as np
@@ -9,6 +10,7 @@ import numpy as np
 from 模块.检测.页面识别器 import 页面识别器
 from 模块.检测.模板匹配器 import 模板匹配引擎
 from 任务流程.基础任务框架 import 任务上下文
+from 任务流程.检测游戏登录状态 import 检测游戏登录状态任务
 
 
 class 页面识别测试(unittest.TestCase):
@@ -114,6 +116,28 @@ class 页面识别测试(unittest.TestCase):
         上下文.发送企业微信通知.assert_called_once()
         self.assertFalse(上下文.发送企业微信通知.call_args.kwargs["包含截图"])
         self.assertTrue(any("不是普通ADB断线" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
+    def test_断线弹窗连续失败三次后安全停止而不无限点击(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=屏幕)),
+            数据库=Mock(),
+            机器人标志="robot_test",
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            点击已确认安全按钮=Mock(return_value=True),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
+        with patch("任务流程.检测游戏登录状态.模板匹配引擎") as 引擎类, \
+                patch.object(任务, "_检测断线弹窗", return_value=(True, (256, 365))):
+            引擎类.return_value.执行匹配.return_value = (False, (0, 0), 0.0)
+            self.assertFalse(任务.执行(首次登录=False))
+        self.assertEqual(上下文.点击已确认安全按钮.call_count, 3)
+        self.assertTrue(上下文.页面恢复失败)
+        self.assertTrue(上下文.停止事件.is_set())
+        self.assertTrue(any("恢复3次仍未消失" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
 
     def test_普通点击前后都会记录页面识别(self):
         屏幕 = self._读取截图("runtime_observation_after10s.png")

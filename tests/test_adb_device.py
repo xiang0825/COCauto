@@ -111,6 +111,26 @@ class ADB设备测试(unittest.TestCase):
         设备._runner = runner
         self.assertEqual(设备._获取MuMu截图显示ID(), "4619826948029188612")
 
+    def test_MuMu多显示优先选择游戏所在显示而不是启动器(self):
+        设备 = ADB设备操作类(
+            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            "127.0.0.1:16416",
+        )
+        设备.设置目标包名("com.supercell.clashofclans")
+        窗口输出 = b"""
+  Display: mDisplayId=0
+    mCurrentFocus=Window{u0 app.lawnchair/app.lawnchair.LawnchairLauncher}
+    mFocusedApp=ActivityRecord{launcher app.lawnchair/.LawnchairLauncher}
+  Display: mDisplayId=6
+    mCurrentFocus=null
+    mFocusedApp=ActivityRecord{game com.supercell.clashofclans/com.supercell.titan.GameApp}
+"""
+        显示输出 = b"""
+mViewports=[DisplayViewport{type=INTERNAL, valid=true, displayId=0, uniqueId='local:4619827820427265280'}, DisplayViewport{type=EXTERNAL, valid=true, displayId=6, uniqueId='local:4619827203584079877'}]
+"""
+        设备._runner = 假Runner(结果(窗口输出), 结果(显示输出))
+        self.assertEqual(设备._获取MuMu截图显示ID(), "4619827203584079877")
+
     def test_设备授权状态异常时不发送输入(self):
         runner = 假Runner(结果(b"List of devices attached\nemulator-5554 unauthorized model:LDPlayer\n"))
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
