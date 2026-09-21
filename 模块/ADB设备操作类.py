@@ -738,7 +738,7 @@ class ADB设备操作类:
         return self._屏幕尺寸
 
     def 参考坐标转设备坐标(self, x: int | float, y: int | float) -> tuple[int, int]:
-        """把任务使用的 800×600 参考坐标映射到实际 ADB 屏幕。"""
+        """把任务参考坐标映射到实际 ADB 屏幕；实际尺寸由截图自动更新。"""
         宽度, 高度 = self.取屏幕尺寸()
         设备x = round(float(x) * 宽度 / self.参考宽度)
         设备y = round(float(y) * 高度 / self.参考高度)

@@ -298,7 +298,6 @@ class ADB设备测试(unittest.TestCase):
         self.assertTrue(编码成功)
         runner = 假Runner(
             结果(在线模拟器),
-            结果(b"Physical size: 1280x720"),
             结果(编码.tobytes()),
         )
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
@@ -315,7 +314,7 @@ class ADB设备测试(unittest.TestCase):
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         编码成功, 编码 = cv2.imencode(".png", 图像)
         self.assertTrue(编码成功)
-        runner = 假Runner(结果(在线模拟器), 结果(b"Physical size: 800x600"), 结果(编码.tobytes()))
+        runner = 假Runner(结果(在线模拟器), 结果(编码.tobytes()))
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
         屏幕 = ADB屏幕(设备)
         with patch.object(ADB设备操作类, "_获取主机内存状态", return_value={
@@ -325,7 +324,7 @@ class ADB设备测试(unittest.TestCase):
         }):
             屏幕.获取屏幕图像cv(0, 0, 800, 600)
             屏幕.获取屏幕图像cv(20, 20, 100, 100)
-        self.assertEqual(len(runner.命令), 3)
+        self.assertEqual(len(runner.命令), 2)
 
     def test_打开已在前台的游戏不会重启或force_stop(self):
         runner = 假Runner(
