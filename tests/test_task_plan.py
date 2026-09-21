@@ -10,6 +10,8 @@ from 任务流程.主世界打鱼.搜索敌人 import 搜索目标敌人任务
 from 线程.自动化机器人 import 自动化机器人
 from 工具包.工具函数 import 是否夜世界资源打满
 from 任务流程.夜世界.更新夜世界账号资源状态 import 更新夜世界资源状态任务
+from 任务流程.夜世界.夜世界打鱼.下兵 import 下兵
+from 任务流程.夜世界.夜世界打鱼.等待回营或第二场战斗 import 等待回营或第二次战斗
 
 
 class 任务计划测试(unittest.TestCase):
@@ -125,6 +127,38 @@ class 任务计划测试(unittest.TestCase):
 
         self.assertTrue(结果)
         self.assertFalse(上下文.页面恢复失败)
+
+    def test_夜世界没有确认下兵时停止后续英雄点击(self):
+        任务 = 下兵.__new__(下兵)
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.执行下兵操作 = Mock(return_value=False)
+
+        self.assertFalse(任务.执行())
+        self.assertTrue(上下文.页面恢复失败)
+        任务.执行下兵操作.assert_called_once()
+
+    def test_夜世界第二场下兵失败不会继续等待回营点击(self):
+        任务 = 等待回营或第二次战斗.__new__(等待回营或第二次战斗)
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.是否出现换兵种箭头 = Mock(return_value=True)
+        任务.尝试点击回营按钮 = Mock(return_value=False)
+
+        with patch("任务流程.夜世界.夜世界打鱼.等待回营或第二场战斗.下兵") as 下兵任务:
+            下兵任务.return_value.执行.return_value = False
+            self.assertFalse(任务.执行())
+
+        self.assertTrue(上下文.页面恢复失败)
+        任务.尝试点击回营按钮.assert_not_called()
 
     def test_非主页时最多单次ESC并确认主世界主页(self):
         机器人 = 自动化机器人.__new__(自动化机器人)

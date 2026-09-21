@@ -12,10 +12,18 @@ class 下兵(夜世界基础任务):
 
         try:
             self.上下文.脚本延时(random.randint(500, 1000))
-            self.执行下兵操作()
+            if not self.执行下兵操作():
+                self.上下文.页面恢复失败 = True
+                self.上下文.置脚本状态(
+                    "夜世界未确认完成下兵，停止后续英雄/技能点击"
+                )
+                return False
 
             # 选择英雄
-            self.上下文.点击(47, 545)
+            if self.上下文.点击(47, 545) is False:
+                self.上下文.页面恢复失败 = True
+                self.上下文.置脚本状态("夜世界英雄槽点击未确认成功，停止本场操作")
+                return False
 
             # 出英雄
             点击序列 = [
@@ -26,7 +34,10 @@ class 下兵(夜世界基础任务):
             random.shuffle(点击序列)
             for 坐标 in 点击序列:
                 x, y = 坐标
-                self.上下文.点击(x, y)
+                if self.上下文.点击(x, y) is False:
+                    self.上下文.页面恢复失败 = True
+                    self.上下文.置脚本状态("夜世界英雄下兵点击未确认成功，停止本场操作")
+                    return False
                 self.上下文.脚本延时(random.randint(100, 300))
 
             # 把英雄技能提取到后台循环执行
@@ -48,7 +59,7 @@ class 下兵(夜世界基础任务):
             self.异常处理(e)
             return False
 
-    def 执行下兵操作(self):
+    def 执行下兵操作(self) -> bool:
         区域字典 = {
             "左上": ((21, 257), (389, 29)),
             "右上": ((467, 26), (751, 249)),
@@ -62,7 +73,8 @@ class 下兵(夜世界基础任务):
         for 名称, (左上, 右下) in 区域项列表:
             if self.尝试在区域内完成下兵(左上, 右下):
                 self.上下文.置脚本状态("兵已经下完")
-                return
+                return True
+        return False
 
     def 尝试在区域内完成下兵(self, 左上角: tuple, 右下角: tuple) -> bool:
         """在指定区域内尝试完成下兵操作，若提示下满兵则返回 True"""
