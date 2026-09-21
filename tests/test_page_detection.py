@@ -137,6 +137,24 @@ class 页面识别测试(unittest.TestCase):
         self.assertTrue(上下文._战斗结束已确认)
         self.assertIn((600,), [调用.args for 调用 in 上下文.脚本延时.call_args_list])
 
+    def test_奖励过渡连续慢帧后仍能复核到结算页(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = True
+        上下文.停止事件 = Mock()
+        上下文.置脚本状态 = Mock()
+        上下文.脚本延时 = Mock()
+        上下文.识别点击画面 = Mock(side_effect=[
+            SimpleNamespace(页面="战斗奖励选择"),
+            SimpleNamespace(页面="战斗奖励选择"),
+            SimpleNamespace(页面="战斗结算"),
+        ])
+
+        self.assertTrue(上下文.检查宝石商店危险页面())
+        上下文.停止事件.set.assert_not_called()
+        self.assertTrue(上下文._战斗结束已确认)
+        self.assertEqual(上下文.识别点击画面.call_count, 3)
+        self.assertIn((400,), [调用.args for 调用 in 上下文.脚本延时.call_args_list])
+
     def test_单独红色横幅不会误报奖励页(self):
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
