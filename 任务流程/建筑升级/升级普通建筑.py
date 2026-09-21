@@ -1,6 +1,3 @@
-import cv2
-import numpy as np
-
 from 任务流程.基础任务框架 import 任务上下文, 基础任务
 
 class 升级按钮定位失败错误(Exception):
@@ -16,7 +13,11 @@ class 升级普通建筑任务(基础任务):
     """自动检测并升级指定英雄"""
 
     # 只检查固定确认点击点周围，排除右侧同屏的“防御概况”绿色按钮。
-    升级确认区域 = (520, 465, 605, 517)
+    # 确认卡片在逻辑画布 x≈498..625；“立即完成/宝石”卡片在
+    # x≈395..490。区域从 x=520 开始，保留确认卡片主体，同时把
+    # 右侧同屏的宝石完成入口完全排除，避免把绿色宝石按钮误判为
+    # 资源确认按钮。
+    升级确认区域 = (520, 470, 640, 570)
 
     def __init__(self, 上下文: '任务上下文',要升级的建筑):
         super().__init__(上下文)
@@ -50,7 +51,12 @@ class 升级普通建筑任务(基础任务):
                     self.关闭建筑升级页面()
                     return False
 
-                self.上下文.点击(561, 482, 延时=1000, 是否精确点击=True)
+                确认点 = self._定位升级确认按钮()
+                if 确认点 is None:
+                    self.上下文.置脚本状态("未定位到绿色升级确认按钮，禁止点击宝石或其他入口")
+                    self.关闭建筑升级页面()
+                    return False
+                self.上下文.点击(*确认点, 延时=1000, 是否精确点击=True)
 
                 # 点击后再次验证：按钮仍在表示点击没有提交升级。
                 if self._升级确认按钮可用():
@@ -60,8 +66,35 @@ class 升级普通建筑任务(基础任务):
 
                 return True
             else:
-                # 抛出不可升级异常
-                raise 升级按钮定位失败错误()
+                # 新版国际服的升级卡片图标会随分辨率/主题缩放，旧锤子
+                # 模板可能低于阈值；优先用底部卡片中的 OCR“升级”文字
+                # 定位，仍然只允许点击明确的升级入口。
+                OCR坐标 = self._OCR定位升级按钮()
+                if OCR坐标 is None:
+                    OCR坐标 = self._局部模板定位升级按钮()
+                if OCR坐标 is None:
+                    raise 升级按钮定位失败错误()
+                self.上下文.置脚本状态(
+                    f"升级入口定位成功{OCR坐标[0]},{OCR坐标[1]}"
+                )
+                self.上下文.点击(*OCR坐标)
+
+                if not self._升级确认按钮可用():
+                    self.上下文.置脚本状态("升级确认按钮不可用，可能资源不足或建筑已在升级")
+                    self.关闭建筑升级页面()
+                    return False
+
+                确认点 = self._定位升级确认按钮()
+                if 确认点 is None:
+                    self.上下文.置脚本状态("未定位到绿色升级确认按钮，禁止点击宝石或其他入口")
+                    self.关闭建筑升级页面()
+                    return False
+                self.上下文.点击(*确认点, 延时=1000, 是否精确点击=True)
+                if self._升级确认按钮可用():
+                    self.上下文.置脚本状态("点击升级后确认按钮仍可用，未检测到升级提交")
+                    self.关闭建筑升级页面()
+                    return False
+                return True
 
         except 升级按钮定位失败错误 as e:
             # 统一处理不可升级情况：关闭页面 + 状态记录
@@ -76,14 +109,105 @@ class 升级普通建筑任务(基础任务):
 
     def _升级确认按钮可用(self) -> bool:
         """检查普通建筑升级确认区是否呈现可点击的绿色按钮。"""
-        图像 = self.上下文.op.获取屏幕图像cv(*self.升级确认区域)
-        if 图像 is None or 图像.size == 0:
-            return False
-        hsv = cv2.cvtColor(图像, cv2.COLOR_BGR2HSV)
-        下限 = np.array([35, 70, 70], dtype=np.uint8)
-        上限 = np.array([95, 255, 255], dtype=np.uint8)
-        绿色像素数 = cv2.countNonZero(cv2.inRange(hsv, 下限, 上限))
-        return 绿色像素数 >= 100
+        return self._定位升级确认按钮() is not None
+
+    def _定位升级确认按钮(self) -> tuple[int, int] | None:
+        """只定位带“确认/確認”文字的资源升级按钮。
+
+        不能再用绿色像素作为唯一证据：升级进行中页面的“立即完成”
+        卡片、地图草地以及其他界面元素也可能是绿色。确认页的按钮文
+        字位于固定的底部卡片区域，只有 OCR 明确读到确认字样时才允
+        许返回坐标；因此宝石入口即使颜色相同也不会成为候选。
+        """
+        try:
+            # 确认按钮文字很短，裁成 120x100 的小图后 RapidOCR 容易把
+            # “確”识别成噪声；使用完整逻辑画面，再用坐标过滤卡片范围。
+            OCR结果 = self.执行OCR识别((0, 0, 800, 600))
+        except Exception:
+            return None
+
+        确认文字 = {"确认", "確認", "確認", "确", "確", "确定", "確定"}
+        发现升级确认标题 = False
+        for 识别项 in OCR结果 or []:
+            if not isinstance(识别项, (list, tuple)) or len(识别项) < 2:
+                continue
+            框, 原始文本 = 识别项[0], str(识别项[1] or "")
+            文本 = 原始文本.replace(" ", "").replace("\n", "")
+            # 国际服字体下底部“確認”常被 RapidOCR 误识别成相近汉字，
+            # 但顶部的“升至…？”标题更稳定；两者都只作为确认页证据，
+            # 不会出现在升级进行中的“立即完成”页面。
+            if "升至" in 文本 and ("?" in 文本 or "？" in 文本):
+                try:
+                    发现升级确认标题 = min(float(点[1]) for 点 in 框) <= 90
+                except (TypeError, ValueError, IndexError):
+                    发现升级确认标题 = False
+            if 文本 not in 确认文字:
+                continue
+            try:
+                xs = [float(点[0]) for 点 in 框]
+                ys = [float(点[1]) for 点 in 框]
+                x = (min(xs) + max(xs)) / 2
+                y = (min(ys) + max(ys)) / 2
+            except (TypeError, ValueError, IndexError):
+                continue
+            if 520 <= x <= 640 and 480 <= y <= 555:
+                return round(x), round(y)
+        if 发现升级确认标题:
+            # 800x600 逻辑画布下确认卡片的资源确认中心；输入层会
+            # 自动映射到当前 MuMu 的实际显示尺寸。
+            return (560, 522)
+        return None
+
+    def _OCR定位升级按钮(self) -> tuple[int, int] | None:
+        """在底部建筑操作卡片中定位“升级/升級”文本中心。
+
+        只接受逻辑画布 y>=430 的短文本，排除顶部“升级中”、
+        “立即完成”和升级列表标题，避免 OCR 文字误触其他入口。
+        """
+        try:
+            OCR结果 = self.执行OCR识别((0, 0, 800, 600))
+        except Exception:
+            return None
+        for 识别项 in OCR结果 or []:
+            if not isinstance(识别项, (list, tuple)) or len(识别项) < 2:
+                continue
+            框, 文本 = 识别项[0], str(识别项[1] or "")
+            文本 = 文本.replace(" ", "").replace("\n", "")
+            if 文本 not in {"升级", "升級"}:
+                continue
+            try:
+                xs = [float(点[0]) for 点 in 框]
+                ys = [float(点[1]) for 点 in 框]
+                if min(ys) < 430:
+                    continue
+                return (round((min(xs) + max(xs)) / 2), round((min(ys) + max(ys)) / 2))
+            except (TypeError, ValueError, IndexError):
+                continue
+        return None
+
+    def _局部模板定位升级按钮(self) -> tuple[int, int] | None:
+        """在底部升级卡片区域用缩放模板定位升级图标。
+
+        新版 UI 的卡片图标尺寸与旧模板略有差异；把搜索范围限制在
+        主世界选中建筑后的升级卡片，避免把地图中相似的锤子/图标误当
+        成升级入口。点击后仍必须通过绿色确认按钮复核。
+        """
+        try:
+            区域 = (475, 405, 600, 535)
+            图像 = self.上下文.op.获取屏幕图像cv(*区域)
+            执行最佳匹配 = getattr(self.模板识别, "执行最佳匹配", None)
+            if not callable(执行最佳匹配):
+                return None
+            分数, (x, y), _ = 执行最佳匹配(
+                图像,
+                "建筑升级界面锤子.bmp|建筑升级界面锤子[1].bmp",
+            )
+            if float(分数) < 0.64:
+                return None
+            self.上下文.置脚本状态(f"缩放模板定位升级图标，匹配度{分数:.2f}")
+            return (区域[0] + int(x), 区域[1] + int(y))
+        except Exception:
+            return None
 
     def 关闭建筑升级页面(self):
         """关闭升级界面"""
@@ -226,11 +350,29 @@ def _定位升级区间(
     结束索引: Optional[int] = None
 
     for 索引, (_, 文本, _) in enumerate(ocr结果):
-        if "建议升级" in 文本:
+        # 国际服不同字体/语言包下，建议升级标题可能被 OCR 识别成
+        # “建升级”“建議升級”或漏掉中间的“议”。这些都是同一段列表。
+        标准文本 = str(文本 or "").replace(" ", "").replace("\n", "")
+        是建议升级标题 = (
+            "建议升级" in 标准文本
+            or "建議升級" in 标准文本
+            or "建升级" in 标准文本
+            or "建升級" in 标准文本
+        )
+        if 是建议升级标题:
             起始索引 = 索引
-        elif "其他升级" in 文本 and 起始索引 is not None:
+        elif (
+            起始索引 is not None
+            and ("其他升级" in 标准文本 or "其他升級" in 标准文本)
+        ):
             结束索引 = 索引
             break
+
+    # 面板当前滚动位置可能只显示“建议升级”区的一部分，
+    # “其他升级”标题暂时不在截图内。此时读取到当前 OCR 末尾，
+    # 由名称/置信度过滤器排除金额和状态文本，不再把有效建筑误判为空。
+    if 起始索引 is not None and 结束索引 is None:
+        结束索引 = len(ocr结果)
 
     return 起始索引, 结束索引
 
@@ -264,11 +406,18 @@ def 看起来像建筑(文本: str) -> bool:
     if any(单位 in 文本 for 单位 in ("分钟", "秒")):
         return False
 
-    # 4. 金额或数值格式（如 7.000 / 1,500）
+    # 4. 面板状态/操作标题，不是可点击的建筑名称。
+    if 文本 in {
+        "可使用", "可用", "升级中", "建升级", "建议升级", "建議升級",
+        "其他升级", "其他升級", "移除", "信息", "資訊", "确认", "確定",
+    }:
+        return False
+
+    # 5. 金额或数值格式（如 7.000 / 1,500）
     if re.fullmatch(r"[\d.,]+", 文本):
         return False
 
-    # 5. OCR 已知噪声
+    # 6. OCR 已知噪声
     噪声词集合 = {"DRDDY", "批究"}
     if 文本 in 噪声词集合:
         return False

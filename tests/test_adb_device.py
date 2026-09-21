@@ -649,11 +649,15 @@ Input Reader State:
                 获取屏幕图像cv=lambda *_区域: np.zeros((52, 140, 3), dtype=np.uint8)
             )
         )
+        任务.执行OCR识别 = lambda _区域: []
         self.assertFalse(任务._升级确认按钮可用())
 
         绿色按钮 = np.zeros((52, 140, 3), dtype=np.uint8)
         绿色按钮[15:40, 20:120] = (40, 200, 40)
         任务.上下文.op.获取屏幕图像cv = lambda *_区域: 绿色按钮
+        任务.执行OCR识别 = lambda _区域: [
+            ([[550, 490], [590, 490], [590, 515], [550, 515]], "確認", 0.99),
+        ]
         self.assertTrue(任务._升级确认按钮可用())
 
     def test_ADB网络地址拒绝非法输入(self):
