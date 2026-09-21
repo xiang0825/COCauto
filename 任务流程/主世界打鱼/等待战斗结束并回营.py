@@ -203,11 +203,47 @@ class 等待战斗结束并回营任务(基础任务):
     @staticmethod
     def 从OCR文本判断战斗结果(OCR文本: str) -> str:
         """从结果页 OCR 文本判断胜负；识别不到时返回未知，不猜测。"""
-        if any(词 in OCR文本 for 词 in ("胜利", "勝利", "获胜", "獲勝")):
+        文本 = str(OCR文本 or "")
+        if any(词 in 文本 for 词 in ("胜利", "勝利", "获胜", "獲勝", "胜出", "勝出")):
             return "胜利"
-        if any(词 in OCR文本 for 词 in ("失败", "失敗", "战败", "戰敗")):
+        if any(词 in 文本 for 词 in ("失败", "失敗", "战败", "戰敗")):
             return "失败"
+        # 测试服/繁体结算横幅的首字经常被背景吞掉。真实截图中
+        # “戰敗”会被 RapidOCR 识别成“败”或“氧败”；结果页局部
+        # OCR 也可能只保留“胜”。这些单字只在结果页调用链中使用，
+        # 不能再因为漏掉首字而把明确结果写成“未知”。
+        if any(字 in 文本 for 字 in ("败", "敗")):
+            return "失败"
+        if any(字 in 文本 for 字 in ("胜", "勝")):
+            return "胜利"
         return "未知"
+
+    def 识别结果页横幅文本(self, 屏幕图像) -> str:
+        """对结算横幅做一次局部 OCR，补足整屏 OCR 漏字。"""
+        if not isinstance(屏幕图像, np.ndarray) or 屏幕图像.ndim < 2:
+            return ""
+        try:
+            高, 宽 = 屏幕图像.shape[:2]
+            if 高 <= 0 or 宽 <= 0:
+                return ""
+            # 逻辑画布为 800x600 时，战败/胜利横幅位于 x=144..656、
+            # y=96..288；使用比例坐标兼容自适应分辨率。
+            左 = int(宽 * 0.18)
+            右 = int(宽 * 0.82)
+            上 = int(高 * 0.16)
+            下 = int(高 * 0.48)
+            if 右 <= 左 or 下 <= 上:
+                return ""
+            横幅 = 屏幕图像[上:下, 左:右]
+            OCR结果, _ = self.ocr引擎(横幅, use_cls=False)
+            文本 = "".join(
+                str(项[1]) for 项 in (OCR结果 or []) if len(项) > 1
+            )
+            return 文本
+        except Exception:
+            # 结果统计不能因为补充 OCR 失败而阻塞回营；整屏 OCR
+            # 或实时摧毁率仍然会保留。
+            return ""
 
     @staticmethod
     def 从OCR文本提取摧毁率(OCR文本: str):
@@ -330,10 +366,23 @@ class 等待战斗结束并回营任务(基础任务):
             文本 = "".join(str(项[1]) for 项 in (OCR结果 or []) if len(项) > 1)
             self.保存战斗结果截图(上下文, 屏幕图像)
             结果 = self.从OCR文本判断战斗结果(文本)
-            星数 = self.识别星数(屏幕图像, 文本)
+            if 结果 == "未知":
+                横幅文本 = self.识别结果页横幅文本(屏幕图像)
+                if 横幅文本:
+                    文本 += 横幅文本
+                    结果 = self.从OCR文本判断战斗结果(文本)
             摧毁率 = self.从OCR结果提取摧毁率(OCR结果, 文本)
             if 摧毁率 is None:
                 摧毁率 = getattr(上下文, "本场实时摧毁率", None)
+
+            星数 = self.识别星数(屏幕图像, 文本)
+            # CoC 的“战败”结算语义就是未取得任何战斗之星；即使
+            # 星形图标被动画/背景遮挡，也必须把这场结果完整记录为 0 星。
+            # 100% 胜利同理可确定为三星，不依赖图标 OCR。
+            if 星数 is None and 结果 == "失败":
+                星数 = 0
+            elif 星数 is None and 结果 == "胜利" and 摧毁率 == 100:
+                星数 = 3
 
             # Clash of Clans 的三星必须达到 100% 摧毁；“失败＋3星”
             # 或“49%＋3星”是 OCR/结果页误识别，不能写入学习统计。
