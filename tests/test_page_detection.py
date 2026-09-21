@@ -25,6 +25,9 @@ class 页面识别测试(unittest.TestCase):
         数据 = np.fromfile(self.根目录 / ".tmp" / 名称, dtype=np.uint8)
         return cv2.imdecode(数据, cv2.IMREAD_COLOR)
 
+    def test_顶号等待按毫秒单位为200秒(self):
+        self.assertEqual(检测游戏登录状态任务.顶号等待毫秒, 200_000)
+
     def test_实机战斗截图识别为战斗中(self):
         图像 = self._读取截图("runtime_world_after_fix.png")
         if 图像 is None:
