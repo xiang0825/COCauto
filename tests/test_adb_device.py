@@ -241,6 +241,20 @@ class ADB设备测试(unittest.TestCase):
         self.assertEqual(裁剪.shape, (50, 50, 3))
         self.assertEqual(runner.命令[1][1:], ["-s", "emulator-5554", "exec-out", "screencap", "-p"])
 
+    def test_screencap完整截图哨兵不会裁剪超宽设备(self):
+        图像 = np.zeros((1200, 2200, 3), dtype=np.uint8)
+        编码成功, 编码 = cv2.imencode(".png", 图像)
+        self.assertTrue(编码成功)
+        runner = 假Runner(结果(在线模拟器), 结果(编码.tobytes()))
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        with patch.object(ADB设备操作类, "_获取主机内存状态", return_value={
+            "内存负载": 50,
+            "可用物理内存": 8 * 1024 * 1024 * 1024,
+            "可用提交额度": 8 * 1024 * 1024 * 1024,
+        }):
+            完整图像 = 设备.获取屏幕图像cv(0, 0, 2000, 2000)
+        self.assertEqual(完整图像.shape, (1200, 2200, 3))
+
     def test_screencap解码失败后有限重连并重试原命令(self):
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         编码成功, 编码 = cv2.imencode(".png", 图像)
