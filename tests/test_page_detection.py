@@ -55,6 +55,32 @@ class 页面识别测试(unittest.TestCase):
         self.assertEqual(结果.页面, "战斗奖励选择")
         self.assertTrue(any("奖励选择红色横幅" in 依据 for 依据 in 结果.依据))
 
+    def test_结算按钮优先于结算动画奖励横幅(self):
+        识别器 = 页面识别器(Mock())
+        识别器._最佳分数 = Mock(side_effect=lambda _图像, 模板: 0.85 if "回营" in 模板 else 0.0)
+        识别器._红色放弃按钮分数 = Mock(return_value=0.0)
+        识别器._奖励选择横幅分数 = Mock(return_value=0.96)
+        识别器._奖励卡片结构数量 = Mock(return_value=3)
+        结果 = 识别器.识别(np.zeros((600, 800, 3), dtype=np.uint8), 战斗中=True)
+        self.assertEqual(结果.页面, "战斗结算")
+
+    def test_奖励过渡复核结算页不会停止任务(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = True
+        上下文.停止事件 = Mock()
+        上下文.置脚本状态 = Mock()
+        上下文.脚本延时 = Mock()
+        上下文.识别点击画面 = Mock(
+            side_effect=[
+                SimpleNamespace(页面="战斗奖励选择"),
+                SimpleNamespace(页面="战斗结算"),
+            ]
+        )
+        self.assertTrue(上下文.检查宝石商店危险页面())
+        上下文.停止事件.set.assert_not_called()
+        self.assertTrue(上下文._战斗结束已确认)
+        self.assertIn((600,), [调用.args for 调用 in 上下文.脚本延时.call_args_list])
+
     def test_单独红色横幅不会误报奖励页(self):
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
