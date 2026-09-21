@@ -58,9 +58,17 @@ class 更新工人状态任务(夜世界基础任务):
             self.上下文.置脚本状态(f"读取工人状态失败: {e}")
             return False
 
-        空闲工人 = 状态["空闲工人"]
-        工人总数 = 状态["工人总数"]
-        更新时间 = 状态["更新时间"]
+        if not isinstance(状态, dict):
+            self.上下文.置脚本状态(f"工人状态格式异常：{状态!r}")
+            return False
+
+        try:
+            空闲工人 = int(状态["空闲工人"])
+            工人总数 = int(状态["工人总数"])
+            更新时间 = float(状态["更新时间"])
+        except (KeyError, TypeError, ValueError) as e:
+            self.上下文.置脚本状态(f"工人状态字段缺失或无效：{e}，不执行建筑升级")
+            return False
 
         # 1. 数据是否过期
         if time.time() - 更新时间 > 120:
