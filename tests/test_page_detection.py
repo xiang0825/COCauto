@@ -45,9 +45,21 @@ class 页面识别测试(unittest.TestCase):
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
         cv2.rectangle(图像, (10, 430), (105, 470), (0, 0, 220), -1)
+        for 左, 上, 右, 下 in (
+            (175, 185, 305, 445),
+            (340, 190, 470, 450),
+            (500, 135, 625, 420),
+        ):
+            cv2.rectangle(图像, (左, 上), (右, 下), (220, 220, 220), 8)
         结果 = self.识别器.识别(图像, 战斗中=True)
         self.assertEqual(结果.页面, "战斗奖励选择")
         self.assertTrue(any("奖励选择红色横幅" in 依据 for 依据 in 结果.依据))
+
+    def test_单独红色横幅不会误报奖励页(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
+        结果 = self.识别器.识别(图像, 战斗中=True)
+        self.assertNotEqual(结果.页面, "战斗奖励选择")
 
     def test_源码运行不依赖当前工作目录寻找图片库(self):
         """从其他 cwd 启动后，模板库仍应定位到源码根目录。"""
@@ -147,6 +159,24 @@ class 页面识别测试(unittest.TestCase):
         self.assertTrue(上下文._战斗奖励弹窗已确认)
         self.assertTrue(上下文.页面恢复失败)
         self.assertTrue(any("奖励选择弹窗" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
+    def test_启动时结算页先回营不误判主页(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.数据库 = Mock()
+        上下文.机器人标志 = "robot_test"
+        上下文.置脚本状态 = Mock()
+        上下文.点击已确认安全按钮 = Mock(return_value=True)
+        上下文.脚本延时 = Mock()
+        任务 = 检测游戏登录状态任务(上下文)
+        页面结果 = SimpleNamespace(页面="战斗结算", 可信度=0.85)
+        页面识别 = Mock()
+        页面识别.识别.return_value = 页面结果
+        识图引擎 = Mock()
+        识图引擎.执行匹配.return_value = (True, (640, 620), 0.85)
+
+        self.assertTrue(任务._启动阶段处理结算页(np.zeros((600, 800, 3), dtype=np.uint8), 识图引擎, 页面识别))
+        上下文.点击已确认安全按钮.assert_called_once_with(640, 620, 延时=180)
+        self.assertTrue(any("先点击回营" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
 
     def test_内存错误释放资源并停止任务(self):
         上下文 = 任务上下文.__new__(任务上下文)

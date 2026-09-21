@@ -120,6 +120,43 @@ class 页面识别器:
             return 0.0
         return 0.0
 
+    def _奖励卡片结构数量(self, 图像: np.ndarray) -> int:
+        """统计奖励弹窗中央的竖向卡片，过滤普通页面的红色物体误报。"""
+        if not isinstance(图像, np.ndarray) or 图像.ndim < 2 or 图像.size == 0:
+            return 0
+        try:
+            高, 宽 = 图像.shape[:2]
+            灰度 = cv2.cvtColor(图像, cv2.COLOR_BGR2GRAY)
+            边缘 = cv2.Canny(灰度, 80, 180)
+            _, _, 统计, _ = cv2.connectedComponentsWithStats(
+                (边缘 > 0).astype(np.uint8), 8
+            )
+            最小面积 = max(250, int(宽 * 高 * 0.0008))
+            最小宽度 = max(80, int(宽 * 0.10))
+            最小高度 = max(160, int(高 * 0.28))
+            中心x列表 = []
+            for x, y, 连通宽, 连通高, 面积 in 统计[1:]:
+                if not (
+                    面积 >= 最小面积
+                    and 连通宽 >= 最小宽度
+                    and 连通高 >= 最小高度
+                    and 0.30 <= 连通宽 / max(1, 连通高) <= 0.85
+                    and int(高 * 0.18) <= y <= int(高 * 0.50)
+                    and int(宽 * 0.12) <= x <= int(宽 * 0.88)
+                ):
+                    continue
+                # 同一张卡片的内外边框可能被分成两个连通块，只计一个。
+                中心x列表.append(int(x + 连通宽 / 2))
+            中心x列表.sort()
+            去重中心x = []
+            最小卡间距 = max(40, int(宽 * 0.08))
+            for 中心x in 中心x列表:
+                if not 去重中心x or 中心x - 去重中心x[-1] >= 最小卡间距:
+                    去重中心x.append(中心x)
+            return len(去重中心x)
+        except Exception:
+            return 0
+
     def _奖励选择横幅分数(self, 图像: np.ndarray) -> float:
         """识别战斗结束后的奖励选择横幅。
 
@@ -169,7 +206,11 @@ class 页面识别器:
                     and 全局x + 连通宽 <= int(宽 * 0.84)
                     and 全局y <= int(高 * 0.24)
                 ):
-                    return 0.96
+                    # 仅有红色长条不足以确认奖励页；主世界/军队配置页
+                    # 也可能出现类似颜色。奖励页必须同时拥有至少两张
+                    # 位于中央的竖向卡片。
+                    if self._奖励卡片结构数量(图像) >= 2:
+                        return 0.96
         except Exception:
             return 0.0
         return 0.0
@@ -182,7 +223,10 @@ class 页面识别器:
                 页面="战斗奖励选择",
                 世界=None,
                 可信度=奖励选择分数,
-                依据=(f"奖励选择红色横幅{奖励选择分数:.2f}",),
+                依据=(
+                    f"奖励选择红色横幅{奖励选择分数:.2f}",
+                    f"奖励卡片结构{self._奖励卡片结构数量(屏幕图像)}张",
+                ),
             )
 
         模板战斗分数 = self._最佳分数(
