@@ -1,3 +1,4 @@
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -41,6 +42,44 @@ class 打开进攻页面测试(unittest.TestCase):
         ):
             self.assertTrue(任务._等待并点击攻击按钮(上下文))
 
+        上下文.点击.assert_called_once_with(
+            705, 535, 延时=700, 是否精确点击=True
+        )
+
+    def test_启动时已经在战斗页不再点击主世界入口(self):
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            识别点击画面=Mock(
+                return_value=SimpleNamespace(页面="战斗中")
+            ),
+            点击=Mock(),
+            停止事件=threading.Event(),
+        )
+
+        任务.上下文 = 上下文
+        self.assertTrue(任务.执行())
+        self.assertTrue(上下文._入口已进入战斗)
+        上下文.点击.assert_not_called()
+
+    def test_攻击按钮点击后直接进入战斗会交给下兵流程(self):
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        页面状态 = iter((
+            SimpleNamespace(页面="未知"),
+            SimpleNamespace(页面="战斗中"),
+        ))
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=self.军队配置画面())
+            ),
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            识别点击画面=Mock(side_effect=lambda **_: next(页面状态)),
+        )
+
+        self.assertTrue(任务._等待并点击攻击按钮(上下文))
+        self.assertTrue(上下文._入口已进入战斗)
         上下文.点击.assert_called_once_with(
             705, 535, 延时=700, 是否精确点击=True
         )
