@@ -503,6 +503,86 @@ class ADB设备操作类:
         return 解析ADB设备列表(输出)
 
     @classmethod
+    def 自动选择游戏设备(
+            cls,
+            adb路径: str = "",
+            包名: str = "com.supercell.clashofclans",
+            runner: Callable = subprocess.run,
+            自动检测路径: bool = True,
+    ) -> ADB设备信息:
+        """在未保存 serial 时安全选择当前运行目标游戏的模拟器。
+
+        只允许状态为 ``device`` 且不像实体手机的设备参与候选。候选评分
+        依次考虑目标包是否已安装、目标包是否在前台。若最高分并列则
+        拒绝自动选择，避免把输入发到另一台
+        模拟器；调用方可以让用户在连接页手动确认。
+        """
+        已解析路径 = cls.解析ADB路径(adb路径, 自动检测=自动检测路径)
+        设备列表 = cls.扫描设备(
+            已解析路径,
+            runner=runner,
+            自动检测路径=False,
+        )
+        候选 = [
+            设备 for 设备 in 设备列表
+            if 设备.状态 == "device" and not 设备.疑似实体设备
+        ]
+        if not 候选:
+            可用 = "、".join(设备.显示文本 for 设备 in 设备列表) or "无"
+            raise ADB错误(
+                f"没有可自动绑定的模拟器；当前 ADB 设备：{可用}。"
+                "请在连接页确认模拟器已启动并开启 ADB 调试。"
+            )
+
+        def 解码(值) -> str:
+            if isinstance(值, bytes):
+                return 值.decode("utf-8", errors="replace")
+            return str(值 or "")
+
+        评分结果 = []
+        for 设备 in 候选:
+            适配器 = cls(
+                已解析路径,
+                设备.序列号,
+                runner=runner,
+                自动检测路径=False,
+            )
+            try:
+                已安装 = 包名 in 解码(
+                    适配器.执行(
+                        ["shell", "pm", "list", "packages", 包名],
+                        timeout=5,
+                    )
+                )
+                前台文本 = 解码(
+                    适配器.执行(
+                        ["shell", "dumpsys", "activity", "activities"],
+                        timeout=5,
+                    )
+                )
+            except (ADB错误, OSError, subprocess.TimeoutExpired):
+                continue
+            当前前台 = 包名 in 前台文本
+            评分 = (100 if 当前前台 else 0) + (10 if 已安装 else 0)
+            评分结果.append((评分, 设备))
+
+        if not 评分结果:
+            raise ADB错误(
+                f"无法在候选模拟器上确认游戏包 {包名}；"
+                "请在连接页手动扫描并选择设备。"
+            )
+        评分结果.sort(key=lambda 项: 项[0], reverse=True)
+        最高分 = 评分结果[0][0]
+        最佳 = [设备 for 分数, 设备 in 评分结果 if 分数 == 最高分]
+        if len(最佳) != 1 or 最高分 <= 0:
+            并列 = "、".join(设备.显示文本 for 设备 in 最佳)
+            raise ADB错误(
+                f"自动检测到多个可能的 CoC 模拟器，无法安全选择：{并列}。"
+                "请在连接页手动选择并确认目标。"
+            )
+        return 最佳[0]
+
+    @classmethod
     def 连接网络设备(
             cls,
             adb路径: str,

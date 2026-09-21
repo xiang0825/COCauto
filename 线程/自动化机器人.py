@@ -60,6 +60,31 @@ class 自动化机器人:
 
     def 启动(self):
         设置 = self.数据库.获取机器人设置(self.机器人标志)
+        # 连接页启用自动检测且尚未保存 serial 时，按 CoC 包名和当前前台
+        # 状态安全绑定设备；多设备并列时仍要求用户手动确认，禁止猜测。
+        if (
+            getattr(设置, "ADB自动检测路径", True)
+            and not getattr(设置, "ADB设备序列号", "")
+        ):
+            已解析路径 = ADB设备操作类.解析ADB路径(
+                设置.ADB路径,
+                自动检测=True,
+            )
+            设备 = ADB设备操作类.自动选择游戏设备(
+                已解析路径,
+                getattr(设置, "部落冲突包名", None)
+                or "com.supercell.clashofclans",
+                自动检测路径=False,
+            )
+            设置.ADB路径 = 已解析路径
+            设置.ADB设备序列号 = 设备.序列号
+            设置.ADB已确认模拟器 = True
+            self.数据库.保存机器人设置(self.机器人标志, 设置)
+            self.数据库.记录日志(
+                self.机器人标志,
+                f"ADB 自动绑定模拟器：{设备.序列号}；前台 CoC 包名已确认",
+                time.time() + 60,
+            )
         if not 设置.ADB已确认模拟器 or not 设置.ADB设备序列号:
             raise RuntimeError("请先在“模拟器连接”页选择 ADB 设备、确认它是模拟器并保存。")
         # 在创建后台任务前验证路径，避免线程因配置错误静默退出。

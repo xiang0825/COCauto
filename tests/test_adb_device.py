@@ -79,6 +79,57 @@ class ADB设备测试(unittest.TestCase):
         with self.assertRaisesRegex(ADB错误, "未启用 ADB 自动检测"):
             ADB设备操作类.解析ADB路径("", 自动检测=False)
 
+    def test_自动选择当前前台CoC模拟器(self):
+        class 自动选择Runner:
+            def __init__(自身):
+                自身.命令 = []
+
+            def __call__(自身, 命令, **_参数):
+                自身.命令.append(命令)
+                if 命令[1:] == ["devices", "-l"]:
+                    return 结果(
+                        b"List of devices attached\n"
+                        b"127.0.0.1:16416 device model:SM_A5560\n"
+                        b"emulator-5556 device model:MuMu\n"
+                    )
+                if 命令[1:4] == ["-s", "127.0.0.1:16416", "shell"]:
+                    if 命令[-3:] == ["list", "packages", "com.supercell.clashofclans"]:
+                        return 结果(b"package:com.supercell.clashofclans\n")
+                    return 结果(b"mResumedActivity: com.supercell.clashofclans/.GameApp\n")
+                if 命令[1:4] == ["-s", "emulator-5556", "shell"]:
+                    if 命令[-3:] == ["list", "packages", "com.supercell.clashofclans"]:
+                        return 结果(b"package:com.supercell.clashofclans\n")
+                    return 结果(b"mResumedActivity: app.lawnchair/.LawnchairLauncher\n")
+                return 结果()
+
+        runner = 自动选择Runner()
+        with patch.object(ADB设备操作类, "解析ADB路径", return_value=ADB):
+            设备 = ADB设备操作类.自动选择游戏设备(
+                ADB,
+                runner=runner,
+                自动检测路径=False,
+            )
+        self.assertEqual(设备.序列号, "127.0.0.1:16416")
+
+    def test_自动选择设备并列时拒绝猜测(self):
+        class 并列Runner:
+            def __call__(自身, 命令, **_参数):
+                if 命令[1:] == ["devices", "-l"]:
+                    return 结果(
+                        b"List of devices attached\n"
+                        b"127.0.0.1:16416 device model:MuMu\n"
+                        b"emulator-5556 device model:MuMu\n"
+                    )
+                return 结果(b"package:com.supercell.clashofclans\n")
+
+        with patch.object(ADB设备操作类, "解析ADB路径", return_value=ADB):
+            with self.assertRaisesRegex(ADB错误, "多个可能的 CoC 模拟器"):
+                ADB设备操作类.自动选择游戏设备(
+                    ADB,
+                    runner=并列Runner(),
+                    自动检测路径=False,
+                )
+
     def test_实体Samsung设备即使确认也会被阻止(self):
         runner = 假Runner(结果(b"List of devices attached\nR58M1234567 device model:SM_A5560 product:a55xchn\n"))
         设备 = ADB设备操作类(ADB, "R58M1234567", runner=runner)
