@@ -92,6 +92,40 @@ class 任务计划测试(unittest.TestCase):
         回主世界.assert_not_called()
         self.assertFalse(机器人.停止事件.is_set())
 
+    def test_天鹰任务无法回到主世界时不继续点击(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = threading.Event()
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+        )
+        检测登录 = Mock()
+
+        with patch("线程.自动化机器人.到主世界任务") as 回主世界, \
+                patch("任务流程.天鹰火炮成就.刷天鹰火炮任务") as 刷天鹰:
+            回主世界.return_value.执行.return_value = False
+
+            结果 = 机器人._执行天鹰计划(上下文, 检测登录)
+
+        self.assertFalse(结果)
+        self.assertTrue(上下文.页面恢复失败)
+        刷天鹰.assert_not_called()
+        检测登录.assert_not_called()
+
+    def test_刷墙普通无操作不会被当成页面故障(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = threading.Event()
+        上下文 = SimpleNamespace(
+            刷墙需要资源=False,
+            页面恢复失败=False,
+        )
+        机器人._执行升级计划 = Mock(return_value=True)
+
+        结果 = 机器人._执行刷墙计划(上下文, Mock())
+
+        self.assertTrue(结果)
+        self.assertFalse(上下文.页面恢复失败)
+
     def test_非主页时最多单次ESC并确认主世界主页(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
         键盘 = Mock()
