@@ -331,33 +331,69 @@ class 等待战斗结束并回营任务(基础任务):
 
     @staticmethod
     def 识别星数(屏幕图像, OCR文本: str):
-        """优先从 OCR 读取星数，失败时在结果页中心区域检测金色星形区域。"""
-        匹配 = re.search(r"([0-3])\s*星", OCR文本)
+        """优先从 OCR 读取星数，再按固定结果页星形几何检测。"""
+        文本 = str(OCR文本 or "")
+        匹配 = re.search(r"([0-3])\s*星", 文本)
         if 匹配:
             return int(匹配.group(1))
-        # 战斗进行中也有大量金色建筑，只有结果页明确出现胜负词时
-        # 才启用图像兜底，避免把建筑误判成三颗星。
+        # 战败的结果语义本身就确定为 0 星；先返回，避免把金色结算
+        # 横幅或资源图标误当成星形区域。
+        if any(词 in 文本 for 词 in ("失败", "失敗", "战败", "戰敗", "败", "敗")):
+            return 0
         if not any(
-            词 in OCR文本
-            for 词 in ("胜利", "勝利", "获胜", "獲勝", "失败", "失敗", "战败", "戰敗")
+            词 in 文本
+            for 词 in ("胜利", "勝利", "获胜", "獲勝", "胜出", "勝出", "胜", "勝")
         ):
             return None
         if 屏幕图像 is None or getattr(屏幕图像, "ndim", 0) != 3:
             return None
 
         高, 宽 = 屏幕图像.shape[:2]
-        # 结果页的星星位于中央上半区；限制区域以排除顶部资源图标。
-        区域 = 屏幕图像[int(高 * 0.12):int(高 * 0.48), int(宽 * 0.25):int(宽 * 0.75)]
-        hsv = cv2.cvtColor(区域, cv2.COLOR_BGR2HSV)
-        掩码 = cv2.inRange(hsv, (12, 90, 120), (45, 255, 255))
-        掩码 = cv2.morphologyEx(掩码, cv2.MORPH_OPEN, np.ones((3, 3), dtype=np.uint8))
-        数量, _, 统计, _ = cv2.connectedComponentsWithStats(掩码)
-        候选数量 = 0
-        for 索引 in range(1, 数量):
-            _, _, 框宽, 框高, 面积 = 统计[索引]
-            if 12 <= 框宽 <= 130 and 12 <= 框高 <= 100 and 面积 >= 80:
-                候选数量 += 1
-        return min(3, 候选数量) if 候选数量 else None
+        if 高 <= 0 or 宽 <= 0:
+            return None
+
+        # CoC 结果页的三颗星不是一条水平线，而是“左下、中央上、
+        # 右下”的三角排布。相对位置和大小在不同分辨率下保持稳定；
+        # 只检测每个星形内部相对周边的亮度差，不再把整条金色横幅
+        # 当作连通块计数。
+        灰度 = cv2.cvtColor(屏幕图像, cv2.COLOR_BGR2GRAY)
+        半径 = min(宽 * 0.07, 高 * 0.095)
+
+        def 星形掩码(中心x, 中心y, 半径值, 比例):
+            点列表 = []
+            for 索引 in range(10):
+                角度 = -np.pi / 2 + 索引 * np.pi / 5
+                当前半径 = 半径值 * 比例 * (1.0 if 索引 % 2 == 0 else 0.42)
+                点列表.append(
+                    (
+                        round(中心x + 当前半径 * np.cos(角度)),
+                        round(中心y + 当前半径 * np.sin(角度)),
+                    )
+                )
+            掩码 = np.zeros((高, 宽), dtype=np.uint8)
+            cv2.fillPoly(掩码, [np.asarray(点列表, dtype=np.int32)], 255)
+            return 掩码.astype(bool)
+
+        星形中心 = (
+            (宽 * 0.381, 高 * 0.220),
+            (宽 * 0.506, 高 * 0.125),
+            (宽 * 0.625, 高 * 0.225),
+        )
+        已点亮 = 0
+        for 中心x, 中心y in 星形中心:
+            内部 = 星形掩码(中心x, 中心y, 半径, 0.62)
+            外环 = (
+                星形掩码(中心x, 中心y, 半径 * 1.45, 1.0)
+                & ~星形掩码(中心x, 中心y, 半径, 1.05)
+            )
+            if not np.any(内部) or not np.any(外环):
+                continue
+            亮度差 = float(灰度[内部].mean() - 灰度[外环].mean())
+            # 结果动画可能整体变白，故阈值不能写成绝对亮度；
+            # 实机过渡结算样本中，点亮星约 6~8 以上，空星约 0~1。
+            if 亮度差 >= 5.0:
+                已点亮 += 1
+        return 已点亮 if 已点亮 else None
 
     @staticmethod
     def 校正星数(结果: str, 星数, 摧毁率):

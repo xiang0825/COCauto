@@ -1,5 +1,9 @@
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
+
+import cv2
+import numpy as np
 
 from 任务流程.主世界打鱼.等待战斗结束并回营 import 等待战斗结束并回营任务
 
@@ -57,6 +61,15 @@ class 回营状态机测试(unittest.TestCase):
         self.assertIsNone(等待战斗结束并回营任务.校正星数("胜利", 3, 99))
         self.assertEqual(等待战斗结束并回营任务.校正星数("胜利", 3, 100), 3)
         self.assertIn("未识别战斗结果", 等待战斗结束并回营任务.生成战斗诊断("未知", None, None, {}))
+
+    def test_实机结算星形布局识别两星(self):
+        图片 = Path(__file__).resolve().parents[1] / ".tmp" / "runtime_after_battle_wait.png"
+        if not 图片.exists():
+            self.skipTest("没有维护观察截图")
+        数据 = np.fromfile(图片, dtype=np.uint8)
+        图像 = cv2.imdecode(数据, cv2.IMREAD_COLOR)
+        self.assertIsNotNone(图像)
+        self.assertEqual(等待战斗结束并回营任务.识别星数(图像, "胜利"), 2)
 
     def test_点击回营后必须确认主界面(self):
         任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
