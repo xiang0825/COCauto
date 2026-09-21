@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 from 任务流程.主世界打鱼.等待战斗结束并回营 import 等待战斗结束并回营任务
 
@@ -61,6 +62,31 @@ class 回营状态机测试(unittest.TestCase):
         self.assertTrue(结果)
         self.assertEqual(上下文.点击记录, [(120, 130)])
         self.assertIn("已确认回到主界面，可进入下一场", 上下文.状态)
+
+    def test_实机零点八五分结算按钮会进入回营流程(self):
+        class 评分匹配器:
+            def 执行匹配(self, _图像, 模板路径, 相似度阈值=0.8, **_参数):
+                if "家乡进攻图标" in 模板路径:
+                    return True, (0, 0), None
+                if "回营" in 模板路径:
+                    return 相似度阈值 <= 0.85, (409, 520), None
+                return False, (0, 0), None
+
+        class 页面识别器:
+            def 识别(self, _图像, **_参数):
+                return SimpleNamespace(页面="战斗结算", 可信度=0.85)
+
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = 评分匹配器()
+        任务.记录战斗结果 = lambda *_参数, **_关键字: None
+        上下文 = _上下文()
+        上下文._获取点击页面识别器 = lambda: 页面识别器()
+
+        结果 = 任务.等待回营地按钮出现(上下文)
+
+        self.assertTrue(结果)
+        self.assertEqual(上下文.点击记录, [(409, 520)])
+        self.assertIn("检测到回营按钮，点击返回主界面", 上下文.状态)
 
 
 if __name__ == "__main__":

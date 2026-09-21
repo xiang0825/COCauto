@@ -143,6 +143,40 @@ class 任务计划测试(unittest.TestCase):
         self.assertEqual(键盘.按字符按压.call_count, 3)
         self.assertTrue(上下文.页面恢复失败)
 
+    def test_战斗回营失败时禁止开启下一轮(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = threading.Event()
+        机器人.机器人标志 = "测试机器人"
+        机器人._进入并确认主世界 = Mock(return_value=True)
+        机器人._取已确认家乡资源 = Mock(
+            return_value={"金币": 1, "圣水": 1, "黑油": 0}
+        )
+        状态 = SimpleNamespace(状态数据={"家乡资源": {"金币": 1, "圣水": 1, "黑油": 0}})
+        上下文 = SimpleNamespace(
+            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态)),
+            机器人标志="测试机器人",
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+        检测登录 = Mock()
+
+        with patch("线程.自动化机器人.收集资源任务"), \
+             patch("线程.自动化机器人.更新家乡资源状态任务") as 更新资源, \
+             patch("线程.自动化机器人.主世界打鱼任务") as 打鱼, \
+             patch("线程.自动化机器人.是否家乡资源打满", return_value=False):
+            更新资源.return_value.执行.return_value = True
+            打鱼.return_value.执行.return_value = False
+
+            结果 = 机器人._执行主世界刷资源计划(上下文, 检测登录)
+
+        self.assertFalse(结果)
+        self.assertTrue(上下文.页面恢复失败)
+        打鱼.return_value.执行.assert_called_once()
+        检测登录.assert_not_called()
+        self.assertTrue(
+            any("禁止开始下一轮" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

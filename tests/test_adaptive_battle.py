@@ -224,6 +224,26 @@ class 自适应战斗测试(unittest.TestCase):
         )
         self.assertTrue(任务._结束画面有结果标记(np.zeros((600, 800, 3), dtype=np.uint8)))
 
+    def test_页面识别器确认零点八五分结算页(self):
+        class 匹配器:
+            def 执行匹配(self, _图像, _模板路径, **_参数):
+                return False, (0, 0), None
+
+        class 页面识别器:
+            def 识别(self, _图像, **_参数):
+                return SimpleNamespace(页面="战斗结算", 可信度=0.85)
+
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.模板识别 = 匹配器()
+        任务.ocr引擎 = lambda *_参数, **_关键字: ([], None)
+        任务.上下文 = SimpleNamespace(
+            _获取点击页面识别器=lambda: 页面识别器()
+        )
+
+        self.assertTrue(
+            任务._结束画面有结果标记(np.zeros((600, 800, 3), dtype=np.uint8))
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
