@@ -71,6 +71,23 @@ class 回营状态机测试(unittest.TestCase):
         self.assertIsNotNone(图像)
         self.assertEqual(等待战斗结束并回营任务.识别星数(图像, "胜利"), 2)
 
+    def test_结算横幅灰度OCR补足繁体战败(self):
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        调用维度 = []
+
+        def 假OCR(图像, **_参数):
+            调用维度.append(getattr(图像, "ndim", None))
+            if getattr(图像, "ndim", None) == 2:
+                return [([], "載敗")], None
+            return [], None
+
+        任务.ocr引擎 = 假OCR
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        文本 = 任务.识别结果页横幅文本(图像)
+        self.assertIn("敗", 文本)
+        self.assertIn(3, 调用维度)
+        self.assertIn(2, 调用维度)
+
     def test_点击回营后必须确认主界面(self):
         任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
         任务.模板识别 = _匹配器()

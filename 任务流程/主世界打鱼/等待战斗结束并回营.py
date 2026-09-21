@@ -235,11 +235,33 @@ class 等待战斗结束并回营任务(基础任务):
             if 右 <= 左 or 下 <= 上:
                 return ""
             横幅 = 屏幕图像[上:下, 左:右]
-            OCR结果, _ = self.ocr引擎(横幅, use_cls=False)
-            文本 = "".join(
-                str(项[1]) for 项 in (OCR结果 or []) if len(项) > 1
-            )
-            return 文本
+            # 结算横幅的金色丝带会把原色 OCR 的文字吞掉，尤其是
+            # 繁体“戰敗/勝利”。实机截图中灰度化后反而能稳定保留
+            # 文字轮廓，因此保留原图结果，同时补跑一次灰度图；只在
+            # 两者都没有文字时才使用放大灰度图，避免每次结果页都
+            # 额外创建多套大图和 ONNX 缓冲。
+            待识别图像列表 = [横幅]
+            if getattr(横幅, "ndim", 0) == 3:
+                待识别图像列表.append(cv2.cvtColor(横幅, cv2.COLOR_BGR2GRAY))
+                # 横幅较大时，整块灰度 OCR 容易被战利品数字抢占；
+                # 再取中间的结果词区域，专门覆盖“戰敗/勝利”所在位置。
+                词区 = 屏幕图像[
+                    int(高 * 0.20):int(高 * 0.42),
+                    int(宽 * 0.30):int(宽 * 0.70),
+                ]
+                if getattr(词区, "size", 0):
+                    待识别图像列表.append(
+                        cv2.cvtColor(词区, cv2.COLOR_BGR2GRAY)
+                    )
+            文本列表 = []
+            for 待识别图像 in 待识别图像列表:
+                OCR结果, _ = self.ocr引擎(待识别图像, use_cls=False)
+                文本 = "".join(
+                    str(项[1]) for 项 in (OCR结果 or []) if len(项) > 1
+                )
+                if 文本:
+                    文本列表.append(文本)
+            return "".join(文本列表)
         except Exception:
             # 结果统计不能因为补充 OCR 失败而阻塞回营；整屏 OCR
             # 或实时摧毁率仍然会保留。
