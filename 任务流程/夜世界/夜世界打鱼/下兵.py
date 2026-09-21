@@ -55,7 +55,7 @@ class 下兵(夜世界基础任务):
             self.上下文.置脚本状态("兵种技能已放完，等待战斗结束",3*60)
             return True
 
-        except RuntimeError as e:
+        except Exception as e:
             self.异常处理(e)
             return False
 

@@ -23,7 +23,7 @@ class 等待进入战斗(夜世界基础任务):
                 self.上下文.脚本延时(50)
 
             raise RuntimeError(f"操作超时：一直卡白云或者某处,导致一直没能进入战斗！已经等待了{超时时间}")
-        except RuntimeError as e:
+        except Exception as e:
             self.异常处理(e)
             return False
 
