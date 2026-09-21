@@ -128,6 +128,9 @@ class ADB设备操作类:
         # dumpsys window 的逻辑 display ID；两者必须分别缓存，不能混用。
         self._输入显示ID: str | None = None
         self._输入显示ID更新时间 = 0.0
+        self._触摸事件设备: str | None = None
+        self._触摸事件原始尺寸: tuple[int, int] | None = None
+        self._触摸事件更新时间 = 0.0
         self._目标已验证 = False
         # 运行期输入只能发给这个包所在的前台窗口。空值表示兼容仅做
         # ADB/截图的工具调用；正式机器人启动时会立即设置为 CoC 包名。
@@ -580,6 +583,9 @@ class ADB设备操作类:
         self._截图显示ID更新时间 = 0.0
         self._输入显示ID = None
         self._输入显示ID更新时间 = 0.0
+        self._触摸事件设备 = None
+        self._触摸事件原始尺寸 = None
+        self._触摸事件更新时间 = 0.0
 
     def _是MuMu连接(self) -> bool:
         """识别 MuMu ADB；不把普通网络/USB Android 设备当成模拟器。"""
@@ -692,6 +698,179 @@ class ADB设备操作类:
             return []
         显示ID = self._获取MuMu输入显示ID()
         return ["-d", 显示ID] if 显示ID else []
+
+    @staticmethod
+    def _解析MuMu触摸事件设备(输入状态: str, 逻辑显示ID: str) -> str | None:
+        """从 ``dumpsys input`` 找到指定 MuMu display 对应的触摸 event。"""
+        文本 = str(输入状态 or "")
+        逻辑显示ID = str(逻辑显示ID or "").strip()
+        if not 文本 or not 逻辑显示ID:
+            return None
+
+        # Event Hub State 先给出 hub id 到 /dev/input/eventN 的映射。
+        hub到路径: dict[str, str] = {}
+        行列表 = 文本.splitlines()
+        for 索引, 行 in enumerate(行列表):
+            匹配 = re.match(r"^\s*(\d+):\s+Xiaomi Touchscreen\s*$", 行)
+            if not 匹配:
+                continue
+            for 后续 in 行列表[索引 + 1:索引 + 12]:
+                路径匹配 = re.match(r"^\s*Path:\s+(/dev/input/event\d+)\s*$", 后续)
+                if 路径匹配:
+                    hub到路径[匹配.group(1)] = 路径匹配.group(1)
+                    break
+
+        # Input Reader State 把 hub id 和逻辑 display 关联起来。
+        设备块列表 = re.finditer(
+            r"(?ms)^\s*Device\s+\d+:\s+Xiaomi Touchscreen.*?"
+            r"(?=^\s*Device\s+\d+:|\Z)",
+            文本,
+        )
+        for 设备块 in 设备块列表:
+            内容 = 设备块.group(0)
+            显示匹配 = re.search(
+                r"Viewport INTERNAL:\s*displayId=(\d+)", 内容
+            )
+            hub匹配 = re.search(
+                r"EventHub Devices:\s*\[\s*(\d+)\s*\]", 内容
+            )
+            if (
+                显示匹配
+                and hub匹配
+                and 显示匹配.group(1) == 逻辑显示ID
+                and hub匹配.group(1) in hub到路径
+            ):
+                return hub到路径[hub匹配.group(1)]
+        return None
+
+    def _获取MuMu触摸事件设备(self) -> tuple[str, int, int] | None:
+        """返回 CoC display 对应的触摸设备和原始轴尺寸。"""
+        当前时间 = time.monotonic()
+        if (
+            self._触摸事件设备
+            and self._触摸事件原始尺寸
+            and 当前时间 - self._触摸事件更新时间 < 30.0
+        ):
+            return (
+                self._触摸事件设备,
+                self._触摸事件原始尺寸[0],
+                self._触摸事件原始尺寸[1],
+            )
+        try:
+            逻辑显示ID = self._获取MuMu输入显示ID()
+            if not 逻辑显示ID:
+                return None
+            输入状态 = self.执行(["shell", "dumpsys", "input"], timeout=10)
+            if isinstance(输入状态, bytes):
+                输入状态 = 输入状态.decode("utf-8", errors="replace")
+            事件设备 = self._解析MuMu触摸事件设备(str(输入状态), 逻辑显示ID)
+            if not 事件设备:
+                return None
+            轴状态 = self.执行(["shell", "getevent", "-lp", 事件设备], timeout=8)
+            if isinstance(轴状态, bytes):
+                轴状态 = 轴状态.decode("utf-8", errors="replace")
+            x匹配 = re.search(
+                r"ABS_MT_POSITION_X\s*:.*?\bmax\s+(\d+)", str(轴状态)
+            )
+            y匹配 = re.search(
+                r"ABS_MT_POSITION_Y\s*:.*?\bmax\s+(\d+)", str(轴状态)
+            )
+            if not x匹配 or not y匹配:
+                return None
+            原始尺寸 = (int(x匹配.group(1)), int(y匹配.group(1)))
+            if 原始尺寸[0] <= 0 or 原始尺寸[1] <= 0:
+                return None
+            self._触摸事件设备 = 事件设备
+            self._触摸事件原始尺寸 = 原始尺寸
+            self._触摸事件更新时间 = 当前时间
+            return 事件设备, 原始尺寸[0], 原始尺寸[1]
+        except (ADB错误, ValueError, TypeError, re.error):
+            return None
+
+    @staticmethod
+    def _生成MuMu缩放脚本(
+            事件设备: str,
+            原始宽度: int,
+            原始高度: int,
+            屏幕宽度: int,
+            屏幕高度: int,
+            次数: int,
+    ) -> str:
+        """生成 MuMu 触摸屏 protocol-B 的双指向内手势。"""
+        # CoC 在模拟器中使用双指捏合缩小视野；MuMu 的触摸轴通常是
+        # 720×1280 竖向，而游戏 display 是 1280×720 横向，需要按
+        # Rotation270 做坐标转换。非该布局时退回线性缩放。
+        def 转原始坐标(x: float, y: float) -> tuple[int, int]:
+            if 原始宽度 == 屏幕高度 and 原始高度 == 屏幕宽度:
+                原始x = 原始宽度 - round(y * 原始宽度 / max(1, 屏幕高度))
+                原始y = round(x * 原始高度 / max(1, 屏幕宽度))
+            else:
+                原始x = round(x * 原始宽度 / max(1, 屏幕宽度))
+                原始y = round(y * 原始高度 / max(1, 屏幕高度))
+            return (
+                max(0, min(原始宽度, 原始x)),
+                max(0, min(原始高度, 原始y)),
+            )
+
+        def 事件(类型: int, 代码: int, 值: int):
+            命令列表.append(f"sendevent {事件设备} {类型} {代码} {值}")
+
+        def 同步():
+            命令列表.append(f"sendevent {事件设备} 0 0 0")
+
+        命令列表: list[str] = []
+        中心x, 中心y = 屏幕宽度 / 2, 屏幕高度 / 2
+        # 起点较远、终点靠近中心，保证一次手势就能明显拉远。
+        起点1 = 转原始坐标(中心x - 屏幕宽度 * 0.15, 中心y - 屏幕高度 * 0.15)
+        起点2 = 转原始坐标(中心x + 屏幕宽度 * 0.15, 中心y + 屏幕高度 * 0.15)
+        终点1 = 转原始坐标(中心x - 屏幕宽度 * 0.055, 中心y - 屏幕高度 * 0.055)
+        终点2 = 转原始坐标(中心x + 屏幕宽度 * 0.055, 中心y + 屏幕高度 * 0.055)
+        步数 = 16
+        手势次数 = max(1, min(3, int(次数)))
+
+        for 手势序号 in range(手势次数):
+            追踪ID1, 追踪ID2 = 100 + 手势序号 * 2, 101 + 手势序号 * 2
+            事件(1, 330, 1)  # BTN_TOUCH down
+            事件(1, 325, 1)  # BTN_TOOL_FINGER down
+            事件(3, 47, 0)  # ABS_MT_SLOT 0
+            事件(3, 57, 追踪ID1)
+            事件(3, 53, 起点1[0])
+            事件(3, 54, 起点1[1])
+            事件(3, 47, 1)  # ABS_MT_SLOT 1
+            事件(3, 57, 追踪ID2)
+            事件(3, 53, 起点2[0])
+            事件(3, 54, 起点2[1])
+            同步()
+
+            for 步 in range(1, 步数 + 1):
+                比例 = 步 / 步数
+                点1 = (
+                    round(起点1[0] + (终点1[0] - 起点1[0]) * 比例),
+                    round(起点1[1] + (终点1[1] - 起点1[1]) * 比例),
+                )
+                点2 = (
+                    round(起点2[0] + (终点2[0] - 起点2[0]) * 比例),
+                    round(起点2[1] + (终点2[1] - 起点2[1]) * 比例),
+                )
+                事件(3, 47, 0)
+                事件(3, 53, 点1[0])
+                事件(3, 54, 点1[1])
+                事件(3, 47, 1)
+                事件(3, 53, 点2[0])
+                事件(3, 54, 点2[1])
+                同步()
+                命令列表.append("sleep 0.02")
+
+            事件(3, 47, 0)
+            事件(3, 57, -1)
+            事件(3, 47, 1)
+            事件(3, 57, -1)
+            事件(1, 325, 0)
+            事件(1, 330, 0)
+            同步()
+            if 手势序号 + 1 < 手势次数:
+                命令列表.append("sleep 0.08")
+        return "; ".join(命令列表)
 
     def _验证输入前台(self) -> None:
         """拒绝把触控/按键发给启动器或其他 Android 应用。"""
@@ -990,17 +1169,43 @@ class ADB设备操作类:
         return 结果
 
     def 游戏内拉远视距(self, 次数: int = 5, 间隔毫秒: int = 180) -> bool:
-        """向已确认在前台的 CoC 发送游戏内 F5 缩放键。
+        """向已确认在前台的 CoC 发送真实双指捏合以拉远视距。
 
-        该入口与普通系统功能键分离：每一次发送前都确认目标包名仍在
-        前台，避免把 F5 送给 MuMu 启动器或桌面显示层。
+        CoC 的缩放是多点触控手势，MuMu 的 ``input keyevent F5`` 虽然返回
+        成功，但不会改变游戏画面。MuMu 多显示下先定位 CoC 对应的
+        ``/dev/input/eventN``，再注入 protocol-B 双指事件；找不到明确的
+        触摸设备时不发送任何猜测输入，避免误触启动器或其他显示层。
         """
         self._验证目标()
-        次数 = max(1, min(8, int(次数)))
+        次数 = max(1, min(3, int(次数)))
+
+        if self._是MuMu连接():
+            self._验证输入前台()
+            触摸设备 = self._获取MuMu触摸事件设备()
+            if not 触摸设备:
+                raise ADB错误(
+                    "无法定位 CoC display 对应的 MuMu 触摸设备；"
+                    "已禁止发送无 display 目标的缩放输入。"
+                )
+            事件设备, 原始宽度, 原始高度 = 触摸设备
+            屏幕宽度, 屏幕高度 = self.取屏幕尺寸()
+            脚本 = self._生成MuMu缩放脚本(
+                事件设备,
+                原始宽度,
+                原始高度,
+                屏幕宽度,
+                屏幕高度,
+                次数,
+            )
+            self.执行(["shell", "sh", "-c", 脚本], timeout=max(15, 次数 * 15))
+            return True
+
+        # 非 MuMu 设备保留旧兼容路径；当前项目的 MuMu 会走上面的真实
+        # 多点触控实现，不再把无效 F5 当成成功的拉远视距。
         间隔毫秒 = max(80, min(500, int(间隔毫秒)))
         for 序号 in range(次数):
             self._验证输入前台()
-            self.执行(["shell", "input", *self._输入显示参数(), "keyevent", "135"], timeout=8)
+            self.执行(["shell", "input", "keyevent", "135"], timeout=8)
             if 序号 + 1 < 次数:
                 time.sleep(间隔毫秒 / 1000)
         return True
