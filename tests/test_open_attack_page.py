@@ -6,6 +6,8 @@ import cv2
 import numpy as np
 
 from 任务流程.主世界打鱼.打开进攻页面 import 打开进攻页面任务
+from 任务流程.主世界打鱼.搜索页面识别 import 搜索页面识别器
+from 任务流程.主世界打鱼.进攻 import 进攻任务
 
 
 class 打开进攻页面测试(unittest.TestCase):
@@ -34,13 +36,42 @@ class 打开进攻页面测试(unittest.TestCase):
             置脚本状态=Mock(),
         )
         with patch.object(
-            任务, "_是否出现下一个", side_effect=[False, True]
+            任务, "_是否出现下一个", side_effect=[False, True, True]
         ):
             self.assertTrue(任务._等待并点击攻击按钮(上下文))
 
         上下文.点击.assert_called_once_with(
             705, 535, 延时=700, 是否精确点击=True
         )
+
+    def test_繁体下一個按钮通过颜色和位置识别(self):
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        # 模拟实机搜索页的橙黄色“下一個”按钮；文字繁简不影响识别。
+        cv2.rectangle(画面, (664, 389), (793, 466), (80, 190, 245), -1)
+        命中, 中心, 依据, 分数 = 搜索页面识别器.查找下一个按钮(画面)
+        self.assertTrue(命中)
+        self.assertAlmostEqual(中心[0], 729, delta=5)
+        self.assertAlmostEqual(中心[1], 428, delta=5)
+        self.assertIn("按钮", 依据)
+        self.assertGreaterEqual(分数, 0.30)
+
+    def test_军队页底部攻击按钮不被当成下一個按钮(self):
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(画面, (630, 515), (780, 555), (73, 227, 154), -1)
+        命中, _, _, _ = 搜索页面识别器.查找下一个按钮(画面)
+        self.assertFalse(命中)
+
+    def test_兵栏第一格避开结束战斗按钮并覆盖当前实机卡牌(self):
+        第一格 = 进攻任务.兵栏槽位[0][1]
+        第二格 = 进攻任务.兵栏槽位[1][1]
+        self.assertGreaterEqual(第一格[0], 50)
+        self.assertLessEqual(第一格[1], 500)
+        self.assertGreater(第二格[0], 第一格[0])
+        self.assertEqual(len(进攻任务.兵栏槽位), 8)
+
+    def test_兵栏空槽OCR的XO不会把等级读成兵量(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        self.assertEqual(任务._识别槽位数量(np.zeros((20, 20, 3), dtype=np.uint8), "XO|12"), 0)
 
 
 if __name__ == "__main__":
