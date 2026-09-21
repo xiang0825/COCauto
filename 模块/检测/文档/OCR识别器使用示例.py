@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 
 from 模块.检测.OCR识别器.rapidocr_onnxruntime import RapidOCR
 import cv2
@@ -39,25 +40,30 @@ def draw_ocr_results(image_path, result):
     cv2.imwrite("./vis_result.jpg", img)
     print("可视化结果已保存至 vis_result.jpg")
 
-# 正确用法
-#engine = RapidOCR()
-engine=安全OCR引擎()
-engine2=安全OCR引擎()
+def main():
+    # 正确用法
+    # engine = RapidOCR()
+    engine = 安全OCR引擎()
+    engine2 = 安全OCR引擎()
 
-# 判断是不是单例模式
-print(engine2,engine)
+    # 判断是不是单例模式
+    print(engine2, engine)
 
-img_path = r"img.png"
+    img_path = str(Path(__file__).resolve().parent / "img.png")
 
-# 方式1：直接传入图片路径
-result, elapse = engine(img_path)
+    # 方式1：直接传入图片路径
+    result, elapse = engine(img_path)
 
-耗时开始时间 = time.time()
-# 方式2：传入OpenCV图像
-img = cv2.imread(img_path)
+    耗时开始时间 = time.time()
+    # 方式2：传入OpenCV图像
+    img = cv2.imread(img_path)
 
-result, elapse = engine(img)
-print("识别结果:", result)
-print(耗时开始时间 -time.time())
-# 可视化结果
-draw_ocr_results(img_path, result)
+    result, elapse = engine(img)
+    print("识别结果:", result)
+    print(耗时开始时间 - time.time())
+    # 可视化结果
+    draw_ocr_results(img_path, result)
+
+
+if __name__ == "__main__":
+    main()
