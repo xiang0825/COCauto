@@ -123,6 +123,11 @@ class ADB设备操作类:
         self._屏幕尺寸: tuple[int, int] | None = None
         self._截图显示ID: str | None = None
         self._截图显示ID更新时间 = 0.0
+        # MuMu Android 15 可能同时存在启动器 display 0 和游戏 display 7。
+        # screencap 使用的是 SurfaceFlinger 物理 ID，而 input -d 使用的是
+        # dumpsys window 的逻辑 display ID；两者必须分别缓存，不能混用。
+        self._输入显示ID: str | None = None
+        self._输入显示ID更新时间 = 0.0
         self._目标已验证 = False
         # 运行期输入只能发给这个包所在的前台窗口。空值表示兼容仅做
         # ADB/截图的工具调用；正式机器人启动时会立即设置为 CoC 包名。
@@ -571,6 +576,10 @@ class ADB设备操作类:
         self._目标包名 = str(包名 or "").strip()
         self._前台包名缓存 = ""
         self._前台包名缓存时间 = 0.0
+        self._截图显示ID = None
+        self._截图显示ID更新时间 = 0.0
+        self._输入显示ID = None
+        self._输入显示ID更新时间 = 0.0
 
     def _是MuMu连接(self) -> bool:
         """识别 MuMu ADB；不把普通网络/USB Android 设备当成模拟器。"""
@@ -620,28 +629,7 @@ class ADB设备操作类:
             return self._截图显示ID
         self._截图显示ID更新时间 = 当前时间
         try:
-            窗口输出 = self.执行(["shell", "dumpsys", "window", "displays"], timeout=8)
-            if isinstance(窗口输出, bytes):
-                窗口输出 = 窗口输出.decode("utf-8", errors="replace")
-            选中逻辑ID = None
-            候选逻辑ID = []
-            分块 = re.split(r"\n\s*Display:\s*mDisplayId=", "\n" + str(窗口输出))
-            for 块 in 分块[1:]:
-                匹配 = re.match(r"(\d+)", 块)
-                if not 匹配:
-                    continue
-                逻辑ID = 匹配.group(1)
-                # 多显示 MuMu 中，游戏所在 display 可能没有 mCurrentFocus，
-                # 但 mFocusedApp 会明确指向游戏；只看 mCurrentFocus 会错误
-                # 选择 display 0 的桌面，导致 OCR 永远读到启动器截图。
-                有窗口焦点 = bool(re.search(r"mCurrentFocus=(?!null\b)", 块))
-                有应用焦点 = bool(re.search(r"mFocusedApp=(?!null\b)", 块))
-                if 有窗口焦点 or 有应用焦点:
-                    候选逻辑ID.append(逻辑ID)
-                    if self._目标包名 and self._目标包名 in 块:
-                        选中逻辑ID = 逻辑ID
-            if 选中逻辑ID is None and 候选逻辑ID:
-                选中逻辑ID = 候选逻辑ID[-1]
+            选中逻辑ID = self._获取MuMu输入显示ID()
             if 选中逻辑ID is None:
                 return None
 
@@ -653,6 +641,57 @@ class ADB设备操作类:
         except (ADB错误, ValueError, TypeError, re.error):
             self._截图显示ID = None
             return None
+
+    @staticmethod
+    def _解析MuMu逻辑显示ID(窗口输出: str, 目标包名: str = "") -> str | None:
+        """从 MuMu 多显示窗口状态中选出目标应用所在的逻辑 display ID。"""
+        目标包名 = str(目标包名 or "").strip()
+        目标逻辑ID = None
+        候选逻辑ID = []
+        分块 = re.split(r"\n\s*Display:\s*mDisplayId=", "\n" + str(窗口输出 or ""))
+        for 块 in 分块[1:]:
+            匹配 = re.match(r"(\d+)", 块)
+            if not 匹配:
+                continue
+            逻辑ID = 匹配.group(1)
+            # 游戏 display 可能没有 mCurrentFocus，但 mFocusedApp 会指向
+            # CoC；两者都不看会错误选中 MuMu 启动器 display 0。
+            有窗口焦点 = bool(re.search(r"mCurrentFocus=(?!null\b)", 块))
+            有应用焦点 = bool(re.search(r"mFocusedApp=(?!null\b)", 块))
+            if 有窗口焦点 or 有应用焦点:
+                候选逻辑ID.append(逻辑ID)
+                if 目标包名 and 目标包名 in 块:
+                    目标逻辑ID = 逻辑ID
+        return 目标逻辑ID or (候选逻辑ID[-1] if 候选逻辑ID else None)
+
+    def _获取MuMu输入显示ID(self) -> str | None:
+        """返回 ``input -d`` 使用的逻辑 display ID。"""
+        当前时间 = time.monotonic()
+        if 当前时间 - self._输入显示ID更新时间 < 3.0:
+            return self._输入显示ID
+        self._输入显示ID更新时间 = 当前时间
+        try:
+            窗口输出 = self.执行(["shell", "dumpsys", "window", "displays"], timeout=8)
+            if isinstance(窗口输出, bytes):
+                窗口输出 = 窗口输出.decode("utf-8", errors="replace")
+            self._输入显示ID = self._解析MuMu逻辑显示ID(窗口输出, self._目标包名)
+            return self._输入显示ID
+        except (ADB错误, ValueError, TypeError, re.error):
+            self._输入显示ID = None
+            return None
+
+    def 获取目标显示ID(self) -> str | None:
+        """返回当前 CoC 输入/点击使用的逻辑 display ID，供状态日志使用。"""
+        if not self._是MuMu连接():
+            return None
+        return self._获取MuMu输入显示ID()
+
+    def _输入显示参数(self) -> list[str]:
+        """生成 ``input`` 的 display 参数；非 MuMu 保持系统默认行为。"""
+        if not self._是MuMu连接():
+            return []
+        显示ID = self._获取MuMu输入显示ID()
+        return ["-d", 显示ID] if 显示ID else []
 
     def _验证输入前台(self) -> None:
         """拒绝把触控/按键发给启动器或其他 Android 应用。"""
@@ -784,7 +823,7 @@ class ADB设备操作类:
         self._验证目标()
         self._验证输入前台()
         x, y = self.参考坐标转设备坐标(x, y)
-        self.执行(["shell", "input", "tap", str(x), str(y)], timeout=8)
+        self.执行(["shell", "input", *self._输入显示参数(), "tap", str(x), str(y)], timeout=8)
         return True
 
     def 连续触控(self, 位置列表: Iterable[tuple[int, int]], 间隔毫秒: int = 0) -> bool:
@@ -808,8 +847,10 @@ class ADB设备操作类:
             间隔毫秒 = max(40, 间隔毫秒)
         点位 = [self.参考坐标转设备坐标(x, y) for x, y in 点位]
         间隔命令 = f"; sleep {间隔毫秒 / 1000:.3f}" if 间隔毫秒 else ""
+        显示参数 = " ".join(self._输入显示参数())
+        输入前缀 = f"input {显示参数} " if 显示参数 else "input "
         脚本 = "; ".join(
-            f"input tap {x} {y}{间隔命令 if 序号 < len(点位) - 1 else ''}"
+            f"{输入前缀}tap {x} {y}{间隔命令 if 序号 < len(点位) - 1 else ''}"
             for 序号, (x, y) in enumerate(点位)
         )
         self.执行(["shell", "sh", "-c", 脚本], timeout=max(8, len(点位) * 2))
@@ -822,7 +863,7 @@ class ADB设备操作类:
         时长毫秒 = max(120, min(1500, int(时长毫秒)))
         x, y = self.参考坐标转设备坐标(x, y)
         self.执行([
-            "shell", "input", "swipe", str(int(x)), str(int(y)),
+            "shell", "input", *self._输入显示参数(), "swipe", str(int(x)), str(int(y)),
             str(int(x)), str(int(y)), str(时长毫秒),
         ], timeout=max(8, 时长毫秒 / 1000 + 5))
         return True
@@ -832,7 +873,7 @@ class ADB设备操作类:
         self._验证输入前台()
         起点 = self.参考坐标转设备坐标(*起点)
         终点 = self.参考坐标转设备坐标(*终点)
-        self.执行(["shell", "input", "swipe", str(起点[0]), str(起点[1]),
+        self.执行(["shell", "input", *self._输入显示参数(), "swipe", str(起点[0]), str(起点[1]),
                     str(终点[0]), str(终点[1]), str(max(1, int(时长毫秒)))], timeout=10)
         return True
 
@@ -847,7 +888,7 @@ class ADB设备操作类:
             # 任务重启；调用方会自然继续当前识别流程。
             return False
         self._验证输入前台()
-        self.执行(["shell", "input", "keyevent", str(数字按键码)], timeout=8)
+        self.执行(["shell", "input", *self._输入显示参数(), "keyevent", str(数字按键码)], timeout=8)
         return True
 
     def 获取属性(self, 属性名: str) -> str:
@@ -959,7 +1000,7 @@ class ADB设备操作类:
         间隔毫秒 = max(80, min(500, int(间隔毫秒)))
         for 序号 in range(次数):
             self._验证输入前台()
-            self.执行(["shell", "input", "keyevent", "135"], timeout=8)
+            self.执行(["shell", "input", *self._输入显示参数(), "keyevent", "135"], timeout=8)
             if 序号 + 1 < 次数:
                 time.sleep(间隔毫秒 / 1000)
         return True

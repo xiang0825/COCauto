@@ -131,6 +131,79 @@ mViewports=[DisplayViewport{type=INTERNAL, valid=true, displayId=0, uniqueId='lo
         设备._runner = 假Runner(结果(窗口输出), 结果(显示输出))
         self.assertEqual(设备._获取MuMu截图显示ID(), "4619827203584079877")
 
+    def test_MuMu输入显示层使用游戏逻辑display而不是启动器display(self):
+        窗口输出 = b"""
+  Display: mDisplayId=0
+    mCurrentFocus=Window{u0 app.lawnchair/app.lawnchair.LawnchairLauncher}
+    mFocusedApp=ActivityRecord{launcher app.lawnchair/.LawnchairLauncher}
+  Display: mDisplayId=7
+    mCurrentFocus=Window{u0 com.supercell.clashofclans/com.supercell.titan.GameApp}
+    mFocusedApp=ActivityRecord{game com.supercell.clashofclans/com.supercell.titan.GameApp}
+"""
+        self.assertEqual(
+            ADB设备操作类._解析MuMu逻辑显示ID(
+                窗口输出.decode("utf-8"), "com.supercell.clashofclans"
+            ),
+            "7",
+        )
+
+    def test_MuMu触控命令明确发送到游戏display(self):
+        窗口输出 = b"""
+  Display: mDisplayId=0
+    mCurrentFocus=Window{u0 app.lawnchair/app.lawnchair.LawnchairLauncher}
+    mFocusedApp=ActivityRecord{launcher app.lawnchair/.LawnchairLauncher}
+  Display: mDisplayId=7
+    mCurrentFocus=Window{u0 com.supercell.clashofclans/com.supercell.titan.GameApp}
+    mFocusedApp=ActivityRecord{game com.supercell.clashofclans/com.supercell.titan.GameApp}
+"""
+        runner = 假Runner(
+            结果(b"List of devices attached\n127.0.0.1:16416 device product:a55x model:SM_A5560\n"),
+            结果(b"topResumedActivity=ActivityRecord{1 u0 com.supercell.clashofclans/com.supercell.titan.GameApp t15}\n"),
+            结果(b"Physical size: 800x600"),
+            结果(窗口输出),
+            结果(),
+        )
+        设备 = ADB设备操作类(
+            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            "127.0.0.1:16416",
+            runner=runner,
+            自动检测路径=False,
+        )
+        设备.设置目标包名("com.supercell.clashofclans")
+        self.assertTrue(设备.触控(12, 34))
+        self.assertEqual(
+            runner.命令[-1][1:],
+            ["-s", "127.0.0.1:16416", "shell", "input", "-d", "7", "tap", "12", "34"],
+        )
+
+    def test_MuMu拉伸按键明确发送到游戏display(self):
+        窗口输出 = b"""
+  Display: mDisplayId=0
+    mCurrentFocus=Window{u0 app.lawnchair/app.lawnchair.LawnchairLauncher}
+    mFocusedApp=ActivityRecord{launcher app.lawnchair/.LawnchairLauncher}
+  Display: mDisplayId=7
+    mCurrentFocus=Window{u0 com.supercell.clashofclans/com.supercell.titan.GameApp}
+    mFocusedApp=ActivityRecord{game com.supercell.clashofclans/com.supercell.titan.GameApp}
+"""
+        runner = 假Runner(
+            结果(b"List of devices attached\n127.0.0.1:16416 device product:a55x model:SM_A5560\n"),
+            结果(b"topResumedActivity=ActivityRecord{1 u0 com.supercell.clashofclans/com.supercell.titan.GameApp t15}\n"),
+            结果(窗口输出),
+            结果(),
+        )
+        设备 = ADB设备操作类(
+            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            "127.0.0.1:16416",
+            runner=runner,
+            自动检测路径=False,
+        )
+        设备.设置目标包名("com.supercell.clashofclans")
+        self.assertTrue(设备.游戏内拉远视距(次数=1))
+        self.assertEqual(
+            runner.命令[-1][1:],
+            ["-s", "127.0.0.1:16416", "shell", "input", "-d", "7", "keyevent", "135"],
+        )
+
     def test_设备授权状态异常时不发送输入(self):
         runner = 假Runner(结果(b"List of devices attached\nemulator-5554 unauthorized model:LDPlayer\n"))
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
