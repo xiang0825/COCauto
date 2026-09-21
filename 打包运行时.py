@@ -30,9 +30,10 @@ if getattr(sys, "frozen", False):
     os.environ.setdefault("PYTHONUTF8", "1")
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
-    雷电默认目录 = r"E:\LDPlayer\LDPlayer14"
-    if os.path.isdir(雷电默认目录):
-        os.environ.setdefault("COC_LDPLAYER_DIR", 雷电默认目录)
+    # 运行时默认指向 MuMu 的 ADB 目录；具体设备地址从数据库读取。
+    MuMu默认目录 = r"C:\Program Files\Netease\MuMuPlayer\nx_main"
+    if os.path.isdir(MuMu默认目录):
+        os.environ.setdefault("COC_MUMU_DIR", MuMu默认目录)
 
 # 无控制台的 GUI 程序仍会调用 print；将输出安全丢弃，避免 None stdout 导致线程异常。
 if sys.stdout is None:

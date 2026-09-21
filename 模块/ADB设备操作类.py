@@ -37,6 +37,17 @@ class ADB设备信息:
         模拟器标记 = ("ldplayer", "mumu", "bluestacks", "nox", "genymotion", "sdk-gphone", "android-sdk")
         if any(标记 in 描述 for 标记 in 模拟器标记):
             return False
+        # MuMu Android 15 的 ADB 设备描述会伪装成手机型号（例如
+        # product:a55x model:SM_A5560），但其连接仍是本机 MuMu 的
+        # 16384-16499 端口。仅放行这个明确的本机模拟器端口范围，
+        # 不放宽普通 USB/网络真机的安全拦截。
+        if self.序列号.startswith(("127.0.0.1:", "localhost:")):
+            try:
+                端口 = int(self.序列号.rsplit(":", 1)[1])
+            except (ValueError, IndexError):
+                端口 = -1
+            if 16384 <= 端口 <= 16499:
+                return False
         实体标记 = ("samsung", "model:sm-", "model:sm", "pixel", "xiaomi", "redmi", "oneplus",
                     "huawei", "honor", "oppo", "vivo", "motorola", "sony", "realme")
         return any(标记 in 描述 for 标记 in 实体标记)
@@ -110,6 +121,8 @@ class ADB设备操作类:
         self.设备序列号 = (设备序列号 or "").strip()
         self._runner = runner
         self._屏幕尺寸: tuple[int, int] | None = None
+        self._截图显示ID: str | None = None
+        self._截图显示ID更新时间 = 0.0
         self._目标已验证 = False
         # 运行期输入只能发给这个包所在的前台窗口。空值表示兼容仅做
         # ADB/截图的工具调用；正式机器人启动时会立即设置为 CoC 包名。
@@ -367,6 +380,28 @@ class ADB设备操作类:
             pass
         time.sleep(0.35)
 
+    def _连接已保存网络设备(self) -> None:
+        """MuMu 网络 ADB 从设备列表消失时，仅重连保存的本机地址。"""
+        if not self._是MuMu连接() or not re.fullmatch(r"(?:127\.0\.0\.1|localhost):\d+", self.设备序列号):
+            return
+        startupinfo = None
+        creationflags = 0
+        if os.name == "nt":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            self._runner(
+                [self.adb路径, "connect", self.设备序列号],
+                capture_output=True,
+                timeout=8,
+                check=False,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
     def _尝试恢复ADB连接(self, *, 重置ADB服务: bool = False) -> None:
         """优先恢复 transport；设备消失时再重置 adb server，不动游戏或模拟器。"""
         当前时间 = time.monotonic()
@@ -508,6 +543,7 @@ class ADB设备操作类:
             # 雷电运行时偶发会保留虚拟机但让 adb server 丢失设备记录。
             # 只重启本机 server，再扫描一次；绝不重启模拟器或关闭 CoC。
             self._重置ADB服务()
+            self._连接已保存网络设备()
             设备列表 = self.扫描设备(
                 self.adb路径,
                 runner=self._runner,
@@ -535,6 +571,57 @@ class ADB设备操作类:
         self._目标包名 = str(包名 or "").strip()
         self._前台包名缓存 = ""
         self._前台包名缓存时间 = 0.0
+
+    def _是MuMu连接(self) -> bool:
+        """识别 MuMu ADB；不把普通网络/USB Android 设备当成模拟器。"""
+        路径 = str(self.adb路径 or "").lower().replace("\\", "/")
+        if "mumuplayer" in 路径:
+            return True
+        if self.设备序列号.startswith(("127.0.0.1:", "localhost:")):
+            try:
+                端口 = int(self.设备序列号.rsplit(":", 1)[1])
+            except (ValueError, IndexError):
+                端口 = -1
+            return 16384 <= 端口 <= 16499
+        return False
+
+    def _获取MuMu截图显示ID(self) -> str | None:
+        """返回当前前台应用所在 MuMu 虚拟显示的 SurfaceFlinger ID。"""
+        当前时间 = time.monotonic()
+        if 当前时间 - self._截图显示ID更新时间 < 3.0:
+            return self._截图显示ID
+        self._截图显示ID更新时间 = 当前时间
+        try:
+            窗口输出 = self.执行(["shell", "dumpsys", "window", "displays"], timeout=8)
+            if isinstance(窗口输出, bytes):
+                窗口输出 = 窗口输出.decode("utf-8", errors="replace")
+            选中逻辑ID = None
+            候选逻辑ID = []
+            分块 = re.split(r"\n\s*Display:\s*mDisplayId=", "\n" + str(窗口输出))
+            for 块 in 分块[1:]:
+                匹配 = re.match(r"(\d+)", 块)
+                if not 匹配:
+                    continue
+                逻辑ID = 匹配.group(1)
+                if "mCurrentFocus=" in 块 and "mCurrentFocus=null" not in 块:
+                    候选逻辑ID.append(逻辑ID)
+                    if self._目标包名 and self._目标包名 in 块:
+                        选中逻辑ID = 逻辑ID
+            if 选中逻辑ID is None and 候选逻辑ID:
+                选中逻辑ID = 候选逻辑ID[-1]
+            if 选中逻辑ID is None:
+                return None
+
+            显示输出 = self.执行(["shell", "dumpsys", "display"], timeout=8)
+            if isinstance(显示输出, bytes):
+                显示输出 = 显示输出.decode("utf-8", errors="replace")
+            模式 = rf"mDisplayId={re.escape(选中逻辑ID)}\b.*?mPrimaryDisplayDevice=.*?\(local:(\d+)\)"
+            匹配 = re.search(模式, str(显示输出), flags=re.S)
+            self._截图显示ID = 匹配.group(1) if 匹配 else None
+            return self._截图显示ID
+        except (ADB错误, ValueError, TypeError, re.error):
+            self._截图显示ID = None
+            return None
 
     def _验证输入前台(self) -> None:
         """拒绝把触控/按键发给启动器或其他 Android 应用。"""
@@ -569,9 +656,23 @@ class ADB设备操作类:
             # 恢复而绕过宿主机保护。
             self._检查主机内存预算()
             try:
-                原始PNG = self.执行(["exec-out", "screencap", "-p"], timeout=15, binary=True)
+                截图参数 = ["exec-out", "screencap"]
+                if self._是MuMu连接():
+                    显示ID = self._获取MuMu截图显示ID()
+                    if 显示ID:
+                        截图参数.extend(["-d", 显示ID])
+                截图参数.append("-p")
+                原始PNG = self.执行(截图参数, timeout=15, binary=True)
                 if len(原始PNG) > 20 * 1024 * 1024:
                     raise ADB错误("ADB 截图数据异常过大，已拒绝继续解码以保护内存。")
+                # MuMu Android 15 的 adb.exe 在 exec-out 输出 PNG 前会把
+                # “Multiple displays were found...” 警告写到 stdout，导致
+                # OpenCV 无法解码。只丢弃 PNG 签名以前的这段诊断文本，
+                # 不放宽大小限制，也不吞掉真正的空响应。
+                PNG签名 = b"\x89PNG\r\n\x1a\n"
+                PNG起点 = 原始PNG.find(PNG签名)
+                if PNG起点 > 0:
+                    原始PNG = 原始PNG[PNG起点:]
                 图像 = cv2.imdecode(np.frombuffer(原始PNG, dtype=np.uint8), cv2.IMREAD_COLOR)
                 if 图像 is None or 图像.size == 0:
                     raise ADB错误("ADB 截图无法解码；请确认设备已启动并允许 ADB 调试。")

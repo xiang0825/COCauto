@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8:backslashreplace"
-set "COC_LDPLAYER_DIR=E:\LDPlayer\LDPlayer14"
+set "COC_MUMU_DIR=C:\Program Files\Netease\MuMuPlayer\nx_main"
 set "PYTHON=%~dp0.venv311\Scripts\python.exe"
 
 if not exist "%PYTHON%" (
@@ -15,7 +15,7 @@ if not exist "%PYTHON%" (
 
 fltmc >nul 2>&1
 if errorlevel 1 (
-    echo Requesting administrator permission for LDPlayer control...
+    echo Requesting administrator permission for emulator control...
     powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%PYTHON%' -ArgumentList '-u launcher_local.py' -WorkingDirectory '%~dp0' -Verb RunAs"
     exit /b
 )

@@ -10,7 +10,8 @@ ROOT = Path(__file__).resolve().parent
 if __name__ == "__main__":
     os.chdir(ROOT)
     os.environ.setdefault("PYTHONUTF8", "1")
-    os.environ.setdefault("COC_LDPLAYER_DIR", r"E:\LDPlayer\LDPlayer14")
+    # 默认使用 MuMu；连接具体实例的地址由“模拟器连接”配置保存。
+    os.environ.setdefault("COC_MUMU_DIR", r"C:\Program Files\Netease\MuMuPlayer\nx_main")
     for 输出流 in (sys.stdout, sys.stderr):
         if hasattr(输出流, "reconfigure"):
             try:

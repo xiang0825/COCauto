@@ -80,12 +80,36 @@ class ADB设备测试(unittest.TestCase):
             ADB设备操作类.解析ADB路径("", 自动检测=False)
 
     def test_实体Samsung设备即使确认也会被阻止(self):
-        runner = 假Runner(结果(b"List of devices attached\n127.0.0.1:16416 device model:SM_A5560 product:a55xchn\n"))
-        设备 = ADB设备操作类(ADB, "127.0.0.1:16416", runner=runner)
+        runner = 假Runner(结果(b"List of devices attached\nR58M1234567 device model:SM_A5560 product:a55xchn\n"))
+        设备 = ADB设备操作类(ADB, "R58M1234567", runner=runner)
         with self.assertRaisesRegex(ADB错误, "实体 Android 设备"):
             设备.获取屏幕图像cv()
         self.assertEqual(len(runner.命令), 1)
         self.assertEqual(runner.命令[0][1:], ["devices", "-l"])
+
+    def test_MuMuAndroid15手机样式描述按本机端口识别为模拟器(self):
+        runner = 假Runner(
+            结果(b"List of devices attached\n127.0.0.1:16416 device model:SM_A5560 product:a55xchn\n"),
+            结果(b"Physical size: 720x1280"),
+            结果(),
+        )
+        设备 = ADB设备操作类(ADB, "127.0.0.1:16416", runner=runner)
+        self.assertEqual(设备.确认在线().序列号, "127.0.0.1:16416")
+
+    def test_MuMu截图使用当前虚拟显示(self):
+        设备 = ADB设备操作类(
+            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            "127.0.0.1:16416",
+        )
+        设备.设置目标包名("com.supercell.clashofclans")
+        窗口输出 = b"""\n  Display: mDisplayId=5\n    mCurrentFocus=Window{u0 com.supercell.clashofclans/com.supercell.titan.GameApp}\n"""
+        显示输出 = b"""\n  mDisplayId=5\n    mPrimaryDisplayDevice=mumuscreen004(local:4619826948029188612)\n"""
+        runner = 假Runner(
+            结果(窗口输出),
+            结果(显示输出),
+        )
+        设备._runner = runner
+        self.assertEqual(设备._获取MuMu截图显示ID(), "4619826948029188612")
 
     def test_设备授权状态异常时不发送输入(self):
         runner = 假Runner(结果(b"List of devices attached\nemulator-5554 unauthorized model:LDPlayer\n"))
@@ -237,6 +261,21 @@ class ADB设备测试(unittest.TestCase):
         self.assertEqual(结果图.shape, (600, 800, 3))
         self.assertEqual(runner.命令[2][1:], ["reconnect", "offline"])
         self.assertEqual(runner.命令[3][1:], ["-s", "emulator-5554", "exec-out", "screencap", "-p"])
+
+    def test_MuMu截图前的多屏警告不会破坏PNG解码(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        编码成功, 编码 = cv2.imencode(".png", 图像)
+        self.assertTrue(编码成功)
+        警告 = b"[Warning] Multiple displays were found, but no display id was specified!\n"
+        runner = 假Runner(结果(在线模拟器), 结果(警告 + 编码.tobytes()))
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        with patch.object(ADB设备操作类, "_获取主机内存状态", return_value={
+            "内存负载": 50,
+            "可用物理内存": 8 * 1024 * 1024 * 1024,
+            "可用提交额度": 8 * 1024 * 1024 * 1024,
+        }):
+            结果图 = 设备.获取屏幕图像cv()
+        self.assertEqual(结果图.shape, (600, 800, 3))
 
     def test_低内存时不创建截图ADB进程(self):
         runner = 假Runner(结果(在线模拟器))
