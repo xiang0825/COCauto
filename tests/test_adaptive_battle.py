@@ -140,6 +140,7 @@ class 自适应战斗测试(unittest.TestCase):
             脚本延时=lambda _毫秒: None,
             置脚本状态=日志.append,
         )
+        任务.战斗是否仍在进行 = Mock(return_value=True)
         候选点 = 任务.生成可下兵候选点(上下文, 坐标(400, 285))
         with patch.object(任务, "读取兵栏槽位图像", side_effect=[object()] * 5), \
              patch.object(任务, "判断下兵反馈", side_effect=[False, False, False, True]):
@@ -154,6 +155,35 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertEqual(使用坐标, 候选点[1])
         self.assertEqual(点击记录, 候选点[:2])
         self.assertTrue(any("换下一个候选点" in 文本 for 文本 in 日志))
+
+    def test_结算页出现后候选点循环立即停止(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        点击记录 = []
+        日志 = []
+        上下文 = SimpleNamespace(
+            _部署区域已初始化=True,
+            _部署红色掩码=None,
+            本场可下兵区域={
+                "边界顶点": [(394, 20), (745, 293), (405, 549), (68, 278)],
+                "边界带宽": 58.0,
+            },
+            点击=lambda x, y, **_参数: 点击记录.append((x, y)),
+            脚本延时=lambda _毫秒: None,
+            置脚本状态=日志.append,
+        )
+        任务.读取兵栏槽位图像 = lambda *_参数: object()
+        任务.战斗是否仍在进行 = Mock(return_value=False)
+        成功, 坐标结果 = 任务.尝试下兵至可用位置(
+            上下文,
+            {"名称": "测试兵", "区域": (0, 0, 1, 1), "类别": "兵种"},
+            坐标(400, 285),
+            [(400, 20), (410, 25)],
+            5,
+        )
+        self.assertFalse(成功)
+        self.assertIsNone(坐标结果)
+        self.assertEqual(点击记录, [])
+        self.assertTrue(any("停止目标" in 文本 for 文本 in 日志))
 
     def test_兵量足够的普通兵种才启用高速批次(self):
         任务 = 进攻任务.__new__(进攻任务)
