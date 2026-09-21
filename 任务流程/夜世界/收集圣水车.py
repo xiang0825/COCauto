@@ -1,4 +1,7 @@
 from dataclasses import dataclass
+
+import cv2
+import numpy as np
 from 任务流程.基础任务框架 import 任务上下文
 from 任务流程.夜世界.夜世界打鱼.夜世界基础任务类 import 夜世界基础任务
 
@@ -12,6 +15,12 @@ class 滑动配置:
 class 收集圣水车任务(夜世界基础任务):
     MAX_连续失败次数 = 5  # 定义最大允许失败次数常量
     收集圣水连续出错次数 = 0  # 初始化计数器
+    船模板路径 = (
+        "夜世界的船1.bmp|夜世界的船2.bmp|夜世界的船3.bmp|"
+        "夜世界的船4.bmp|夜世界的船5.bmp|夜世界的船6.bmp|"
+        "夜世界的船7.bmp|夜世界的船8.bmp|夜世界的船9.bmp|"
+        "夜世界的船10.bmp|夜世界的船11.bmp|夜世界的船12.bmp"
+    )
 
     def __init__(self, 上下文: '任务上下文'):
         super().__init__(上下文)
@@ -24,8 +33,7 @@ class 收集圣水车任务(夜世界基础任务):
             while True:
 
                 是否匹配, (x, y) = self.是否出现图片(
-                    "夜世界的船1.bmp|夜世界的船2.bmp|夜世界的船3.bmp|"
-                    "夜世界的船4.bmp|夜世界的船6.bmp|夜世界的船7.bmp"
+                    self.船模板路径, 相似度阈值=0.8
                 )
 
                 if 是否匹配:
@@ -34,20 +42,31 @@ class 收集圣水车任务(夜世界基础任务):
                         self._处理失败()
                         return False
 
-                    self.上下文.置脚本状态("定位到了夜世界的船，计算偏移，尝试点击圣水车，开始收集")
-                    self.上下文.点击(x - 118, y + 46)
-                    # 成功打开了，并收集圣水
-                    if self.尝试收集圣水():
-                        return True
+                    self.上下文.置脚本状态(
+                        "定位到夜世界入口，先用船模板偏移打开圣水车，再用动态候选点兜底"
+                    )
+                    候选点 = self._生成圣水车候选点(x, y)
+                    for 序号, (点击x, 点击y, 来源) in enumerate(候选点, 1):
+                        self.上下文.置脚本状态(
+                            f"尝试打开圣水车：第{序号}个候选点{点击x},{点击y}（{来源}）"
+                        )
+                        self.上下文.点击(点击x, 点击y)
+                        if self.尝试收集圣水():
+                            self.上下文.置脚本状态(
+                                f"已确认圣水车面板并完成收集：{点击x},{点击y}"
+                            )
+                            return True
+                        # 点击候选点可能打开了普通建筑详情页。不能把下一
+                        # 个地图坐标继续点在详情页上，否则会把后续输入带到
+                        # 错误页面。只在右上角明确识别到红色关闭按钮时关闭，
+                        # 不发送无条件 ESC，避免退回主世界或模拟器桌面。
+                        self._关闭候选详情面板()
 
-
-                    self.上下文.置脚本状态("未成功打开圣水车界面，用户可能更换了默认背景，尝试备用方案。建议使用默认背景",级别="警告")
-                    self.上下文.点击(x - 169, y - 64)
-                    if self.尝试收集圣水():
-                        return True
-
-
-
+                    self.上下文.置脚本状态(
+                        "未成功打开圣水车界面，已尝试动态气泡和全部安全备用点；"
+                        "不点击宝石或商店，保留当前夜世界画面",
+                        级别="警告",
+                    )
                     self.上下文.置脚本状态("未成功打开圣水车界面，收集失败, 拉远视距尝试")
                     self.上下文.游戏内拉远视距(次数=1)
                     self.上下文.脚本延时(200)
@@ -67,14 +86,206 @@ class 收集圣水车任务(夜世界基础任务):
             self.异常处理(e)
             return False
 
-    def 尝试收集圣水(self):
-        if self.是否包含文本(self.执行OCR识别((328, 92, 489, 131)), "圣水车"):
-            self.上下文.点击(605, 471)  # 收集圣水
-            self.上下文.脚本延时(1000)
-            self.上下文.点击(699, 103)  # 关闭界面
-            self.收集圣水连续出错次数 = 0
+    def _生成圣水车候选点(self, 船x: int, 船y: int):
+        """返回按安全顺序排列的圣水车点击点。
+
+        旧实现只尝试一个偏移，而且只识别简体标题。当前 MuMu 实机的
+        圣水车面板标题是“聖水車”，并且已确认船模板偏移1可以打开面板。
+        因此先尝试模板偏移，再用动态紫色候选点兜底；每个点击都必须经过
+        简繁 OCR 确认，所有点都必须在参考画布内。
+        """
+        候选: list[tuple[int, int, str]] = []
+        # 实机验证过的船模板相对位置必须优先，不能让地图中的紫色建筑
+        # 气泡抢先被点击；紫色气泡不是圣水车，可能只会打开建筑详情页。
+        for 备用x, 备用y, 来源 in (
+            (船x - 118, 船y + 46, "船模板兼容偏移1"),
+            (船x - 169, 船y - 64, "船模板兼容偏移2"),
+            (船x, 船y, "船模板中心备用点"),
+        ):
+            候选.append((备用x, 备用y, 来源))
+
+        try:
+            屏幕 = self.上下文.op.获取屏幕图像cv(0, 0, 800, 600)
+            if isinstance(屏幕, np.ndarray) and 屏幕.ndim >= 2 and 屏幕.size:
+                高, 宽 = 屏幕.shape[:2]
+                x左, x右 = max(0, int(宽 * 0.09)), min(宽, int(宽 * 0.91))
+                y上, y下 = max(0, int(高 * 0.25)), min(高, int(高 * 0.90))
+                地图 = 屏幕[y上:y下, x左:x右]
+                if 地图.size:
+                    hsv = cv2.cvtColor(地图, cv2.COLOR_BGR2HSV)
+                    遮罩 = cv2.inRange(
+                        hsv,
+                        np.array((125, 80, 70), dtype=np.uint8),
+                        np.array((175, 255, 255), dtype=np.uint8),
+                    )
+                    遮罩 = cv2.morphologyEx(
+                        遮罩,
+                        cv2.MORPH_CLOSE,
+                        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+                    )
+                    数量, _, 统计, 重心 = cv2.connectedComponentsWithStats(遮罩, 8)
+                    气泡 = []
+                    for 索引 in range(1, 数量):
+                        _, _, 方宽, 方高, 面积 = [int(v) for v in 统计[索引]]
+                        if 面积 < max(120, int(宽 * 高 * 0.00018)):
+                            continue
+                        if 方宽 < 8 or 方高 < 8 or 方宽 > 宽 * 0.16 or 方高 > 高 * 0.16:
+                            continue
+                        if not 0.35 <= 方宽 / max(1, 方高) <= 2.8:
+                            continue
+                        中心x, 中心y = 重心[索引]
+                        气泡.append((面积, int(round(中心x + x左)), int(round(中心y + y上))))
+
+                    for _, 气泡x, 气泡y in sorted(气泡, reverse=True)[:4]:
+                        候选.append((气泡x, 气泡y, "动态紫色资源气泡"))
+        except (AttributeError, TypeError, ValueError, cv2.error) as 异常:
+            self.上下文.置脚本状态(f"圣水气泡扫描失败，使用模板备用点：{异常}")
+
+        已有 = set()
+        安全候选 = []
+        for 候选x, 候选y, 来源 in 候选:
+            候选x = max(12, min(788, int(候选x)))
+            候选y = max(12, min(588, int(候选y)))
+            关键 = (round(候选x / 8), round(候选y / 8))
+            if 关键 in 已有:
+                continue
+            已有.add(关键)
+            安全候选.append((候选x, 候选y, 来源))
+        return 安全候选
+
+    def _关闭候选详情面板(self) -> bool:
+        """关闭候选点击误打开的游戏内详情面板，不触碰宝石/商店。"""
+        try:
+            屏幕 = self.上下文.op.获取屏幕图像cv(0, 0, 800, 600)
+            关闭点 = self._检测详情面板关闭点(屏幕)
+            if 关闭点 is None:
+                return False
+            self.上下文.置脚本状态(
+                f"候选点打开了非圣水车面板，安全点击右上角关闭：{关闭点[0]},{关闭点[1]}"
+            )
+            点击安全 = getattr(self.上下文, "点击已确认安全按钮", None)
+            if callable(点击安全):
+                return bool(点击安全(*关闭点, 延时=180))
+            self.上下文.点击(*关闭点, 延时=180, 是否精确点击=True)
             return True
+        except (AttributeError, TypeError, ValueError, cv2.error) as 异常:
+            self.上下文.置脚本状态(f"详情面板关闭预检失败，停止候选尝试：{异常}")
+            return False
+
+    @staticmethod
+    def _检测详情面板关闭点(屏幕) -> tuple[int, int] | None:
+        """识别游戏内右上角红色 X，排除夜世界主页的常驻控件。"""
+        if not isinstance(屏幕, np.ndarray) or 屏幕.ndim < 3:
+            return None
+        高, 宽 = 屏幕.shape[:2]
+        if 高 < 100 or 宽 < 240:
+            return None
+        hsv = cv2.cvtColor(屏幕, cv2.COLOR_BGR2HSV)
+        x左, x右 = int(宽 * 0.76), int(宽 * 0.98)
+        y下 = int(高 * 0.18)
+        区域 = hsv[:y下, x左:x右]
+        红色 = cv2.inRange(
+            区域,
+            np.array((0, 105, 105), dtype=np.uint8),
+            np.array((15, 255, 255), dtype=np.uint8),
+        )
+        红色 |= cv2.inRange(
+            区域,
+            np.array((165, 105, 105), dtype=np.uint8),
+            np.array((180, 255, 255), dtype=np.uint8),
+        )
+        红色 = cv2.morphologyEx(
+            红色, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        )
+        数量, _, 统计, 重心 = cv2.connectedComponentsWithStats(红色, 8)
+        候选 = []
+        for 索引 in range(1, 数量):
+            _, _, 方宽, 方高, 面积 = [int(v) for v in 统计[索引]]
+            中心x, 中心y = 重心[索引]
+            中心x += x左
+            if (
+                面积 >= max(120, int(宽 * 高 * 0.00025))
+                # 使用整数下限，避免 800*0.035 的浮点舍入把 28 像素
+                # 的真实关闭按钮误判为 27.999...
+                and 方宽 >= max(12, int(宽 * 0.035))
+                and 方高 >= max(12, int(高 * 0.035))
+                and 0.55 <= 方宽 / max(1, 方高) <= 1.8
+                and 中心x >= 宽 * 0.80
+                and 中心y <= 高 * 0.14
+            ):
+                候选.append((面积, int(round(中心x)), int(round(中心y))))
+        if not 候选:
+            return None
+        _, x, y = max(候选, key=lambda 项: 项[0])
+        return x, y
+
+    def 尝试收集圣水(self):
+        识别结果 = self.执行OCR识别((328, 92, 489, 131))
+        if not self._是否圣水车标题(识别结果):
+            识别结果 = self.执行OCR识别((220, 55, 580, 190))
+        if not self._是否圣水车标题(识别结果):
+            return False
+
+        # 面板标题已经确认后才允许找“收集”按钮；按钮中心优先取 OCR
+        # 文本框，窗口比例或语言变化时仍使用参考画布坐标作为安全兜底。
+        按钮OCR = self.执行OCR识别((420, 390, 680, 560))
+        收集点 = self._查找OCR文本中心(按钮OCR, ("收集",), 最小y=350)
+        if 收集点 is None:
+            收集点 = (588, 507)
+        self.上下文.点击(*收集点)
+        self.上下文.脚本延时(1000)
+
+        # 只识别并点击面板右上角红色 X；不使用旧固定关闭坐标，避免
+        # 坐标漂移时点到资源栏或宝石区域。
+        try:
+            屏幕 = self.上下文.op.获取屏幕图像cv(0, 0, 800, 600)
+            关闭点 = self._检测详情面板关闭点(屏幕)
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            关闭点 = None
+        if 关闭点 is not None:
+            点击安全 = getattr(self.上下文, "点击已确认安全按钮", None)
+            if callable(点击安全):
+                点击安全(*关闭点, 延时=180)
+            else:
+                self.上下文.点击(*关闭点, 延时=180, 是否精确点击=True)
+        self.收集圣水连续出错次数 = 0
+        return True
+
+    @staticmethod
+    def _是否圣水车标题(识别结果) -> bool:
+        return 收集圣水车任务._是否包含任一文本(
+            识别结果, ("圣水车", "聖水車")
+        )
+
+    @staticmethod
+    def _是否包含任一文本(识别结果, 目标文本) -> bool:
+        for 项 in 识别结果 or []:
+            if len(项) > 1:
+                文本 = str(项[1]).replace(" ", "").replace("\n", "")
+                if any(str(目标).replace(" ", "") in 文本 for 目标 in 目标文本):
+                    return True
         return False
+
+    @staticmethod
+    def _查找OCR文本中心(识别结果, 目标文本, 最小y: int = 0):
+        for 项 in 识别结果 or []:
+            if len(项) < 2:
+                continue
+            文本 = str(项[1]).replace(" ", "").replace("\n", "")
+            if not any(str(目标).replace(" ", "") in 文本 for 目标 in 目标文本):
+                continue
+            try:
+                框 = 项[0]
+                点列表 = [(float(点[0]), float(点[1])) for 点 in 框]
+                if len(点列表) < 2:
+                    continue
+                x = int(round(sum(点[0] for 点 in 点列表) / len(点列表)))
+                y = int(round(sum(点[1] for 点 in 点列表) / len(点列表)))
+                if y >= 最小y:
+                    return x, y
+            except (TypeError, ValueError, IndexError):
+                continue
+        return None
 
     @staticmethod
     def 是否在危险区域内(x, y) -> bool:
