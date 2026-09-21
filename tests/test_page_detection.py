@@ -77,6 +77,25 @@ class 页面识别测试(unittest.TestCase):
         self.assertEqual(结果.页面, "战斗奖励选择")
         self.assertTrue(any("奖励选择红色横幅" in 依据 for 依据 in 结果.依据))
 
+    def test_战斗倒计时存在时不误判奖励选择(self):
+        """战场顶部倒计时比地图上的伪卡片结构更强，必须保留战斗页。"""
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
+        cv2.rectangle(图像, (10, 430), (105, 470), (0, 0, 220), -1)
+        for 左, 上, 右, 下 in (
+            (175, 185, 305, 445),
+            (340, 190, 470, 450),
+            (500, 135, 625, 420),
+        ):
+            cv2.rectangle(图像, (左, 上), (右, 下), (220, 220, 220), 8)
+        cv2.putText(
+            图像, "45", (380, 80), cv2.FONT_HERSHEY_SIMPLEX,
+            1.4, (255, 255, 255), 3, cv2.LINE_AA,
+        )
+        结果 = self.识别器.识别(图像, 战斗中=True)
+        self.assertEqual(结果.页面, "战斗中")
+        self.assertTrue(any("战斗倒计时" in 依据 for 依据 in 结果.依据))
+
     def test_结算按钮优先于结算动画奖励横幅(self):
         识别器 = 页面识别器(Mock())
         识别器._最佳分数 = Mock(side_effect=lambda _图像, 模板: 0.85 if "回营" in 模板 else 0.0)

@@ -112,6 +112,34 @@ class 鼠标控制器:
                 time.sleep(max(0, int(间隔毫秒)) / 1000)
         return True
 
+    def 连续点击多点(self, 位置列表, 间隔毫秒=0, 是否精确点击=True):
+        """在一批已经预检通过的坐标上连续点击。
+
+        这是战斗部署专用的批量输入：先执行一次安全页面检查，再把
+        已经通过边界/红色禁区预检的点交给 ADB 一次发送。调用方仍需
+        在每批前确认处于战斗页，底层适配器负责限制批次大小。
+        """
+        try:
+            点位 = [(int(点[0]), int(点[1])) for 点 in 位置列表]
+        except (TypeError, ValueError, IndexError):
+            return False
+        点位 = 点位[:32]
+        if not 点位:
+            return True
+        if not self._允许鼠标按下():
+            return False
+
+        if self._adb设备 is not None and hasattr(self._adb设备, '连续触控'):
+            return bool(self._adb设备.连续触控(点位, 间隔毫秒=间隔毫秒))
+
+        for 序号, (x, y) in enumerate(点位):
+            self.移动到(x, y)
+            if not self._左键点击内部():
+                return False
+            if 序号 < len(点位) - 1 and 间隔毫秒 > 0:
+                time.sleep(max(0, int(间隔毫秒)) / 1000)
+        return True
+
     def 长按(self, x, y, 时长毫秒=220, 是否精确点击=True):
         """执行同点长按；ADB 模式使用 input swipe 保持触点。"""
         x, y = int(x), int(y)
