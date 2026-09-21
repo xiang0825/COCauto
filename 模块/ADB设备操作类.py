@@ -855,9 +855,10 @@ class ADB设备操作类:
         当前前台 = self.执行(["shell", "dumpsys", "activity", "activities"], timeout=12)
         if isinstance(当前前台, bytes):
             当前前台 = 当前前台.decode("utf-8", errors="replace")
-        前台行 = next((行 for 行 in 当前前台.splitlines()
-                       if "mResumedActivity" in 行 or "topResumedActivity" in 行), "")
-        if 包名 in 前台行:
+        # MuMu 多显示会同时返回 CoC 和启动器两条 topResumedActivity。
+        # 不能只读第一行，否则会误以为游戏不在前台并反复 am start。
+        前台包名列表 = self._解析前台包名列表(当前前台)
+        if 包名 in 前台包名列表:
             return
         # 不 force-stop：已运行的游戏进程不会被反复杀掉重启。
         # 部分雷电镜像没有 monkey 命令，先解析 MAIN/LAUNCHER Activity，
@@ -895,14 +896,42 @@ class ADB设备操作类:
         当前前台 = self.执行(["shell", "dumpsys", "activity", "activities"], timeout=12)
         if isinstance(当前前台, bytes):
             当前前台 = 当前前台.decode("utf-8", errors="replace")
-        for 行 in str(当前前台).splitlines():
+        前台包名列表 = self._解析前台包名列表(当前前台)
+        # 多显示下优先返回当前任务的目标包名，避免把 MuMu 启动器的
+        # 辅助显示层当成真实前台，进而误拒绝 CoC 输入。
+        if self._目标包名 and self._目标包名 in 前台包名列表:
+            return self._目标包名
+        return 前台包名列表[0] if 前台包名列表 else ""
+
+    @staticmethod
+    def _解析前台包名列表(文本: str) -> list[str]:
+        """从多显示 dumpsys 输出中提取所有 resumed Activity 的包名。"""
+        结果 = []
+        for 行 in str(文本 or "").splitlines():
             if "mResumedActivity" not in 行 and "topResumedActivity" not in 行:
                 continue
-            # 兼容：ActivityRecord{... u0 package/activity ...}
-            匹配 = re.search(r"\bu\d+\s+([A-Za-z0-9_.$-]+)/", 行)
-            if 匹配:
-                return 匹配.group(1)
-        return ""
+            # 兼容 ActivityRecord{... u0 package/activity ...}，并保留
+            # 不带 uN 的旧 Android 输出格式。
+            匹配 = re.search(r"(?:\bu\d+\s+)?([A-Za-z0-9_.$-]+)/", 行)
+            if 匹配 and 匹配.group(1) not in 结果:
+                结果.append(匹配.group(1))
+        return 结果
+
+    def 游戏内拉远视距(self, 次数: int = 5, 间隔毫秒: int = 180) -> bool:
+        """向已确认在前台的 CoC 发送游戏内 F5 缩放键。
+
+        该入口与普通系统功能键分离：每一次发送前都确认目标包名仍在
+        前台，避免把 F5 送给 MuMu 启动器或桌面显示层。
+        """
+        self._验证目标()
+        次数 = max(1, min(8, int(次数)))
+        间隔毫秒 = max(80, min(500, int(间隔毫秒)))
+        for 序号 in range(次数):
+            self._验证输入前台()
+            self.执行(["shell", "input", "keyevent", "135"], timeout=8)
+            if 序号 + 1 < 次数:
+                time.sleep(间隔毫秒 / 1000)
+        return True
 
     def 关闭模拟器中的应用(self, 包名: str) -> None:
         raise ADB错误(

@@ -351,6 +351,45 @@ class ADB设备测试(unittest.TestCase):
         self.assertFalse(any("force-stop" in 命令 for 命令 in runner.命令))
         self.assertFalse(any("monkey" in 命令 for 命令 in runner.命令))
 
+    def test_MuMu多显示任一层有游戏都不会重复启动(self):
+        runner = 假Runner(
+            结果(在线模拟器),
+            结果(
+                b"topResumedActivity=ActivityRecord{1 u0 app.lawnchair/.LawnchairLauncher t2}\n"
+                b"topResumedActivity=ActivityRecord{2 u0 com.supercell.clashofclans/com.supercell.titan.GameApp t14}\n"
+            ),
+        )
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        设备.打开应用("com.supercell.clashofclans")
+        self.assertEqual(len(runner.命令), 2)
+        self.assertFalse(any("am" in 命令 and "start" in 命令 for 命令 in runner.命令))
+
+    def test_MuMu多显示前台查询优先返回已绑定目标包(self):
+        runner = 假Runner(
+            结果(
+                b"topResumedActivity=ActivityRecord{1 u0 app.lawnchair/.LawnchairLauncher t2}\n"
+                b"topResumedActivity=ActivityRecord{2 u0 com.supercell.clashofclans/com.supercell.titan.GameApp t14}\n"
+            ),
+        )
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        设备.设置目标包名("com.supercell.clashofclans")
+        self.assertEqual(设备.获取当前前台包名(), "com.supercell.clashofclans")
+
+    def test_游戏内拉远视距只向已确认的CoC发送F5(self):
+        runner = 假Runner(
+            结果(在线模拟器),
+            结果(b"topResumedActivity=ActivityRecord{1 u0 com.supercell.clashofclans/com.supercell.titan.GameApp t14}\n"),
+            结果(),
+            结果(b"topResumedActivity=ActivityRecord{1 u0 com.supercell.clashofclans/com.supercell.titan.GameApp t14}\n"),
+            结果(),
+        )
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        设备.设置目标包名("com.supercell.clashofclans")
+        self.assertTrue(设备.游戏内拉远视距(次数=2, 间隔毫秒=80))
+        按键命令 = [命令 for 命令 in runner.命令 if "keyevent" in 命令]
+        self.assertEqual(len(按键命令), 2)
+        self.assertTrue(all(命令[-1] == "135" for 命令 in 按键命令))
+
     def test_雷电没有monkey时使用am_start启动游戏(self):
         runner = 假Runner(
             结果(在线模拟器),
