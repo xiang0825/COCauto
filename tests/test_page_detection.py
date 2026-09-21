@@ -96,6 +96,18 @@ class 页面识别测试(unittest.TestCase):
         self.assertEqual(结果.页面, "战斗中")
         self.assertTrue(any("战斗倒计时" in 依据 for 依据 in 结果.依据))
 
+    def test_实机断线弹窗识别为断线页面(self):
+        """中央连接中断遮罩不能被当成未知页面继续发送输入。"""
+        图像 = np.full((600, 800, 3), (10, 18, 22), dtype=np.uint8)
+        cv2.rectangle(图像, (164, 180), (635, 423), (32, 26, 29), -1)
+        cv2.rectangle(图像, (201, 218), (304, 244), (220, 220, 220), -1)
+        cv2.rectangle(图像, (201, 270), (580, 294), (220, 220, 220), -1)
+        cv2.rectangle(图像, (201, 306), (232, 328), (220, 220, 220), -1)
+        cv2.rectangle(图像, (201, 368), (325, 389), (220, 220, 220), -1)
+        结果 = self.识别器.识别(图像)
+        self.assertEqual(结果.页面, "断线弹窗")
+        self.assertTrue(any("中央断线弹窗" in 依据 for 依据 in 结果.依据))
+
     def test_结算按钮优先于结算动画奖励横幅(self):
         识别器 = 页面识别器(Mock())
         识别器._最佳分数 = Mock(side_effect=lambda _图像, 模板: 0.85 if "回营" in 模板 else 0.0)

@@ -207,6 +207,71 @@ class 页面识别器:
             return 0.0
         return 0.0
 
+    @staticmethod
+    def _断线弹窗分数(图像: np.ndarray) -> float:
+        """识别 CoC 中央的“连接中断/重新登入”遮罩。
+
+        断线弹窗会保留主世界或战斗画面在底下，若只依赖主页/战斗
+        模板，输入护栏可能把恢复按钮当成普通页面点击。这里使用
+        弹窗主体的几何范围和三段亮色文字作轻量兜底，不调用 OCR，
+        也不会把结算页底部的绿色“回营”按钮当成断线弹窗。
+        """
+        if not isinstance(图像, np.ndarray) or 图像.ndim != 3 or 图像.size == 0:
+            return 0.0
+        try:
+            高, 宽 = 图像.shape[:2]
+            if 高 < 300 or 宽 < 400:
+                return 0.0
+            参考点 = 图像[高 // 2, 宽 // 2].astype(np.int16)
+            差异 = np.max(
+                np.abs(图像.astype(np.int16) - 参考点), axis=2
+            )
+            区域左, 区域上 = int(宽 * 0.08), int(高 * 0.16)
+            区域右, 区域下 = int(宽 * 0.92), int(高 * 0.86)
+            近似面板 = (差异[区域上:区域下, 区域左:区域右] <= 3).astype(np.uint8) * 255
+            近似面板 = cv2.morphologyEx(
+                近似面板, cv2.MORPH_CLOSE, np.ones((3, 3), dtype=np.uint8)
+            )
+            轮廓列表, _ = cv2.findContours(
+                近似面板, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            灰度 = cv2.cvtColor(图像, cv2.COLOR_BGR2GRAY)
+
+            for 轮廓 in sorted(轮廓列表, key=cv2.contourArea, reverse=True):
+                x, y, w, h = cv2.boundingRect(轮廓)
+                x += 区域左
+                y += 区域上
+                面积 = cv2.contourArea(轮廓)
+                if not (
+                    面积 >= 宽 * 高 * 0.15
+                    and 宽 * 0.42 <= w <= 宽 * 0.75
+                    and 高 * 0.25 <= h <= 高 * 0.55
+                    and 宽 * 0.14 <= x <= 宽 * 0.30
+                    and 高 * 0.22 <= y <= 高 * 0.45
+                ):
+                    continue
+                面板灰度 = 灰度[y:y + h, x:x + w]
+                if 面板灰度.size == 0:
+                    continue
+
+                def 亮像素(上比例, 下比例, 左比例=0.04, 右比例=0.92):
+                    上边 = max(0, min(h - 1, int(h * 上比例)))
+                    下边 = max(上边 + 1, min(h, int(h * 下比例)))
+                    左边 = max(0, min(w - 1, int(w * 左比例)))
+                    右边 = max(左边 + 1, min(w, int(w * 右比例)))
+                    return 面板灰度[上边:下边, 左边:右边] > 120
+
+                if (
+                    int(np.count_nonzero(亮像素(0.10, 0.35))) < 180
+                    or int(np.count_nonzero(亮像素(0.35, 0.72))) < 120
+                    or int(np.count_nonzero(亮像素(0.72, 0.95, 0.04, 0.58))) < 120
+                ):
+                    continue
+                return 0.98
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return 0.0
+        return 0.0
+
     def _奖励选择横幅分数(self, 图像: np.ndarray) -> float:
         """识别战斗结束后的奖励选择横幅。
 
@@ -267,6 +332,14 @@ class 页面识别器:
 
     def 识别(self, 屏幕图像: np.ndarray, 战斗中: bool = False) -> 页面识别结果:
         """识别当前页面；不确定时返回 ``页面=未知``，不触发任何输入。"""
+        断线分数 = self._断线弹窗分数(屏幕图像)
+        if 断线分数 >= 0.90:
+            return 页面识别结果(
+                页面="断线弹窗",
+                世界=None,
+                可信度=断线分数,
+                依据=(f"中央断线弹窗{断线分数:.2f}",),
+            )
         模板战斗分数 = self._最佳分数(
             self._裁剪(屏幕图像, self.放弃战斗区域),
             self.放弃战斗模板,

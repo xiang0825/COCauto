@@ -8,6 +8,8 @@ from 界面.日志面板 import 日志面板
 from 界面.任务计划面板 import 生成任务计划
 from 任务流程.主世界打鱼.搜索敌人 import 搜索目标敌人任务
 from 线程.自动化机器人 import 自动化机器人
+from 工具包.工具函数 import 是否夜世界资源打满
+from 任务流程.夜世界.更新夜世界账号资源状态 import 更新夜世界资源状态任务
 
 
 class 任务计划测试(unittest.TestCase):
@@ -176,6 +178,46 @@ class 任务计划测试(unittest.TestCase):
         self.assertTrue(
             any("禁止开始下一轮" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
         )
+
+    def test_夜世界资源缺失或识别失败不会被当成零资源(self):
+        self.assertIsNone(
+            自动化机器人._取已确认夜世界资源(
+                SimpleNamespace(状态数据={})
+            )
+        )
+        self.assertIsNone(
+            自动化机器人._取已确认夜世界资源(
+                SimpleNamespace(状态数据={
+                    "夜世界资源": {
+                        "金币": 0,
+                        "圣水": 0,
+                        "识别成功": False,
+                    }
+                })
+            )
+        )
+
+    def test_夜世界资源打满必须同时确认金币和圣水(self):
+        self.assertFalse(是否夜世界资源打满({"金币": 1000000, "圣水": 123456}))
+        self.assertTrue(是否夜世界资源打满({"金币": 1000000, "圣水": 2000000}))
+
+    def test_夜世界资源识别失败不会覆盖数据库(self):
+        上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            数据库=Mock(),
+            机器人标志="测试机器人",
+        )
+        任务 = 更新夜世界资源状态任务.__new__(更新夜世界资源状态任务)
+        任务.上下文 = 上下文
+        任务.识别当前资源 = Mock(return_value={
+            "金币": 0,
+            "圣水": 0,
+            "总资源": 0,
+            "识别成功": False,
+        })
+
+        self.assertFalse(任务.执行())
+        上下文.数据库.更新状态.assert_not_called()
 
 
 if __name__ == "__main__":

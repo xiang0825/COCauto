@@ -627,6 +627,20 @@ class 任务上下文:
         结果 = getattr(self, "_最近点击页面结果", None)
         if 结果 is None:
             结果 = self.识别点击画面()
+        if 结果 is not None and 结果.页面 == "断线弹窗":
+            self.页面恢复失败 = True
+            if not getattr(self, "_断线弹窗已记录", False):
+                self.置脚本状态(
+                    "检测到 CoC 连接中断弹窗，禁止继续点击；"
+                    "保留游戏前台，等待登录恢复流程或人工重新登入"
+                )
+                self._断线弹窗已记录 = True
+            if getattr(self, "_战斗中", False):
+                try:
+                    self.停止事件.set()
+                except Exception:
+                    pass
+            return True
         # 升级详情面板会把主世界入口遮住，但不一定命中宝石/商店模板。
         # 只有在轻量页面识别已经判为未知时才运行这个几何预检，避免
         # 给战斗和普通主世界点击增加一张额外截图；检测到后只关闭红色
@@ -676,6 +690,16 @@ class 任务上下文:
                 if not getattr(self, "_战斗护栏失败已记录", False):
                     self.置脚本状态("战斗护栏无法确认当前画面，阻止后续下兵并等待任务安全停止")
                     self._战斗护栏失败已记录 = True
+                return True
+            if 结果.页面 == "断线弹窗":
+                self.页面恢复失败 = True
+                self.置脚本状态(
+                    "战斗中检测到 CoC 连接中断弹窗，停止后续输入并保留当前画面"
+                )
+                try:
+                    self.停止事件.set()
+                except Exception:
+                    pass
                 return True
             if 结果.页面 == "战斗结算":
                 self._战斗结束已确认 = True
