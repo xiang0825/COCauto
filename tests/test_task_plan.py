@@ -78,7 +78,7 @@ class 任务计划测试(unittest.TestCase):
         )
         检测登录 = Mock()
         检测登录.执行.return_value = True
-        with patch("线程.自动化机器人.主世界打鱼任务") as 战斗任务:
+        with patch("任务流程.主世界打鱼.等待战斗结束并回营.等待战斗结束并回营任务") as 战斗任务:
             战斗任务.return_value.执行.return_value = True
             self.assertTrue(机器人._接管启动时战斗(上下文, 检测登录))
 
