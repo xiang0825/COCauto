@@ -23,14 +23,40 @@ class 模板匹配引擎:
         return cls._单例实例
 
     def 获取资源目录(self):
-        """兼容 PyInstaller 打包后的资源目录"""
-        if hasattr(sys, "_MEIPASS"):
-            return Path(sys._MEIPASS)
-        # 源码运行时不能依赖当前工作目录。桌面启动器通常会先切换目录，
-        # 但从命令行、任务计划或其他进程启动机器人时 cwd 可能仍是上级
-        # 目录，导致模板库被错误解析为 ``cwd/img``，机器人在线程初始化
-        # 阶段直接退出。模板匹配器自身的位置才是稳定的源码根目录。
-        return Path(__file__).resolve().parents[2]
+        """返回包含 ``img`` 的资源根目录。
+
+        PyInstaller 的 onedir 包、旧版启动器和源码运行时对当前工作目录
+        的假设并不一致。过去只读取 ``sys._MEIPASS``，在旧包或被其他
+        启动器导入时会退回到 ``cwd/img``，最终在线程初始化阶段直接退出。
+        这里按稳定性排序尝试打包解包目录、EXE 旁的 ``_internal`` 和源码
+        根目录；绝不把当前工作目录当成资源根目录。
+        """
+        候选目录 = []
+
+        def 加入(目录):
+            if not 目录:
+                return
+            目录 = Path(目录).resolve()
+            if 目录 not in 候选目录:
+                候选目录.append(目录)
+
+        # PyInstaller 运行时优先使用它提供的解包目录。
+        加入(getattr(sys, "_MEIPASS", None))
+
+        # onedir 运行时如果 _MEIPASS 不可用，资源在 EXE 旁的 _internal。
+        if getattr(sys, "frozen", False):
+            程序目录 = Path(sys.executable).resolve().parent
+            加入(程序目录 / "_internal")
+
+        # 源码运行时使用本模块所在项目根目录，不依赖 cwd。
+        加入(Path(__file__).resolve().parents[2])
+
+        for 目录 in 候选目录:
+            if (目录 / "img").is_dir():
+                return 目录
+
+        # 保留一个确定且可诊断的结果；调用方会在初始化时给出完整候选路径。
+        return 候选目录[0] if 候选目录 else Path(__file__).resolve().parents[2]
 
     def __init__(self, 最大缓存数=50, 图片库路径: Union[str, Path] = None):
         """初始化模板匹配引擎
@@ -46,8 +72,11 @@ class 模板匹配引擎:
         资源目录 = self.获取资源目录()
         self.图片库路径 = Path(图片库路径) if 图片库路径 else 资源目录 / "img"
 
-        if not self.图片库路径.exists():
-            raise ValueError(f"图片库路径不存在：{self.图片库路径}")
+        if not self.图片库路径.is_dir():
+            raise ValueError(
+                f"图片库路径不存在：{self.图片库路径}；"
+                "请确认发布包包含 _internal\\img，或使用完整源码目录运行。"
+            )
 
         # 初始化缓存系统
         self.模板缓存 = OrderedDict()
