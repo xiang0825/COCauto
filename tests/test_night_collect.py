@@ -29,6 +29,15 @@ class 夜世界圣水车测试(unittest.TestCase):
         self.assertEqual(候选[0][2], "船模板兼容偏移1")
         self.assertIn((484, 224, "动态紫色资源气泡"), 候选)
 
+    def test_旧船模板未命中时仍能独立扫描动态气泡(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.circle(屏幕, (415, 193), 12, (180, 60, 220), -1)
+        任务 = self._任务(屏幕)
+
+        候选 = 任务._生成动态紫色候选点()
+
+        self.assertIn((415, 193, "动态紫色资源气泡"), 候选)
+
     def test_所有候选点都在参考画布内且固定偏移不会越界(self):
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
         任务 = self._任务(屏幕)

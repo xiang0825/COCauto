@@ -19,10 +19,10 @@ class 进入世界任务基类(基础任务):
     # 在全屏搜索 15~24 像素模板，容易把顶部资源/地图纹理当成船；
     # 这里限制搜索区，避免误点其它 UI。区域按 800×600 逻辑画布工作，
     # 由 ADB 屏幕层自动映射到任意实际分辨率。
-    # 排除左下角护盾/攻城入口等固定 UI。1280×720 实机在游戏内拉远
-    # 后，船体会落在 800×600 参考坐标约 x=188、y=562；旧区域下边界
-    # y=525 会漏掉船体，只在地图纹理上得到低分假匹配。
-    世界入口搜索区域 = (160, 450, 280, 590)
+    # 排除左下角护盾/攻城入口等固定 UI。拖动地图后，1280×720 实机
+    # 的飞艇会落在 800×600 参考坐标约 x=225、y=417；旧区域只搜底边，
+    # 会漏掉飞艇并把底部地图纹理当成入口。
+    世界入口搜索区域 = (100, 350, 400, 590)
     世界入口最低分数 = 0.48
 
     def __init__(self, 上下文: 任务上下文, 判断图标路径: str, 船模板路径: str, 状态文本: str,滑动参数: 滑动配置):
@@ -159,6 +159,59 @@ class 进入世界任务基类(基础任务):
         区域 = 屏幕图像[上:下, 左:右]
         if 区域.size == 0:
             return False, (0, 0), 0.0
+
+        # 当前国际服实机的船体会随拉远视距缩放，旧采集模板有时只会
+        # 命中船帆旁边的地图纹理。船本身固定贴近画布底边，且包含一块
+        # 连续的橙红色气囊/船体；先用颜色和几何条件找这个底边锚点，
+        # 再回退到旧模板。这样模板低分或版本换图时仍会点击真实船体，
+        # 不会把低分纹理坐标当入口连续点击。
+        try:
+            import cv2
+
+            hsv = cv2.cvtColor(区域, cv2.COLOR_BGR2HSV)
+            橙红 = cv2.inRange(
+                hsv,
+                np.array((0, 70, 60), dtype=np.uint8),
+                np.array((28, 255, 255), dtype=np.uint8),
+            )
+            橙红 |= cv2.inRange(
+                hsv,
+                np.array((168, 70, 60), dtype=np.uint8),
+                np.array((180, 255, 255), dtype=np.uint8),
+            )
+            橙红 = cv2.morphologyEx(
+                橙红,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
+            )
+            数量, _, 统计, 重心 = cv2.connectedComponentsWithStats(橙红, 8)
+            颜色候选 = []
+            for 索引 in range(1, 数量):
+                局部x, 局部y, 方宽, 方高, 面积 = [int(v) for v in 统计[索引]]
+                if (
+                    面积 < 300
+                    or 方宽 < 25
+                    or 方高 < 25
+                    or 方宽 > 90
+                    or 方高 > 90
+                    or not 0.35 <= 方宽 / max(1, 方高) <= 2.5
+                ):
+                    continue
+                中心x, 中心y = 重心[索引]
+                全局中心x = float(中心x) + 左
+                全局中心y = float(中心y) + 上
+                # 真实飞艇位于左下海岸带；地图中部建筑即使同样是
+                # 橙红色，也不会落在这个几何窗口内。
+                if not (140 <= 全局中心x <= 300 and 360 <= 全局中心y <= 500):
+                    continue
+                颜色候选.append((面积, 局部x, 局部y, 方宽, 方高, 重心[索引]))
+            if 颜色候选:
+                _, _, _, _, _, 重心 = max(颜色候选, key=lambda 项: 项[0])
+                点击x = int(round(float(重心[0]))) + 左
+                点击y = int(round(float(重心[1]))) + 上
+                return True, (点击x, 点击y), 0.60
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            pass
 
         最佳匹配 = getattr(self.模板识别, "执行最佳匹配", None)
         if callable(最佳匹配):

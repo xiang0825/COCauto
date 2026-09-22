@@ -6,9 +6,27 @@ from unittest.mock import Mock
 import numpy as np
 
 from 任务流程.世界跳转.进入世界基类 import 进入世界任务基类
+from 任务流程.世界跳转.世界识别器 import 世界识别器
 
 
 class 世界跳转测试(unittest.TestCase):
+    def test_新版夜世界红色等级徽章可在资源模板失配时确认夜世界(self):
+        识别器 = 世界识别器(Mock())
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        # 仅模拟固定左上 HUD，不依赖具体版本的资源数字和图标素材。
+        画面[10:88, 10:62] = (0, 0, 220)
+        结果 = 识别器.识别(画面)
+        self.assertEqual(结果.当前世界, "夜世界")
+        self.assertIn("夜世界红色等级徽章", 结果.依据)
+
+    def test_主世界蓝色等级徽章不会被误判为夜世界(self):
+        识别器 = 世界识别器(Mock())
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        画面[10:88, 10:62] = (220, 80, 0)
+        结果 = 识别器.识别(画面)
+        self.assertEqual(结果.当前世界, "主世界")
+        self.assertIn("主世界蓝色等级徽章", 结果.依据)
+
     def test_世界未知时不发送任何输入(self):
         模块 = importlib.import_module("任务流程.世界跳转.进入世界基类")
         时钟 = SimpleNamespace(当前时间=0.0)
@@ -56,10 +74,10 @@ class 世界跳转测试(unittest.TestCase):
         命中, 坐标, 分数 = 任务.查找世界入口(np.zeros((600, 800, 3), dtype=np.uint8))
 
         self.assertTrue(命中)
-        self.assertEqual(坐标, (147, 494))
+        self.assertEqual(坐标, (87, 394))
         self.assertAlmostEqual(分数, 0.55)
         区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
-        self.assertEqual(区域.shape[:2], (140, 120))
+        self.assertEqual(区域.shape[:2], (240, 300))
 
     def test_同一入口连续未转场后停止重复点击(self):
         模块 = importlib.import_module("任务流程.世界跳转.进入世界基类")

@@ -88,6 +88,39 @@ class 收集圣水车任务(夜世界基础任务):
                     return False
 
                 else:
+                    # 新版夜世界主页可能没有旧版“船”局部素材，但可
+                    # 收集的圣水车仍会显示紫色资源气泡。旧流程只有在
+                    # 船模板命中后才扫描气泡，结果会在实机上无意义地
+                    # 滑动五轮。动态候选同样必须逐点经过标题 OCR 和
+                    # 夜世界复核，不能把颜色命中直接当成圣水车。
+                    动态候选点 = self._生成动态紫色候选点()
+                    if 动态候选点:
+                        self.上下文.置脚本状态(
+                            f"旧版船模板未命中，发现{len(动态候选点)}个动态资源气泡，开始逐点确认"
+                        )
+                        for 序号, (点击x, 点击y, 来源) in enumerate(动态候选点, 1):
+                            if self.是否在危险区域内(点击x, 点击y):
+                                continue
+                            self.上下文.置脚本状态(
+                                f"尝试打开圣水车：动态候选{序号}/{len(动态候选点)}"
+                                f" {点击x},{点击y}（{来源}）"
+                            )
+                            self.上下文.点击(点击x, 点击y)
+                            if self.尝试收集圣水():
+                                self.上下文.置脚本状态(
+                                    f"已确认动态圣水车面板并完成收集：{点击x},{点击y}"
+                                )
+                                return True
+                            self._关闭候选详情面板()
+                            if not self._夜世界仍在前台():
+                                self.上下文.置脚本状态(
+                                    "动态资源候选点击后已离开夜世界，停止剩余候选点击",
+                                    级别="警告",
+                                )
+                                return False
+                        self.上下文.置脚本状态(
+                            "动态资源气泡均未确认圣水车标题，继续安全搜索"
+                        )
                     找不到夜世界船的次数 += 1
                     self.上下文.置脚本状态(f"定位圣水车位置中... ({找不到夜世界船的次数},最大重试5次)")
                     self.上下文.滑动屏幕((595, 182), (135, 250))  # 滑动屏幕寻找
@@ -180,6 +213,57 @@ class 收集圣水车任务(夜世界基础任务):
             已有.add(关键)
             安全候选.append((候选x, 候选y, 来源))
         return 安全候选
+
+    def _生成动态紫色候选点(self):
+        """只扫描当前画面的紫色资源气泡，不依赖旧船模板。"""
+        try:
+            屏幕 = self.上下文.op.获取屏幕图像cv(0, 0, 800, 600)
+            if not isinstance(屏幕, np.ndarray) or 屏幕.ndim < 2 or not 屏幕.size:
+                return []
+            高, 宽 = 屏幕.shape[:2]
+            x左, x右 = max(0, int(宽 * 0.09)), min(宽, int(宽 * 0.91))
+            y上, y下 = max(0, int(高 * 0.25)), min(高, int(高 * 0.90))
+            地图 = 屏幕[y上:y下, x左:x右]
+            if not 地图.size:
+                return []
+            hsv = cv2.cvtColor(地图, cv2.COLOR_BGR2HSV)
+            遮罩 = cv2.inRange(
+                hsv,
+                np.array((125, 80, 70), dtype=np.uint8),
+                np.array((175, 255, 255), dtype=np.uint8),
+            )
+            遮罩 = cv2.morphologyEx(
+                遮罩,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+            )
+            数量, _, 统计, 重心 = cv2.connectedComponentsWithStats(遮罩, 8)
+            气泡 = []
+            最小面积 = max(120, int(宽 * 高 * 0.00018))
+            for 索引 in range(1, 数量):
+                _, _, 方宽, 方高, 面积 = [int(v) for v in 统计[索引]]
+                if 面积 < 最小面积:
+                    continue
+                if 方宽 < 8 or 方高 < 8 or 方宽 > 宽 * 0.16 or 方高 > 高 * 0.16:
+                    continue
+                if not 0.35 <= 方宽 / max(1, 方高) <= 2.8:
+                    continue
+                中心x, 中心y = 重心[索引]
+                气泡.append((int(面积), int(round(中心x + x左)), int(round(中心y + y上))))
+            已有 = set()
+            安全候选 = []
+            for _, 气泡x, 气泡y in sorted(气泡, reverse=True)[:4]:
+                气泡x = max(12, min(788, int(气泡x)))
+                气泡y = max(12, min(588, int(气泡y)))
+                关键 = (round(气泡x / 8), round(气泡y / 8))
+                if 关键 in 已有:
+                    continue
+                已有.add(关键)
+                安全候选.append((气泡x, 气泡y, "动态紫色资源气泡"))
+            return 安全候选
+        except (AttributeError, TypeError, ValueError, cv2.error) as 异常:
+            self.上下文.置脚本状态(f"圣水气泡扫描失败，跳过动态候选：{异常}")
+            return []
 
     def _关闭候选详情面板(self) -> bool:
         """关闭候选点击误打开的游戏内详情面板，不触碰宝石/商店。"""
