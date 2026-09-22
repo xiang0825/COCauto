@@ -89,7 +89,7 @@ class 资源状态测试(unittest.TestCase):
 
         with patch(
             "任务流程.更新主世界账号资源状态.单行资源识别",
-            side_effect=[27, 18, 73],
+            side_effect=[27, 18, 73, 27, 18],
         ):
             结果 = 任务.识别当前资源(上下文)
 
@@ -110,12 +110,37 @@ class 资源状态测试(unittest.TestCase):
 
         with patch(
             "任务流程.更新主世界账号资源状态.单行资源识别",
-            side_effect=[500000, 700000, 120],
+            side_effect=[500000, 700000, 120, 500000, 700000],
         ):
             结果 = 任务.识别当前资源(上下文)
 
         self.assertTrue(结果["识别成功"])
         self.assertEqual(结果["总资源"], 1200000)
+
+    def test_主资源轻量OCR漏首位时使用完整OCR(self):
+        任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((160, 210, 3), dtype=np.uint8)),
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.ocr引擎 = Mock()
+
+        # 真实 MuMu 画面复现：轻量路径漏掉主资源首位和黑油首位，
+        # 完整 OCR 返回正确数字。
+        with patch(
+            "任务流程.更新主世界账号资源状态.单行资源识别",
+            side_effect=[151700, 241756, 9249, 1511700, 2417561, 409724],
+        ):
+            结果 = 任务.识别当前资源(上下文)
+
+        self.assertTrue(结果["识别成功"])
+        self.assertEqual(结果["金币"], 1511700)
+        self.assertEqual(结果["圣水"], 2417561)
+        self.assertEqual(结果["黑油"], 409724)
 
     def test_黑油轻量读数明显过短时使用完整OCR(self):
         任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
