@@ -14,6 +14,7 @@ from 任务流程.夜世界.夜世界打鱼.下兵 import 下兵
 from 任务流程.夜世界.夜世界打鱼.等待回营或第二场战斗 import 等待回营或第二次战斗
 from 任务流程.兵种或法术升级 import 兵种或法术升级任务
 from 任务流程.战宠升级 import 战宠升级任务
+from 任务流程.建筑升级 import 建筑升级任务
 
 
 class 任务计划测试(unittest.TestCase):
@@ -361,6 +362,23 @@ class 任务计划测试(unittest.TestCase):
             self.assertTrue(任务.执行())
 
         self.assertFalse(上下文.页面恢复失败)
+
+    def test_建筑和英雄未配置时作为正常跳过不阻断任务计划(self):
+        上下文 = SimpleNamespace(
+            设置=机器人设置(
+                欲升级的英雄或建筑=[],
+                是否升级建议升级的建筑=False,
+            ),
+            置脚本状态=Mock(),
+        )
+        任务 = 建筑升级任务.__new__(建筑升级任务)
+        任务.上下文 = 上下文
+
+        self.assertTrue(任务.执行())
+        self.assertTrue(
+            any("跳过升级建筑任务" in 调用.args[0]
+                for 调用 in 上下文.置脚本状态.call_args_list)
+        )
 
 
 if __name__ == "__main__":

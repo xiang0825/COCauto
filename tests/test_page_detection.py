@@ -192,6 +192,16 @@ class 页面识别测试(unittest.TestCase):
         结果 = 识别器.识别(np.zeros((600, 800, 3), dtype=np.uint8), 战斗中=True)
         self.assertEqual(结果.页面, "战斗结算")
 
+    def test_战斗倒计时优先于误报结算按钮(self):
+        """仍有倒计时时，即使结算模板误命中也必须继续下兵。"""
+        识别器 = 页面识别器(Mock())
+        识别器._最佳分数 = Mock(return_value=0.85)
+        识别器._红色放弃按钮分数 = Mock(return_value=0.0)
+        识别器._战斗倒计时分数 = Mock(return_value=0.96)
+        结果 = 识别器.识别(np.zeros((600, 800, 3), dtype=np.uint8), 战斗中=True)
+        self.assertEqual(结果.页面, "战斗中")
+        self.assertTrue(any("战斗倒计时" in 依据 for 依据 in 结果.依据))
+
     def test_奖励过渡复核结算页不会停止任务(self):
         上下文 = 任务上下文.__new__(任务上下文)
         上下文._战斗中 = True
