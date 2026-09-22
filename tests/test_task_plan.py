@@ -18,6 +18,23 @@ from 任务流程.建筑升级 import 建筑升级任务
 
 
 class 任务计划测试(unittest.TestCase):
+    def test_世界任务开始时发现断线会先走游戏内重连(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            识别点击画面=Mock(
+                return_value=SimpleNamespace(页面="断线弹窗")
+            ),
+            置脚本状态=Mock(),
+        )
+        检测登录 = Mock()
+        检测登录.执行.return_value = True
+
+        self.assertTrue(机器人._断线时恢复游戏连接(上下文, 检测登录))
+        检测登录.执行.assert_called_once_with(首次登录=False)
+        self.assertFalse(上下文.页面恢复失败)
+        self.assertTrue(any("重新登入" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list))
+
     def test_计划状态来自机器人配置(self):
         设置 = 机器人设置(
             是否刷主世界=True,
@@ -128,6 +145,7 @@ class 任务计划测试(unittest.TestCase):
             页面恢复失败=False,
             机器人标志="测试机器人",
             数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态)),
+            识别点击画面=Mock(return_value=SimpleNamespace(页面="夜世界主页")),
             置脚本状态=Mock(),
             脚本延时=Mock(),
         )
@@ -286,6 +304,7 @@ class 任务计划测试(unittest.TestCase):
         上下文 = SimpleNamespace(
             数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态)),
             机器人标志="测试机器人",
+            识别点击画面=Mock(return_value=SimpleNamespace(页面="主世界主页")),
             置脚本状态=Mock(),
             脚本延时=Mock(),
         )
