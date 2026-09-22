@@ -62,6 +62,44 @@ class 打开进攻页面测试(unittest.TestCase):
         self.assertTrue(上下文._入口已进入战斗)
         上下文.点击.assert_not_called()
 
+    def test_未连续确认主世界主页时阻止入口点击(self):
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            识别点击画面=Mock(
+                side_effect=[
+                    SimpleNamespace(
+                        页面="夜世界主页", 世界="夜世界", 可信度=0.78
+                    ),
+                    SimpleNamespace(页面="未知", 世界=None, 可信度=0.0),
+                ]
+            ),
+            脚本延时=Mock(),
+            点击=Mock(),
+        )
+
+        self.assertFalse(任务._确认主世界主页(上下文))
+        上下文.点击.assert_not_called()
+
+    def test_连续两帧主世界主页才允许入口点击(self):
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            识别点击画面=Mock(
+                side_effect=[
+                    SimpleNamespace(
+                        页面="主世界主页", 世界="主世界", 可信度=0.78
+                    ),
+                    SimpleNamespace(
+                        页面="主世界主页", 世界="主世界", 可信度=0.78
+                    ),
+                ]
+            ),
+            脚本延时=Mock(),
+        )
+
+        self.assertTrue(任务._确认主世界主页(上下文))
+
     def test_攻击按钮点击后直接进入战斗会交给下兵流程(self):
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
         页面状态 = iter((

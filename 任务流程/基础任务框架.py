@@ -6,7 +6,7 @@ import threading
 import time
 import gc
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Tuple, Any, Optional
 
 import cv2
@@ -813,6 +813,31 @@ class 任务上下文:
                 屏幕图像,
                 战斗中=bool(getattr(self, "_战斗中", False)),
             )
+            # 夜世界红色等级徽章是有用的备用特征，但实机主世界在
+            # 动画/地图纹理经过左上角时曾出现过“只有红徽章命中”的
+            # 单帧误判。点击护栏不能把这种单帧结果当成已经切换世界：
+            # 一旦本上下文刚确认过主世界，红徽章单独命中就先返回未知，
+            # 让调用方等待下一帧，而不是继续发送主世界或夜世界入口点击。
+            页面 = str(getattr(结果, "页面", "") or "")
+            依据 = tuple(getattr(结果, "依据", ()) or ())
+            上次主页世界 = getattr(self, "_最近确认主页世界", None)
+            if (
+                页面 == "夜世界主页"
+                and 上次主页世界 == "主世界"
+                and 依据
+                and all("夜世界红色等级徽章" in str(项) for 项 in 依据)
+            ):
+                结果 = replace(
+                    结果,
+                    页面="未知",
+                    世界=None,
+                    可信度=0.0,
+                    依据=("夜世界红色等级徽章单帧命中，等待连续确认",),
+                )
+            elif 页面 == "主世界主页":
+                self._最近确认主页世界 = "主世界"
+            elif 页面 == "夜世界主页":
+                self._最近确认主页世界 = "夜世界"
             self._最近点击页面结果 = 结果
             现在 = time.monotonic()
             日志键 = (结果.页面, 结果.世界, 结果.依据)

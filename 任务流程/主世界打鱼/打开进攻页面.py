@@ -56,6 +56,11 @@ class 打开进攻页面任务(基础任务):
                     "升级详情弹窗关闭后未确认主世界主页，禁止打开进攻页面"
                 )
                 return False
+        if not self._确认主世界主页(上下文):
+            上下文.置脚本状态(
+                "打开进攻页面已阻断：未连续确认主世界主页，禁止误点夜世界或其它页面"
+            )
+            return False
         if not 上下文.点击(62, 546, 1000):
             上下文.置脚本状态("打开进攻页面失败：主世界进攻入口未点击")
             return False
@@ -63,6 +68,43 @@ class 打开进攻页面任务(基础任务):
             上下文.置脚本状态("打开进攻页面失败：军队入口未点击")
             return False
         return self._等待并点击攻击按钮(上下文)
+
+    @staticmethod
+    def _确认主世界主页(上下文) -> bool:
+        """进攻入口前要求两帧连续的主世界主页证据。
+
+        资源任务只允许从主世界主页开始。单帧“夜世界红徽章”或未知页
+        不能授权固定入口点击；若检测器暂不可用则保守停止，避免把点击
+        发到夜世界、战斗页或模拟器其它画面。
+        """
+        识别 = getattr(上下文, "识别点击画面", None)
+        if not callable(识别):
+            上下文.置脚本状态("主世界主页复核不可用，阻止打开进攻页面")
+            return False
+        连续确认 = 0
+        for _ in range(2):
+            try:
+                try:
+                    结果 = 识别(强制=True)
+                except TypeError:
+                    结果 = 识别()
+            except Exception as 异常:
+                上下文.置脚本状态(f"主世界主页复核失败，阻止入口点击：{异常}")
+                return False
+            if (
+                getattr(结果, "页面", "") == "主世界主页"
+                and getattr(结果, "世界", "") == "主世界"
+                and float(getattr(结果, "可信度", 0.0) or 0.0) >= 0.70
+            ):
+                连续确认 += 1
+                if 连续确认 >= 2:
+                    return True
+            else:
+                连续确认 = 0
+            延时 = getattr(上下文, "脚本延时", None)
+            if callable(延时):
+                延时(250)
+        return False
 
     @staticmethod
     def _识别已存在的战斗页面(上下文, 强制: bool = False) -> str | None:
