@@ -357,6 +357,8 @@ class 刷墙识别测试(unittest.TestCase):
 
         self.assertFalse(self.任务.确认城墙升级提交(上下文))
         上下文.点击.assert_called_once_with(549, 505, 延时=650, 是否精确点击=True)
+        上下文.检查宝石商店危险页面.assert_called_once_with(强制=True)
+        self.assertEqual(self.任务.执行OCR识别.call_count, 2)
 
 
 if __name__ == "__main__":

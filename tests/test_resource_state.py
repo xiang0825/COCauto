@@ -27,6 +27,28 @@ class 资源状态测试(unittest.TestCase):
 
         self.assertEqual(单行资源识别(引擎, 图像), 123)
 
+    def test_资源行预处理保留行底部数字(self):
+        引擎 = Mock(return_value=([("31 000 000", 0.99)], None))
+        图像 = np.zeros((53, 120, 3), dtype=np.uint8)
+
+        self.assertEqual(单行资源识别(引擎, 图像), 31000000)
+        送入OCR = 引擎.call_args.args[0]
+        # 53px 行按 5%~95% 保留 47px，再放大 3 倍；避免未来重新
+        # 使用过窄的上半行裁剪，导致圣水/黑油被识别成 0。
+        self.assertEqual(送入OCR.shape[0], 141)
+
+    def test_完整资源识别可修复轻量OCR截断(self):
+        引擎 = Mock(side_effect=[
+            ([("279379", 0.70)], None),
+            ([([[0, 0], [1, 0], [1, 1], [0, 1]], "27 937 922", 0.98)], None),
+        ])
+        图像 = np.zeros((53, 120, 3), dtype=np.uint8)
+
+        结果 = 单行资源识别(引擎, 图像, 允许完整识别=True)
+
+        self.assertEqual(结果, 27937922)
+        self.assertEqual(引擎.call_count, 2)
+
     def test_OCR连续失败时不覆盖数据库(self):
         任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
         上下文 = SimpleNamespace(
@@ -94,6 +116,27 @@ class 资源状态测试(unittest.TestCase):
 
         self.assertTrue(结果["识别成功"])
         self.assertEqual(结果["总资源"], 1200000)
+
+    def test_黑油轻量读数明显过短时使用完整OCR(self):
+        任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((160, 210, 3), dtype=np.uint8)),
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.ocr引擎 = Mock()
+
+        with patch(
+            "任务流程.更新主世界账号资源状态.单行资源识别",
+            side_effect=[28_241_336, 31_000_000, 558, 469_558],
+        ):
+            结果 = 任务.识别当前资源(上下文)
+
+        self.assertTrue(结果["识别成功"])
+        self.assertEqual(结果["黑油"], 469_558)
 
 
 if __name__ == "__main__":
