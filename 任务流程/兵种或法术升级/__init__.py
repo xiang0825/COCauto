@@ -17,28 +17,31 @@ class 兵种或法术升级任务(基础任务):
 
         if not 欲升级目标:
             self.上下文.置脚本状态("研究升级：未配置要升级的兵种或法术，跳过")
-            return False
+            return True
 
         # 检查冷却时间
         if not self._检查冷却时间():
-            return False
+            # 冷却中是正常的“本轮跳过”，不是页面恢复失败；否则
+            # 任务计划会把升级检查的等待状态误判成致命错误并停止
+            # 其他任务。
+            return True
 
         self.上下文.置脚本状态(f"研究升级：开始升级 {欲升级目标}")
 
         # 步骤1：打开研究面板
         if not 打开研究面板任务(self.上下文).执行():
             self._记录失败状态("实验室不可用或已有升级中")
-            return False
+            return not getattr(self.上下文, "页面恢复失败", False)
 
         # 步骤2：定位并点击目标兵种或法术
         if not 打开要升级的兵种或法术任务(self.上下文, 欲升级目标).执行():
             self._记录失败状态(f"无法打开 {欲升级目标} 升级界面")
-            return False
+            return not getattr(self.上下文, "页面恢复失败", False)
 
         # 步骤3：完成升级操作
         if not 完成兵种或法术升级任务(self.上下文).执行():
             self._记录失败状态("升级操作未完成")
-            return False
+            return not getattr(self.上下文, "页面恢复失败", False)
 
         # 成功后清除失败记录
         self.数据库.更新状态(self.机器人标志, "研究升级失败记录", None)

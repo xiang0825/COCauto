@@ -5,6 +5,7 @@ from unittest.mock import Mock
 from 任务流程.建筑升级.升级英雄 import 升级英雄任务
 from 任务流程.兵种或法术升级.完成兵种或法术升级 import 完成兵种或法术升级任务
 from 任务流程.战宠升级.完成宠物升级 import 完成宠物升级任务
+from 任务流程.战宠升级.寻找战宠小屋 import 寻找战宠小屋任务
 from 任务流程.战宠升级.打开要升级的宠物 import 打开要升级的宠物任务
 
 
@@ -57,6 +58,26 @@ class 升级面板关闭安全测试(unittest.TestCase):
 
         返回.assert_called_once_with(
             "关闭战宠小屋页面", 已确认可关闭面板=True
+        )
+
+    def test_战宠小屋按钮使用面板区域和自适应阈值(self):
+        任务 = 寻找战宠小屋任务.__new__(寻找战宠小屋任务)
+        上下文 = SimpleNamespace(
+            脚本延时=Mock(),
+            点击=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.是否出现图片 = Mock(return_value=(True, (489, 450)))
+
+        self.assertTrue(任务._点击打开按钮())
+        任务.是否出现图片.assert_called_once_with(
+            "打开战宠小屋按钮.bmp|打开战宠小屋按钮1.bmp",
+            区域=(400, 360, 580, 560),
+            相似度阈值=0.55,
+        )
+        上下文.点击.assert_called_once_with(
+            489, 450, 延时=350, 是否精确点击=True
         )
 
 

@@ -12,6 +12,8 @@ from 工具包.工具函数 import 是否夜世界资源打满
 from 任务流程.夜世界.更新夜世界账号资源状态 import 更新夜世界资源状态任务
 from 任务流程.夜世界.夜世界打鱼.下兵 import 下兵
 from 任务流程.夜世界.夜世界打鱼.等待回营或第二场战斗 import 等待回营或第二次战斗
+from 任务流程.兵种或法术升级 import 兵种或法术升级任务
+from 任务流程.战宠升级 import 战宠升级任务
 
 
 class 任务计划测试(unittest.TestCase):
@@ -316,6 +318,49 @@ class 任务计划测试(unittest.TestCase):
 
         self.assertFalse(任务.执行())
         上下文.数据库.更新状态.assert_not_called()
+
+    def test_研究实验室不可用时作为正常跳过不阻断任务计划(self):
+        上下文 = SimpleNamespace(
+            设置=机器人设置(欲升级的兵种或法术="雷电法术"),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            数据库=Mock(),
+            机器人标志="测试机器人",
+        )
+        任务 = 兵种或法术升级任务.__new__(兵种或法术升级任务)
+        任务.上下文 = 上下文
+        任务.数据库 = 上下文.数据库
+        任务.机器人标志 = 上下文.机器人标志
+        任务._检查冷却时间 = Mock(return_value=True)
+        with patch("任务流程.兵种或法术升级.打开研究面板任务") as 打开研究面板:
+            打开研究面板.return_value.执行.return_value = False
+            self.assertTrue(任务.执行())
+
+        self.assertFalse(上下文.页面恢复失败)
+        self.assertTrue(
+            any("实验室不可用或已有升级中" in 调用.args[0]
+                for 调用 in 上下文.置脚本状态.call_args_list)
+        )
+
+    def test_战宠小屋不可用时作为正常跳过不阻断任务计划(self):
+        上下文 = SimpleNamespace(
+            设置=机器人设置(欲升级的战宠="莱希"),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            数据库=Mock(
+                获取最新完整状态=Mock(return_value=SimpleNamespace(状态数据={}))
+            ),
+            机器人标志="测试机器人",
+        )
+        任务 = 战宠升级任务.__new__(战宠升级任务)
+        任务.上下文 = 上下文
+        任务.数据库 = 上下文.数据库
+        任务.机器人标志 = 上下文.机器人标志
+        with patch("任务流程.战宠升级.寻找战宠小屋任务") as 寻找小屋:
+            寻找小屋.return_value.执行.return_value = False
+            self.assertTrue(任务.执行())
+
+        self.assertFalse(上下文.页面恢复失败)
 
 
 if __name__ == "__main__":
