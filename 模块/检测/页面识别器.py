@@ -371,6 +371,57 @@ class 页面识别器:
             return 0.0
         return 0.0
 
+    def _结算结果视觉分数(self, 图像: np.ndarray) -> float:
+        """模板失配时识别“结果横幅 + 回营按钮”的结算页。"""
+        if not isinstance(图像, np.ndarray) or 图像.ndim < 2 or 图像.size == 0:
+            return 0.0
+        try:
+            高, 宽 = 图像.shape[:2]
+            if 高 < 300 or 宽 < 400:
+                return 0.0
+            hsv = cv2.cvtColor(图像, cv2.COLOR_BGR2HSV)
+
+            # 回营按钮只看底部中央，排除右侧战斗速度按钮和兵栏药水。
+            bx1, bx2 = int(宽 * 0.38), int(宽 * 0.62)
+            by1, by2 = int(高 * 0.76), int(高 * 0.99)
+            绿色 = (
+                (hsv[by1:by2, bx1:bx2, 0] >= 30)
+                & (hsv[by1:by2, bx1:bx2, 0] <= 100)
+                & (hsv[by1:by2, bx1:bx2, 1] >= 70)
+                & (hsv[by1:by2, bx1:bx2, 2] >= 100)
+            )
+            if not 绿色.size or float(np.mean(绿色)) < 0.08:
+                return 0.0
+
+            # 结果横幅必须是中央上半区的宽金色结构。
+            rx1, rx2 = int(宽 * 0.22), int(宽 * 0.78)
+            ry1, ry2 = int(高 * 0.16), int(高 * 0.58)
+            区域 = hsv[ry1:ry2, rx1:rx2]
+            金色 = (
+                (区域[:, :, 0] <= 38)
+                & (区域[:, :, 1] >= 75)
+                & (区域[:, :, 2] >= 100)
+            ).astype(np.uint8)
+            金色 = cv2.morphologyEx(
+                金色,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (9, 5)),
+            )
+            轮廓列表, _ = cv2.findContours(
+                金色 * 255, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            for 轮廓 in 轮廓列表:
+                _, _, w, h = cv2.boundingRect(轮廓)
+                if (
+                    w >= int(宽 * 0.36)
+                    and h >= int(高 * 0.08)
+                    and w / max(1, h) >= 2.0
+                ):
+                    return 0.96
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return 0.0
+        return 0.0
+
     def 识别(self, 屏幕图像: np.ndarray, 战斗中: bool = False) -> 页面识别结果:
         """识别当前页面；不确定时返回 ``页面=未知``，不触发任何输入。"""
         断线分数 = self._断线弹窗分数(屏幕图像)
@@ -392,17 +443,23 @@ class 页面识别器:
             if 视觉战斗分数 >= 模板战斗分数
             else f"放弃按钮{模板战斗分数:.2f}"
         )
-        结算分数 = self._最佳分数(
+        模板结算分数 = self._最佳分数(
             self._裁剪(屏幕图像, self.结算区域),
             self.结算模板,
         )
+        视觉结算分数 = self._结算结果视觉分数(屏幕图像)
+        结算分数 = max(模板结算分数, 视觉结算分数)
 
         if 结算分数 >= self.结算阈值:
             return 页面识别结果(
                 页面="战斗结算",
                 世界=None,
                 可信度=结算分数,
-                依据=(f"结算按钮{结算分数:.2f}",),
+                依据=(
+                    f"结算按钮{模板结算分数:.2f}"
+                    if 模板结算分数 >= 视觉结算分数
+                    else f"结果横幅+回营视觉{视觉结算分数:.2f}"
+                ,),
             )
 
         倒计时分数 = self._战斗倒计时分数(屏幕图像)
