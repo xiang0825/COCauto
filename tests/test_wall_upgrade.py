@@ -104,12 +104,12 @@ class 刷墙识别测试(unittest.TestCase):
 
     def test_能从墙体面板读取两种资源费用(self):
         OCR结果 = [
-            ([[411, 450], [471, 450], [471, 464], [411, 464]], "So00000", 0.80),
-            ([[500, 450], [559, 450], [559, 464], [500, 464]], "5000000", 0.80),
+            ([[411, 425], [471, 425], [471, 441], [411, 441]], "So00000", 0.80),
+            ([[500, 425], [559, 425], [559, 441], [500, 441]], "5000000", 0.80),
         ]
         self.assertEqual(self.任务.解析城墙升级费用(OCR结果), (5000000, 5000000))
         变形OCR结果 = [
-            ([[411, 450], [471, 450], [471, 464], [411, 464]], "000000S", 0.80),
+            ([[411, 425], [471, 425], [471, 441], [411, 441]], "000000S", 0.80),
         ]
         self.assertEqual(self.任务.解析城墙升级费用(变形OCR结果), (5000000, None))
 
@@ -120,6 +120,45 @@ class 刷墙识别测试(unittest.TestCase):
         self.assertIn("升级建筑的圣水小图标1.bmp", 圣水模板)
         self.assertNotIn("夜.bmp", 金币模板)
         self.assertNotIn("夜.bmp", 圣水模板)
+
+    def test_实机放大升级卡片使用OCR回退定位资源按钮(self):
+        """小图标模板失配时，仍应只返回两张资源升级卡片的安全点。"""
+        self.任务.模板识别 = Mock()
+        self.任务.模板识别.执行匹配 = Mock(return_value=(False, (0, 0), 0.0))
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8))
+            ),
+            置脚本状态=Mock(),
+        )
+        OCR结果 = [
+            ([[413, 425], [471, 425], [471, 441], [413, 441]], "5000000", 0.95),
+            ([[501, 425], [558, 425], [558, 441], [501, 441]], "5O00000", 0.95),
+            ([[433, 490], [458, 490], [458, 511], [433, 511]], "升极", 0.95),
+            ([[523, 494], [545, 494], [545, 506], [523, 506]], "升级", 0.95),
+        ]
+
+        结果 = self.任务.识别城墙升级资源按钮(上下文, OCR结果=OCR结果)
+
+        self.assertTrue(结果["金币"])
+        self.assertTrue(结果["圣水"])
+        self.assertEqual(结果["金币点击点"], (445, 500))
+        self.assertEqual(结果["圣水点击点"], (534, 500))
+        self.assertTrue(any("OCR兼容回退" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list))
+
+    def test_确认框中文OCR近形字时按右下资源费用定位确认(self):
+        OCR结果 = [
+            ([[336, 40], [458, 40], [458, 58], [336, 58]], "将城瘤开至17级？", 0.80),
+            ([[508, 523], [590, 523], [590, 544], [508, 544]], "5000 000", 0.91),
+        ]
+        self.assertIn("将城墙升至", self.任务._规范城墙升级确认标题("将城瘤开至17级？"))
+        self.assertEqual(self.任务.定位城墙升级确认资源按钮(OCR结果), (549, 505))
+
+    def test_确认框定位不到标题时不应把资源栏当确认按钮(self):
+        OCR结果 = [
+            ([[700, 80], [760, 80], [760, 100], [700, 100]], "5000000", 0.99),
+        ]
+        self.assertIsNone(self.任务.定位城墙升级确认资源按钮(OCR结果))
 
     def test_资源不足只返回主世界且不点击宝石或商店(self):
         键盘 = Mock()
@@ -133,11 +172,29 @@ class 刷墙识别测试(unittest.TestCase):
         self.任务._标记资源不足并返回主世界(上下文, "金币不足")
 
         self.assertTrue(上下文.刷墙需要资源)
-        键盘.按字符按压.assert_called_once_with("esc")
-        上下文.点击.assert_not_called()
+        键盘.按字符按压.assert_not_called()
+        上下文.点击.assert_called_once_with(90, 80, 延时=350, 是否精确点击=True)
         日志 = " ".join(调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
         self.assertIn("禁止使用宝石", 日志)
         self.assertIn("禁止进入商店", 日志)
+
+    def test_未确认城墙面板绝不发送返回键(self):
+        键盘 = Mock()
+        上下文 = SimpleNamespace(
+            键盘=键盘,
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8))),
+            点击=Mock(),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        self.任务.执行OCR识别 = Mock(return_value=[])
+
+        self.任务._标记资源不足并返回主世界(上下文, "费用未知")
+
+        键盘.按字符按压.assert_not_called()
+        上下文.点击.assert_called_once_with(90, 80, 延时=350, 是否精确点击=True)
+        日志 = " ".join(调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
+        self.assertNotIn("发送ESC", 日志)
 
     def test_资源不足时没有安全可点击资源(self):
         self.assertIsNone(
@@ -232,7 +289,7 @@ class 刷墙识别测试(unittest.TestCase):
             )
         )
         self.assertTrue(上下文.刷墙需要资源)
-        上下文.点击.assert_not_called()
+        上下文.点击.assert_called_once_with(90, 80, 延时=350, 是否精确点击=True)
         self.任务.确认城墙升级提交.assert_not_called()
 
     def test_能读取墙体等级并识别资源不足(self):
@@ -284,6 +341,22 @@ class 刷墙识别测试(unittest.TestCase):
         self.任务.执行OCR识别 = Mock(side_effect=[确认OCR, []])
         self.assertTrue(self.任务.确认城墙升级提交(上下文))
         上下文.点击.assert_called_once_with(584, 474, 延时=650, 是否精确点击=True)
+
+    def test_确认框仍在或宝石覆盖层出现时不报告升级成功(self):
+        确认OCR = [
+            ([[328, 68], [468, 68], [468, 90], [328, 90]], "將城牆升至17級？", 0.95),
+            ([[508, 523], [590, 523], [590, 544], [508, 544]], "5000 000", 0.91),
+        ]
+        上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            点击=Mock(),
+            脚本延时=Mock(),
+            检查宝石商店危险页面=Mock(side_effect=[True, False, False]),
+        )
+        self.任务.执行OCR识别 = Mock(side_effect=[确认OCR, 确认OCR, 确认OCR, 确认OCR])
+
+        self.assertFalse(self.任务.确认城墙升级提交(上下文))
+        上下文.点击.assert_called_once_with(549, 505, 延时=650, 是否精确点击=True)
 
 
 if __name__ == "__main__":
