@@ -1,4 +1,7 @@
 from pathlib import Path
+
+import cv2
+
 from 任务流程.基础任务框架 import 基础任务, 任务上下文
 from 模块.检测.YOLO检测器 import 线程安全YOLO检测器
 
@@ -35,12 +38,15 @@ class 寻找战宠小屋任务(基础任务):
             return True
 
         try:
-
             屏幕图像 = self.上下文.op.获取屏幕图像cv(0, 0, 800, 600)
 
-            # YOLO 检测
-            检测结果 = self.战宠小屋检测器.检测(屏幕图像)
-            if not 检测结果 or not isinstance(检测结果, list):
+            # 完整画面中战宠小屋通常只有几十个像素，直接把全图缩放到
+            # YOLO 的 640x640 输入会把目标压得太小，实机置信度只有
+            # 0.17~0.23，导致任务一直安全跳过。只在主世界地图的安全
+            # 区域做有限的 1.5 倍放大检测，再把坐标还原回 800x600 参考
+            # 画布；不扫描右下商店、左下攻击按钮等固定控件区域。
+            检测结果 = self._检测放大地图区域(屏幕图像)
+            if not 检测结果:
                 self.上下文.置脚本状态("战宠升级：未检测到战宠小屋")
                 return False
 
@@ -67,6 +73,91 @@ class 寻找战宠小屋任务(基础任务):
             return True
         self.上下文.置脚本状态("战宠升级：未找到打开按钮")
         return False
+
+    def _检测放大地图区域(self, 屏幕图像) -> list[dict]:
+        """在主世界安全地图区域放大检测战宠小屋。
+
+        模型训练图里的小屋尺寸明显大于自适应实机画面中的小屋。这里
+        用两个重叠的主地图切片加两个边缘切片覆盖可见地图，每次只放大
+        1.5 倍，避免长时间循环产生大图和额外内存压力。只有置信度至少
+        0.55 且中心位于地图安全区的结果才允许后续点击。
+        """
+        if 屏幕图像 is None or not hasattr(屏幕图像, "shape"):
+            return []
+
+        高, 宽 = 屏幕图像.shape[:2]
+        if 高 <= 0 or 宽 <= 0:
+            return []
+        if (宽, 高) != (800, 600):
+            屏幕图像 = cv2.resize(
+                屏幕图像, (800, 600), interpolation=cv2.INTER_AREA
+            )
+
+        放大倍数 = 1.5
+        # 这些区域避开顶部资源栏、左下攻击入口和右下商店；相邻区域
+        # 保留重叠，避免小屋刚好落在切片边界上。
+        地图切片 = (
+            (120, 80, 640, 600),
+            (300, 80, 800, 600),
+            (80, 180, 600, 600),
+            (220, 120, 760, 600),
+        )
+        候选 = []
+        for 左, 上, 右, 下 in 地图切片:
+            左 = max(0, min(800, 左))
+            上 = max(0, min(600, 上))
+            右 = max(左 + 1, min(800, 右))
+            下 = max(上 + 1, min(600, 下))
+            切片 = 屏幕图像[上:下, 左:右]
+            放大图 = cv2.resize(
+                切片,
+                None,
+                fx=放大倍数,
+                fy=放大倍数,
+                interpolation=cv2.INTER_CUBIC,
+            )
+            try:
+                结果 = self.战宠小屋检测器.检测(放大图)
+            except Exception as 异常:
+                if self.上下文.是否内存异常(异常):
+                    self.上下文.触发内存保护("战宠小屋放大检测", 异常)
+                self.上下文.置脚本状态(f"战宠升级：放大检测异常 {异常}")
+                continue
+            if not isinstance(结果, list):
+                continue
+            for 项 in 结果:
+                置信度 = float(项.get("置信度", 0) or 0)
+                坐标 = 项.get("裁剪坐标")
+                if 置信度 < 0.55 or not isinstance(坐标, (list, tuple)) or len(坐标) < 4:
+                    continue
+                try:
+                    x1, y1, x2, y2 = (float(值) for 值 in 坐标[:4])
+                except (TypeError, ValueError):
+                    continue
+                # 从放大切片坐标还原为 800x600 参考坐标。
+                x1 = 左 + x1 / 放大倍数
+                y1 = 上 + y1 / 放大倍数
+                x2 = 左 + x2 / 放大倍数
+                y2 = 上 + y2 / 放大倍数
+                中心x = (x1 + x2) / 2
+                中心y = (y1 + y2) / 2
+                if not (70 <= 中心x <= 730 and 105 <= 中心y <= 585):
+                    continue
+                候选.append({
+                    "裁剪坐标": [int(x1), int(y1), int(x2), int(y2)],
+                    "类别名称": "战宠小屋",
+                    "置信度": 置信度,
+                })
+
+        # 重叠切片会重复检测同一座小屋；只保留最高置信度结果。
+        去重 = []
+        for 项 in sorted(候选, key=lambda 项: 项["置信度"], reverse=True):
+            x1, y1, x2, y2 = 项["裁剪坐标"]
+            cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+            if any(abs(cx - 已x) < 35 and abs(cy - 已y) < 35 for 已x, 已y, _ in 去重):
+                continue
+            去重.append((cx, cy, 项))
+        return [项 for _, _, 项 in 去重]
 
     def _点击打开按钮(self) -> bool:
         """只在战宠小屋面板底部寻找并点击“战宠”按钮。

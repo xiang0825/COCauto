@@ -2,6 +2,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import numpy as np
+
 from 任务流程.建筑升级.升级英雄 import 升级英雄任务
 from 任务流程.兵种或法术升级.完成兵种或法术升级 import 完成兵种或法术升级任务
 from 任务流程.战宠升级.完成宠物升级 import 完成宠物升级任务
@@ -89,6 +91,36 @@ class 升级面板关闭安全测试(unittest.TestCase):
         上下文.点击.assert_called_once_with(
             489, 450, 延时=350, 是否精确点击=True
         )
+
+    def test_战宠小屋使用放大地图切片并还原参考坐标(self):
+        任务 = 寻找战宠小屋任务.__new__(寻找战宠小屋任务)
+        调用次数 = 0
+
+        def 检测(图像):
+            nonlocal 调用次数
+            调用次数 += 1
+            if 调用次数 == 1:
+                return [{
+                    "裁剪坐标": [300, 300, 360, 360],
+                    "类别名称": "战宠小屋",
+                    "置信度": 0.80,
+                }]
+            return []
+
+        任务.战宠小屋检测器 = SimpleNamespace(检测=检测)
+        任务.上下文 = SimpleNamespace(
+            是否内存异常=lambda 异常: False,
+            触发内存保护=Mock(),
+            置脚本状态=Mock(),
+        )
+
+        结果 = 任务._检测放大地图区域(
+            np.zeros((600, 800, 3), dtype=np.uint8)
+        )
+
+        self.assertEqual(调用次数, 4)
+        self.assertEqual(结果[0]["裁剪坐标"], [320, 280, 360, 320])
+        self.assertEqual(结果[0]["置信度"], 0.80)
 
 
 if __name__ == "__main__":
