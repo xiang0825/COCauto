@@ -190,6 +190,22 @@ class 页面识别测试(unittest.TestCase):
         self.assertTrue(上下文.停止事件.is_set())
         self.assertTrue(any("系统维护页面" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
 
+    def test_维护页点击护栏阻断普通输入(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文._获取点击识别截图 = Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8))
+        上下文.识别点击画面 = Mock(
+            return_value=SimpleNamespace(页面="系统维护")
+        )
+        上下文.停止事件 = Mock()
+        上下文.置脚本状态 = Mock()
+        上下文.页面恢复失败 = False
+
+        self.assertTrue(上下文.检查宝石商店危险页面())
+        self.assertTrue(上下文.页面恢复失败)
+        上下文.停止事件.set.assert_called_once()
+        self.assertFalse(上下文.点击(400, 300))
+
     def test_右锚定断线弹窗识别为断线页面(self):
         """右侧横向布局的重新登入面板也必须被识别并拦截输入。"""
         画面 = np.full((600, 800, 3), (70, 100, 55), dtype=np.uint8)

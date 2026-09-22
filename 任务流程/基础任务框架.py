@@ -618,6 +618,22 @@ class 任务上下文:
                 self.触发内存保护("点击护栏", 异常)
             return None
 
+    def _系统维护页阻断输入(self, 页面结果) -> bool:
+        """维护页出现时阻断所有普通/战斗输入并安全停止。"""
+        if getattr(页面结果, "页面", "") != "系统维护":
+            return False
+        self.页面恢复失败 = True
+        if not getattr(self, "_系统维护页已记录", False):
+            self.置脚本状态(
+                "点击护栏检测到官方系统维护页面，禁止继续输入；保留CoC前台并安全停止"
+            )
+            self._系统维护页已记录 = True
+        try:
+            self.停止事件.set()
+        except Exception:
+            pass
+        return True
+
     def 输入前安全检查(self) -> bool:
         """供原始鼠标路径使用；返回 True 表示必须阻断本次输入。"""
         if getattr(self, "_内存保护已触发", False):
@@ -627,6 +643,8 @@ class 任务上下文:
         结果 = getattr(self, "_最近点击页面结果", None)
         if 结果 is None:
             结果 = self.识别点击画面()
+        if self._系统维护页阻断输入(结果):
+            return True
         if 结果 is not None and 结果.页面 == "断线弹窗":
             self.页面恢复失败 = True
             if not getattr(self, "_断线弹窗已记录", False):
@@ -696,6 +714,8 @@ class 任务上下文:
                 if not getattr(self, "_战斗护栏失败已记录", False):
                     self.置脚本状态("战斗护栏无法确认当前画面，阻止后续下兵并等待任务安全停止")
                     self._战斗护栏失败已记录 = True
+                return True
+            if self._系统维护页阻断输入(结果):
                 return True
             if 结果.页面 == "断线弹窗":
                 self.页面恢复失败 = True
@@ -770,7 +790,9 @@ class 任务上下文:
             # 这张截图同时供页面识别和下方危险区域识别，普通点击前
             # 的鼠标回调会命中 160ms 缓存，不会再次 screencap。
             屏幕图像 = self._获取点击识别截图(强制=强制)
-            self.识别点击画面()
+            页面结果 = self.识别点击画面()
+            if self._系统维护页阻断输入(页面结果):
+                return True
         except Exception as 异常:
             if self.是否内存异常(异常):
                 self.触发内存保护("点击护栏截图", 异常)
