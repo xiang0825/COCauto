@@ -21,6 +21,16 @@ class 升级面板关闭安全测试(unittest.TestCase):
             "关闭英雄升级页面", 已确认可关闭面板=True
         )
 
+    def test_英雄面板优先点主世界空白区域不发送返回键(self):
+        点击 = Mock(return_value=True)
+        返回 = Mock(return_value=True)
+        任务 = 升级英雄任务.__new__(升级英雄任务)
+        任务.上下文 = SimpleNamespace(点击=点击, 安全返回键=返回)
+
+        self.assertTrue(任务.关闭英雄升级页面())
+        点击.assert_called_once_with(680, 300, 延时=700, 是否精确点击=True)
+        返回.assert_not_called()
+
     def test_研究面板关闭两次都授权已确认面板(self):
         返回 = Mock(return_value=True)
         任务 = 完成兵种或法术升级任务.__new__(完成兵种或法术升级任务)

@@ -24,7 +24,7 @@ class 建筑升级边界测试(unittest.TestCase):
 
         任务.打开建筑页面(划到底部=False)
 
-        点击.assert_called_once_with(353, 13, 延时=1000)
+        点击.assert_called_once_with(262, 33, 延时=1000)
 
     def test_关闭刷资源时寻找建筑滑动仍使用主世界坐标(self):
         鼠标 = SimpleNamespace(
@@ -62,6 +62,24 @@ class 建筑升级边界测试(unittest.TestCase):
 
         点击.assert_not_called()
         任务.上下文.置脚本状态.assert_called_once()
+
+    def test_建议列表跳过本轮已提交的项目(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.建筑列表 = ["头号杀手", "攻城车"]
+        任务.排除建筑名称 = {"头号杀手"}
+        任务.上下文 = SimpleNamespace(置脚本状态=Mock())
+        任务.检查升级条件 = Mock(return_value=True)
+        任务.选中建筑 = Mock(return_value=True)
+
+        OCR = [
+            ([[10, 10], [70, 10], [70, 30], [10, 30]], "头号杀手", 0.99),
+            ([[80, 10], [130, 10], [130, 30], [80, 30]], "攻城车", 0.99),
+        ]
+        self.assertTrue(任务.尝试选中指定建筑(OCR))
+        任务.选中建筑.assert_called_once()
+        self.assertIn("跳过本轮已提交", " ".join(
+            调用.args[0] for 调用 in 任务.上下文.置脚本状态.call_args_list
+        ))
 
     def test_主世界单独出现升级中不会被当成建筑面板(self):
         任务 = 寻找建筑.__new__(寻找建筑)
@@ -109,10 +127,10 @@ class 建筑升级边界测试(unittest.TestCase):
             op=SimpleNamespace()
         )
         任务.执行OCR识别 = Mock(return_value=[
-            ([[550, 490], [590, 490], [590, 515], [550, 515]], "確", 0.99),
+            ([[475, 490], [505, 490], [505, 515], [475, 515]], "升级", 0.99),
         ])
 
-        self.assertEqual(任务._定位升级确认按钮(), (570, 502))
+        self.assertEqual(任务._定位升级确认按钮(), (490, 502))
 
     def test_建筑升级页面关闭时明确授权已确认面板(self):
         返回 = Mock(return_value=True)
@@ -125,6 +143,17 @@ class 建筑升级边界测试(unittest.TestCase):
             "关闭建筑升级页面", 已确认可关闭面板=True
         )
 
+    def test_建筑升级页面优先点击主世界空白区域不发送返回键(self):
+        点击 = Mock(return_value=True)
+        返回 = Mock(return_value=True)
+        状态 = Mock()
+        任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
+        任务.上下文 = SimpleNamespace(点击=点击, 安全返回键=返回, 置脚本状态=状态)
+
+        self.assertTrue(任务.关闭建筑升级页面())
+        点击.assert_called_once_with(680, 300, 延时=700, 是否精确点击=True)
+        返回.assert_not_called()
+
     def test_绿色立即完成区域不会被当成资源确认按钮(self):
         任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
         任务.上下文 = SimpleNamespace(
@@ -136,6 +165,47 @@ class 建筑升级边界测试(unittest.TestCase):
 
         self.assertIsNone(任务._定位升级确认按钮())
 
+    def test_升级进行中面板不会被当成新的升级按钮(self):
+        任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
+        任务.上下文 = SimpleNamespace(op=SimpleNamespace(), 置脚本状态=Mock())
+        任务.执行OCR识别 = Mock(return_value=[
+            ([[300, 30], [500, 30], [500, 60], [300, 60]], "正在進行升級", 0.99),
+            ([[420, 490], [470, 490], [470, 515], [420, 515]], "立即完成", 0.99),
+        ])
+
+        self.assertTrue(任务._当前已在升级中())
+        self.assertIsNone(任务._定位升级确认按钮())
+
+    def test_英雄研究详情不会走普通建筑锤子模板(self):
+        任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
+        任务.上下文 = SimpleNamespace(op=SimpleNamespace(), 置脚本状态=Mock())
+        任务.执行OCR识别 = Mock(return_value=[
+            ([[500, 470], [560, 470], [560, 500], [500, 500]], "研究", 0.99),
+            ([[300, 470], [360, 470], [360, 500], [300, 500]], "等待", 0.99),
+        ])
+
+        self.assertTrue(任务._当前是英雄或研究详情())
+
+    def test_全屏锤子命中但没有底部升级文字时禁止点击(self):
+        任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
+        点击 = Mock()
+        关闭 = Mock()
+        任务.要升级的建筑 = "测试建筑"
+        任务.相似度阈值 = 0.8
+        任务.上下文 = SimpleNamespace(
+            置脚本状态=Mock(), 点击=点击, 处理异常=Mock(),
+            关闭升级详情弹窗=关闭,
+        )
+        任务.是否出现图片 = Mock(return_value=(True, (500, 500)))
+        任务._当前已在升级中 = Mock(return_value=False)
+        任务._当前是英雄或研究详情 = Mock(return_value=False)
+        任务._OCR定位升级按钮 = Mock(return_value=None)
+        任务.关闭建筑升级页面 = 关闭
+
+        self.assertFalse(任务.执行())
+        点击.assert_not_called()
+        关闭.assert_called_once()
+
     def test_确认文字被OCR误识别时使用升级确认标题(self):
         任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
         任务.上下文 = SimpleNamespace(op=SimpleNamespace())
@@ -145,6 +215,34 @@ class 建筑升级边界测试(unittest.TestCase):
         ])
 
         self.assertEqual(任务._定位升级确认按钮(), (560, 522))
+
+    def test_真实升级文字位于资源卡片时允许点击且不覆盖宝石卡片(self):
+        任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
+        任务.上下文 = SimpleNamespace(op=SimpleNamespace())
+        任务.执行OCR识别 = Mock(return_value=[
+            ([[475, 490], [505, 490], [505, 512], [475, 512]], "升级", 0.99),
+            ([[548, 490], [580, 490], [580, 512], [548, 512]], "立即完成", 0.99),
+        ])
+
+        self.assertEqual(任务._定位升级确认按钮(), (490, 501))
+
+    def test_英雄绿色确认文字只接受右侧确认卡片(self):
+        任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
+        任务.上下文 = SimpleNamespace(op=SimpleNamespace())
+        任务.执行OCR识别 = Mock(return_value=[
+            ([[550, 490], [590, 490], [590, 515], [550, 515]], "確", 0.99),
+        ])
+
+        self.assertEqual(任务._定位升级确认按钮(), (570, 502))
+
+    def test_英雄左侧灰色确认按钮不会被点击(self):
+        任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
+        任务.上下文 = SimpleNamespace(op=SimpleNamespace())
+        任务.执行OCR识别 = Mock(return_value=[
+            ([[420, 490], [460, 490], [460, 515], [420, 515]], "確", 0.99),
+        ])
+
+        self.assertIsNone(任务._定位升级确认按钮())
 
     def test_建筑坐标右边界跟随OCR框而不是固定值(self):
         任务 = 寻找建筑.__new__(寻找建筑)
@@ -179,6 +277,18 @@ class 建筑升级边界测试(unittest.TestCase):
             ["圣水收集器x5", "野蛮人之王"],
         )
 
+    def test_繁体建筑名置信度七成仍可作为建议升级候选(self):
+        OCR = [
+            ([[2, 40], [50, 40], [50, 58], [2, 58]], "建升级", 0.91),
+            ([[2, 70], [60, 70], [60, 88], [2, 88]], "頭號殺手", 0.77),
+            ([[2, 100], [50, 100], [50, 118], [2, 118]], "其他升级", 0.97),
+        ]
+
+        self.assertEqual(
+            提取建议升级建筑名称(OCR, 最低置信度=0.70),
+            ["頭號殺手"],
+        )
+
 
 class 工人状态容错测试(unittest.TestCase):
     def _创建任务(self, 状态):
@@ -207,6 +317,22 @@ class 工人状态容错测试(unittest.TestCase):
         })
 
         self.assertFalse(任务.是否有空闲工人())
+
+    def test_实机顶部建筑工人计数使用左侧1加斜线2区域(self):
+        任务 = 更新工人状态任务.__new__(更新工人状态任务)
+        任务.机器人标志 = "robot_1"
+        任务.执行OCR识别 = Mock(return_value=[
+            ([[12, 12], [38, 12], [38, 34], [12, 34]], "1/2", 0.99),
+        ])
+        任务.数据库 = SimpleNamespace(更新状态=Mock())
+        任务.上下文 = SimpleNamespace(置脚本状态=Mock())
+
+        self.assertTrue(任务.识别当前工人状态写入数据库())
+        任务.执行OCR识别.assert_called_once_with((285, 0, 335, 60))
+        self.assertEqual(
+            任务.数据库.更新状态.call_args.args[2]["工人总数"],
+            2,
+        )
 
 
 if __name__ == "__main__":
