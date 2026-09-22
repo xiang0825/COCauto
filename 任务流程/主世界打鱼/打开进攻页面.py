@@ -64,9 +64,10 @@ class 打开进攻页面任务(基础任务):
         if not 上下文.点击(62, 546, 1000):
             上下文.置脚本状态("打开进攻页面失败：主世界进攻入口未点击")
             return False
-        if not 上下文.点击(156, 426, 500):
-            上下文.置脚本状态("打开进攻页面失败：军队入口未点击")
-            return False
+        # 主世界攻击入口会先打开“多人游戏/单人模式/教学模式”选择面板。
+        # 旧版直接点击固定的 (156,426)，在自适应画布和繁体布局下可能
+        # 落在面板空白处；现在交给下面的状态机动态识别“寻找战斗目标”，
+        # 再进入军队配置页，不再发送第二个盲点。
         return self._等待并点击攻击按钮(上下文)
 
     @staticmethod
@@ -220,10 +221,85 @@ class 打开进攻页面任务(基础任务):
             上下文.置脚本状态(f"搜索页面识别失败：{异常}")
             return False
 
+    def _检测寻找目标按钮(self, 屏幕图像: np.ndarray) -> tuple[int, int] | None:
+        """识别主世界攻击选择面板中的橙色“寻找战斗目标”按钮。
+
+        该按钮只在第一次点击主世界“攻击!”后出现，位于参考画布左下
+        的多人游戏卡片内。这里只扫描左下卡片区域，并同时限制按钮的
+        宽高比、尺寸和橙色饱和度，避免把主世界装饰、任务徽章或底部
+        主入口当成继续按钮。
+        """
+        if not isinstance(屏幕图像, np.ndarray) or 屏幕图像.size == 0:
+            return None
+        if len(屏幕图像.shape) != 3 or 屏幕图像.shape[2] < 3:
+            return None
+        try:
+            if 屏幕图像.shape[1] != self._参考宽度 or 屏幕图像.shape[0] != self._参考高度:
+                屏幕图像 = cv2.resize(
+                    屏幕图像,
+                    (self._参考宽度, self._参考高度),
+                    interpolation=cv2.INTER_AREA,
+                )
+            高度, 宽度 = 屏幕图像.shape[:2]
+            # 选择面板按钮在 x=40..250、y=390..500；预留少量主题布局
+            # 变化空间，但不扩大到中央内容或右下商店区域。
+            左, 上 = int(宽度 * 0.02), int(高度 * 0.58)
+            右, 下 = int(宽度 * 0.38), int(高度 * 0.86)
+            区域 = 屏幕图像[上:下, 左:右]
+            hsv = cv2.cvtColor(区域, cv2.COLOR_BGR2HSV)
+            橙色遮罩 = cv2.inRange(
+                hsv,
+                np.array([6, 110, 135], dtype=np.uint8),
+                np.array([38, 255, 255], dtype=np.uint8),
+            )
+            核心 = np.ones((5, 5), dtype=np.uint8)
+            橙色遮罩 = cv2.morphologyEx(
+                橙色遮罩, cv2.MORPH_CLOSE, 核心, iterations=2
+            )
+            橙色遮罩 = cv2.morphologyEx(
+                橙色遮罩, cv2.MORPH_OPEN, np.ones((3, 3), dtype=np.uint8), iterations=1
+            )
+            轮廓列表, _ = cv2.findContours(
+                橙色遮罩, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            候选 = []
+            for 轮廓 in 轮廓列表:
+                x, y, 宽, 高 = cv2.boundingRect(轮廓)
+                面积 = 宽 * 高
+                if 宽 < 宽度 * 0.14 or 高 < 高度 * 0.045:
+                    continue
+                if 宽 > 宽度 * 0.34 or 高 > 高度 * 0.18:
+                    continue
+                if not 2.0 <= 宽 / max(1, 高) <= 5.5:
+                    continue
+                中心x = x + 左 + 宽 // 2
+                中心y = y + 上 + 高 // 2
+                if not (
+                    宽度 * 0.04 <= 中心x <= 宽度 * 0.34
+                    and 高度 * 0.63 <= 中心y <= 高度 * 0.84
+                ):
+                    continue
+                饱和橙色比例 = float(
+                    np.count_nonzero(橙色遮罩[y:y + 高, x:x + 宽])
+                ) / max(1, 面积)
+                if 饱和橙色比例 < 0.35:
+                    continue
+                候选.append((面积, 中心x, 中心y))
+            if not 候选:
+                return None
+            _, 中心x, 中心y = max(候选, key=lambda 项: 项[0])
+            return (
+                round(中心x * self._参考宽度 / 宽度),
+                round(中心y * self._参考高度 / 高度),
+            )
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return None
+
     def _等待并点击攻击按钮(self, 上下文: 任务上下文) -> bool:
         """点击动态攻击按钮，并确认已经切换到敌方搜索页面。"""
         截止时间 = time.monotonic() + 20.0
         已点击 = False
+        已点击寻找目标 = False
         断线恢复次数 = 0
         上次提示时间 = 0.0
         连续搜索页命中 = 0
@@ -306,6 +382,20 @@ class 打开进攻页面任务(基础任务):
                     return True
             else:
                 连续搜索页命中 = 0
+
+            if not 已点击寻找目标:
+                寻找目标点 = self._检测寻找目标按钮(屏幕图像)
+                if 寻找目标点 is not None:
+                    上下文.置脚本状态(
+                        f"识别到寻找战斗目标按钮，动态点击{寻找目标点[0]},{寻找目标点[1]}"
+                    )
+                    if not 上下文.点击(
+                        寻找目标点[0], 寻找目标点[1], 延时=700, 是否精确点击=True
+                    ):
+                        上下文.置脚本状态("寻找战斗目标按钮点击被安全护栏拒绝")
+                        return False
+                    已点击寻找目标 = True
+                    continue
 
             if not 已点击:
                 攻击点 = self._检测攻击按钮(屏幕图像)

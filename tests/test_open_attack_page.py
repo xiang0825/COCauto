@@ -2,6 +2,7 @@ import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+import unittest.mock
 
 import cv2
 import numpy as np
@@ -22,6 +23,13 @@ class 打开进攻页面测试(unittest.TestCase):
         cv2.rectangle(画面, (630, 515), (780, 555), (73, 227, 154), -1)
         return 画面
 
+    @staticmethod
+    def 攻击选择画面():
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        # 选择面板左下的“寻找战斗目标”橙色按钮。
+        cv2.rectangle(画面, (46, 409), (227, 482), (44, 173, 249), -1)
+        return 画面
+
     def test_主世界右下绿色区域不会被当成军队页攻击按钮(self):
         画面 = np.zeros((600, 800, 3), dtype=np.uint8)
         画面[:, :] = (40, 115, 55)
@@ -36,6 +44,42 @@ class 打开进攻页面测试(unittest.TestCase):
         self.assertIsNotNone(结果)
         self.assertAlmostEqual(结果[0], 705, delta=3)
         self.assertAlmostEqual(结果[1], 535, delta=3)
+
+    def test_攻击选择面板动态识别寻找目标按钮(self):
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        结果 = 任务._检测寻找目标按钮(self.攻击选择画面())
+        self.assertIsNotNone(结果)
+        self.assertAlmostEqual(结果[0], 137, delta=5)
+        self.assertAlmostEqual(结果[1], 445, delta=5)
+
+    def test_先点击寻找目标再点击军队页攻击按钮(self):
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        页面状态 = iter((
+            SimpleNamespace(页面="未知"),
+            SimpleNamespace(页面="未知"),
+            SimpleNamespace(页面="战斗中"),
+        ))
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(
+                    side_effect=[self.攻击选择画面(), self.军队配置画面(), self.军队配置画面()]
+                )
+            ),
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            识别点击画面=Mock(side_effect=lambda **_: next(页面状态)),
+        )
+        任务.模板识别 = Mock()
+
+        self.assertTrue(任务._等待并点击攻击按钮(上下文))
+        self.assertEqual(
+            上下文.点击.call_args_list,
+            [
+                unittest.mock.call(137, 446, 延时=700, 是否精确点击=True),
+                unittest.mock.call(705, 535, 延时=700, 是否精确点击=True),
+            ],
+        )
 
     def test_点击后必须确认进入搜索页面(self):
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)

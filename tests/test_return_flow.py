@@ -1,4 +1,5 @@
 import unittest
+import unittest.mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -208,7 +209,39 @@ class 回营状态机测试(unittest.TestCase):
         上下文._获取点击页面识别器 = lambda: 页级识别器()
 
         self.assertTrue(任务.等待主界面就绪(上下文))
-        self.assertIn("页面识别确认已回到主世界", " ".join(上下文.状态))
+        self.assertIn("页面识别连续确认已回到主世界", " ".join(上下文.状态))
+
+    def test_断线弹窗露出底层主世界图标时不能误判回营(self):
+        class 页面识别器:
+            def 识别(self, _图像, **_参数):
+                return SimpleNamespace(页面="断线弹窗", 可信度=0.98)
+
+        class 评分匹配器:
+            def __init__(自身):
+                自身.调用次数 = 0
+
+            def 执行匹配(自身, _图像, 模板路径, **_参数):
+                自身.调用次数 += 1
+                if "家乡进攻图标" in 模板路径:
+                    return True, (0, 0), None
+                return False, (0, 0), None
+
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = 评分匹配器()
+        上下文 = _上下文()
+        上下文._获取点击页面识别器 = lambda: 页面识别器()
+
+        # 让超时测试不等待真实30秒：第一次进入循环，第二次直接超时。
+        with unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.time.time",
+            side_effect=[0, 1, 31],
+        ):
+            结果 = 任务.等待主界面就绪(上下文)
+
+        self.assertFalse(结果)
+        self.assertEqual(上下文.点击记录, [])
+        self.assertEqual(任务.模板识别.调用次数, 0)
+        self.assertIn("断线弹窗", " ".join(上下文.状态))
 
     def test_实机零点八五分结算按钮会进入回营流程(self):
         class 评分匹配器:
@@ -220,14 +253,20 @@ class 回营状态机测试(unittest.TestCase):
                 return False, (0, 0), None
 
         class 页面识别器:
+            def __init__(自身):
+                自身.调用次数 = 0
+
             def 识别(self, _图像, **_参数):
-                return SimpleNamespace(页面="战斗结算", 可信度=0.85)
+                self.调用次数 += 1
+                return SimpleNamespace(页面="主世界主页", 可信度=0.78)
 
         任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
         任务.模板识别 = 评分匹配器()
         任务.记录战斗结果 = lambda *_参数, **_关键字: True
         上下文 = _上下文()
-        上下文._获取点击页面识别器 = lambda: 页面识别器()
+        页面识别器实例 = 页面识别器()
+        上下文._获取点击页面识别器 = lambda: 页面识别器实例
+        上下文._战斗结束已确认 = True
 
         结果 = 任务.等待回营地按钮出现(上下文)
 
