@@ -153,8 +153,22 @@ class 建筑升级边界测试(unittest.TestCase):
         任务.上下文 = SimpleNamespace(点击=点击, 安全返回键=返回, 置脚本状态=状态)
 
         self.assertTrue(任务.关闭建筑升级页面())
-        点击.assert_called_once_with(680, 300, 延时=700, 是否精确点击=True)
+        点击.assert_called_once_with(700, 300, 延时=700, 是否精确点击=True)
         返回.assert_not_called()
+
+    def test_详情关闭器未命中时继续清除建筑选中面板(self):
+        关闭详情 = Mock(return_value=False)
+        点击 = Mock(return_value=True)
+        任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
+        任务.上下文 = SimpleNamespace(
+            关闭升级详情弹窗=关闭详情,
+            点击=点击,
+            置脚本状态=Mock(),
+        )
+
+        self.assertTrue(任务._安全关闭当前建筑面板())
+        关闭详情.assert_called_once_with()
+        点击.assert_called_once_with(700, 300, 延时=700, 是否精确点击=True)
 
     def test_绿色立即完成区域不会被当成资源确认按钮(self):
         任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
@@ -206,7 +220,7 @@ class 建筑升级边界测试(unittest.TestCase):
 
         self.assertFalse(任务.执行())
         点击.assert_not_called()
-        关闭.assert_called_once()
+        self.assertEqual(关闭.call_count, 2)
 
     def test_确认文字被OCR误识别时使用升级确认标题(self):
         任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
