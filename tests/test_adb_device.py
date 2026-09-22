@@ -146,6 +146,34 @@ class ADB设备测试(unittest.TestCase):
         self.assertEqual(len(runner.命令), 1)
         self.assertEqual(runner.命令[0][1:], ["devices", "-l"])
 
+    def test_emulator序列号即使手机样式描述也视为模拟器(self):
+        设备 = ADB设备信息("emulator-5556", "device", "product:a55x model:SM_A5560 device:a55x")
+        self.assertFalse(设备.疑似实体设备)
+
+    def test_保存序列号失效时自动切换唯一CoC模拟器(self):
+        class 失效序列号Runner:
+            def __init__(自身):
+                自身.命令 = []
+
+            def __call__(自身, 命令, **_参数):
+                自身.命令.append(命令)
+                if 命令[1:] == ["devices", "-l"]:
+                    return 结果(
+                        b"List of devices attached\n"
+                        b"emulator-5556 device product:a55x model:SM_A5560 device:a55x\n"
+                    )
+                if 命令[1:4] == ["-s", "emulator-5556", "shell"]:
+                    if 命令[-3:] == ["list", "packages", "com.supercell.clashofclans"]:
+                        return 结果(b"package:com.supercell.clashofclans\n")
+                    return 结果(b"mResumedActivity: app.lawnchair/.LawnchairLauncher\n")
+                return 结果()
+
+        runner = 失效序列号Runner()
+        设备 = ADB设备操作类(ADB, "127.0.0.1:16416", runner=runner)
+        设备.设置目标包名("com.supercell.clashofclans")
+        self.assertEqual(设备.确认在线().序列号, "emulator-5556")
+        self.assertEqual(设备.设备序列号, "emulator-5556")
+
     def test_MuMuAndroid15手机样式描述按本机端口识别为模拟器(self):
         runner = 假Runner(
             结果(b"List of devices attached\n127.0.0.1:16416 device model:SM_A5560 product:a55xchn\n"),

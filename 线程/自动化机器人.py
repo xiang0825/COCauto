@@ -60,22 +60,39 @@ class 自动化机器人:
 
     def 启动(self):
         设置 = self.数据库.获取机器人设置(self.机器人标志)
+        包名 = getattr(设置, "部落冲突包名", None) or "com.supercell.clashofclans"
         # 连接页启用自动检测且尚未保存 serial 时，按 CoC 包名和当前前台
         # 状态安全绑定设备；多设备并列时仍要求用户手动确认，禁止猜测。
-        if (
-            getattr(设置, "ADB自动检测路径", True)
-            and not getattr(设置, "ADB设备序列号", "")
-        ):
+        if getattr(设置, "ADB自动检测路径", True):
             已解析路径 = ADB设备操作类.解析ADB路径(
                 设置.ADB路径,
                 自动检测=True,
             )
-            设备 = ADB设备操作类.自动选择游戏设备(
+            已保存序列号 = (getattr(设置, "ADB设备序列号", "") or "").strip()
+            校验设备 = ADB设备操作类(
                 已解析路径,
-                getattr(设置, "部落冲突包名", None)
-                or "com.supercell.clashofclans",
-                自动检测路径=False,
-            )
+                已保存序列号,
+                # 路径已经解析完成，但仍要保留自动设备恢复开关；
+                # 模拟器重启后 serial 可能从 127.0.0.1:16416 变成
+                # emulator-5556，确认在线时需要允许唯一候选接管。
+                自动检测路径=True,
+            ) if 已保存序列号 else None
+            if 校验设备 is not None:
+                校验设备.设置目标包名(包名)
+                当前设备 = 校验设备.确认在线()
+                设备 = 当前设备
+                if 当前设备.序列号 != 已保存序列号:
+                    self.数据库.记录日志(
+                        self.机器人标志,
+                        f"ADB 自动修复失效设备：{已保存序列号} -> {当前设备.序列号}",
+                        time.time() + 60,
+                    )
+            else:
+                设备 = ADB设备操作类.自动选择游戏设备(
+                    已解析路径,
+                    包名,
+                    自动检测路径=False,
+                )
             设置.ADB路径 = 已解析路径
             设置.ADB设备序列号 = 设备.序列号
             设置.ADB已确认模拟器 = True

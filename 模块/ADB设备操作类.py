@@ -33,6 +33,12 @@ class ADB设备信息:
 
     @property
     def 疑似实体设备(self) -> bool:
+        # Android Emulator、MuMu 某些版本以及部分兼容层会使用
+        # ``emulator-<port>`` 作为 serial，但描述可能伪装成手机型号。
+        # serial 本身是 ADB 的虚拟设备标识，不能再被后面的 Samsung/SM
+        # 型号规则误判为实体手机。
+        if re.fullmatch(r"emulator-\d+", self.序列号.strip().lower()):
+            return False
         描述 = self.描述.lower().replace("_", "-")
         模拟器标记 = ("ldplayer", "mumu", "bluestacks", "nox", "genymotion", "sdk-gphone", "android-sdk")
         if any(标记 in 描述 for 标记 in 模拟器标记):
@@ -659,6 +665,30 @@ class ADB设备操作类:
                     自动检测路径=self.自动检测路径,
                 )
                 当前设备 = next((设备 for 设备 in 设备列表 if 设备.序列号 == self.设备序列号), None)
+        if (
+            当前设备 is None
+            and self.自动检测路径
+            and self._目标包名
+        ):
+            # 模拟器重启、版本升级或端口转发变化后，MuMu 可能把同一台
+            # 实例重新登记成 emulator-5556 等 serial。只有在包名/前台
+            # 评分能够唯一选出一台模拟器时才自动切换，绝不按列表第一项
+            # 猜测，也不触碰实体 Android 设备。
+            try:
+                新设备 = self.自动选择游戏设备(
+                    self.adb路径,
+                    self._目标包名,
+                    runner=self._runner,
+                    自动检测路径=False,
+                )
+            except (ADB错误, OSError, subprocess.TimeoutExpired):
+                新设备 = None
+            if 新设备 is not None:
+                self.设备序列号 = 新设备.序列号
+                锁键 = (os.path.normcase(os.path.abspath(self.adb路径)), self.设备序列号)
+                with self._设备命令锁容器锁:
+                    self._命令锁 = self._设备命令锁容器.setdefault(锁键, threading.RLock())
+                当前设备 = 新设备
         if 当前设备 is None:
             可用设备 = "、".join(设备.显示文本 for 设备 in 设备列表) or "无"
             raise ADB错误(
