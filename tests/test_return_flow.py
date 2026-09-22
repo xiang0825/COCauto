@@ -179,6 +179,27 @@ class 回营状态机测试(unittest.TestCase):
         self.assertEqual(上下文.点击记录, [(120, 130)])
         self.assertIn("已确认回到主界面，可进入下一场", 上下文.状态)
 
+    def test_主世界页级识别低于模板阈值仍可确认回营(self):
+        class 页级识别器:
+            def 识别(self, _图像, **_参数):
+                return SimpleNamespace(
+                    页面="主世界主页",
+                    可信度=0.57,
+                    依据=("主世界资源栏0.98", "主世界入口0.90"),
+                )
+
+        class 低模板匹配器:
+            def 执行匹配(self, _图像, _模板路径, **_参数):
+                return False, (0, 0), None
+
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = 低模板匹配器()
+        上下文 = _上下文()
+        上下文._获取点击页面识别器 = lambda: 页级识别器()
+
+        self.assertTrue(任务.等待主界面就绪(上下文))
+        self.assertIn("页面识别确认已回到主世界", " ".join(上下文.状态))
+
     def test_实机零点八五分结算按钮会进入回营流程(self):
         class 评分匹配器:
             def 执行匹配(self, _图像, 模板路径, 相似度阈值=0.8, **_参数):
