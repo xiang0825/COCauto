@@ -35,6 +35,27 @@ class 任务计划测试(unittest.TestCase):
         self.assertFalse(上下文.页面恢复失败)
         self.assertTrue(any("重新登入" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list))
 
+    def test_启动时已有战斗先回营再执行任务计划(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = threading.Event()
+        上下文 = SimpleNamespace(
+            _启动时已有战斗=True,
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+        )
+        检测登录 = Mock()
+        检测登录.执行.return_value = True
+        with patch("线程.自动化机器人.主世界打鱼任务") as 战斗任务:
+            战斗任务.return_value.执行.return_value = True
+            self.assertTrue(机器人._接管启动时战斗(上下文, 检测登录))
+
+        战斗任务.return_value.执行.assert_called_once_with()
+        检测登录.执行.assert_called_once_with(首次登录=False)
+        self.assertFalse(上下文._启动时已有战斗)
+        self.assertFalse(上下文._入口已进入战斗)
+        self.assertTrue(any("允许继续执行任务计划" in 调用.args[0]
+                            for 调用 in 上下文.置脚本状态.call_args_list))
+
     def test_计划状态来自机器人配置(self):
         设置 = 机器人设置(
             是否刷主世界=True,
