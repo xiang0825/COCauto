@@ -7,6 +7,7 @@ import numpy as np
 
 from 任务流程.世界跳转.进入世界基类 import 进入世界任务基类
 from 任务流程.世界跳转.到主世界任务 import 到主世界任务
+from 任务流程.世界跳转.到夜世界任务 import 到夜世界任务
 from 任务流程.世界跳转.世界识别器 import 世界识别器
 
 
@@ -66,17 +67,54 @@ class 世界跳转测试(unittest.TestCase):
             any("禁止点击、滑动、ESC或返回键" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
         )
 
+    def test_页级主页识别可以补充转场资源过渡帧(self):
+        任务 = object.__new__(进入世界任务基类)
+        任务.状态文本 = "夜世界"
+        上下文 = SimpleNamespace(
+            识别点击画面=Mock(
+                return_value=SimpleNamespace(
+                    页面="夜世界主页", 世界="夜世界", 可信度=0.78
+                )
+            ),
+            置脚本状态=Mock(),
+        )
+
+        self.assertTrue(任务._页面级确认目标世界(上下文))
+        上下文.识别点击画面.assert_called_once_with(强制=True)
+
+    def test_入口点击后多帧确认目标世界才允许继续(self):
+        任务 = object.__new__(进入世界任务基类)
+        任务.状态文本 = "夜世界"
+        任务.识别当前世界 = Mock(
+            side_effect=[
+                SimpleNamespace(当前世界="主世界"),
+                SimpleNamespace(当前世界="夜世界"),
+            ]
+        )
+        上下文 = SimpleNamespace(
+            识别点击画面=Mock(
+                return_value=SimpleNamespace(
+                    页面="主世界主页", 世界="主世界", 可信度=0.78
+                )
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+
+        self.assertTrue(任务._等待目标世界确认(上下文, 尝试次数=3))
+        上下文.脚本延时.assert_called_once_with(500)
+
     def test_世界入口只在左下安全区域匹配并还原坐标(self):
         任务 = object.__new__(进入世界任务基类)
         任务.船模板路径 = "船.bmp"
         任务.模板识别 = Mock()
-        任务.模板识别.执行最佳匹配.return_value = (0.75, (12, 18), "船.bmp")
+        任务.模板识别.执行最佳匹配.return_value = (0.85, (12, 18), "船.bmp")
 
         命中, 坐标, 分数 = 任务.查找世界入口(np.zeros((600, 800, 3), dtype=np.uint8))
 
         self.assertTrue(命中)
         self.assertEqual(坐标, (87, 394))
-        self.assertAlmostEqual(分数, 0.75)
+        self.assertAlmostEqual(分数, 0.85)
         区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
         self.assertEqual(区域.shape[:2], (240, 300))
 
@@ -95,7 +133,50 @@ class 世界跳转测试(unittest.TestCase):
 
         self.assertFalse(命中)
 
-    def test_拖动后海岸飞艇候选可被确认(self):
+    def test_左侧橙色建筑候选不会被当成飞艇(self):
+        任务 = object.__new__(进入世界任务基类)
+        任务.船模板路径 = "船.bmp"
+        任务.模板识别 = Mock()
+        任务.模板识别.执行最佳匹配.return_value = (0.67, (70, 34), "船.bmp")
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        # 复现 MuMu 实机误命中的普通建筑：逻辑中心约 (166,384)。
+        画面[362:406, 150:184] = (0, 0, 220)
+
+        命中, _, 分数 = 任务.查找世界入口(画面)
+
+        self.assertFalse(命中)
+        self.assertLess(分数, 0.78)
+
+    def test_镜头移动后备用地图区高分模板可以确认入口(self):
+        任务 = object.__new__(到夜世界任务)
+        任务.船模板路径 = "船.bmp"
+        任务.世界入口备用搜索区域 = (80, 80, 760, 590)
+        任务.模板识别 = Mock()
+        任务.模板识别.执行最佳匹配.side_effect = [
+            (0.61, (20, 30), "纹理.bmp"),
+            (0.86, (155, 351), "船.bmp"),
+        ]
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+
+        命中, 坐标, 分数 = 任务.查找世界入口(画面)
+
+        self.assertTrue(命中)
+        self.assertEqual(坐标, (210, 457))
+        self.assertAlmostEqual(分数, 0.86)
+        self.assertEqual(任务.模板识别.执行最佳匹配.call_count, 2)
+
+    def test_主世界入口搜索会轮换安全拖动方向(self):
+        任务 = object.__new__(到夜世界任务)
+        任务.滑动配置 = SimpleNamespace(起点=(9, 9), 终点=(8, 8))
+
+        第一路径 = 任务._获取本轮搜索滑动配置(0)
+        第二路径 = 任务._获取本轮搜索滑动配置(1)
+        第五路径 = 任务._获取本轮搜索滑动配置(4)
+
+        self.assertNotEqual(第一路径, 第二路径)
+        self.assertEqual(第五路径, 第一路径)
+
+    def test_低分海岸橙色候选只作为搜索线索不会点击(self):
         任务 = object.__new__(进入世界任务基类)
         任务.船模板路径 = "船.bmp"
         任务.模板识别 = Mock()
@@ -106,11 +187,11 @@ class 世界跳转测试(unittest.TestCase):
 
         命中, 坐标, 分数 = 任务.查找世界入口(画面)
 
-        self.assertTrue(命中)
-        self.assertEqual(坐标, (212, 447))
-        self.assertAlmostEqual(分数, 0.60)
+        self.assertFalse(命中)
+        self.assertEqual(坐标, (0, 0))
+        self.assertAlmostEqual(分数, 0.0)
 
-    def test_当前实机船体中心约三百九十二像素仍可确认(self):
+    def test_低分实机船体颜色候选不会绕过模板阈值(self):
         任务 = object.__new__(进入世界任务基类)
         任务.船模板路径 = "船.bmp"
         任务.模板识别 = Mock()
@@ -123,9 +204,9 @@ class 世界跳转测试(unittest.TestCase):
 
         命中, 坐标, 分数 = 任务.查找世界入口(画面)
 
-        self.assertTrue(命中)
-        self.assertEqual(坐标, (288, 392))
-        self.assertAlmostEqual(分数, 0.60)
+        self.assertFalse(命中)
+        self.assertEqual(坐标, (0, 0))
+        self.assertAlmostEqual(分数, 0.0)
 
     def test_夜世界返回主世界使用右上入口区域(self):
         任务 = object.__new__(到主世界任务)
