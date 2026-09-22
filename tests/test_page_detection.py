@@ -158,6 +158,38 @@ class 页面识别测试(unittest.TestCase):
         self.assertEqual(结果.页面, "断线弹窗")
         self.assertTrue(any("中央断线弹窗" in 依据 for 依据 in 结果.依据))
 
+    def test_系统维护页优先于断线弹窗识别(self):
+        """维护页的黄黑警示带优先于中央深色面板，避免重复点击重试。"""
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        图像[:18, :] = (20, 210, 245)
+        cv2.rectangle(图像, (195, 190), (635, 430), (32, 26, 29), -1)
+
+        结果 = self.识别器.识别(图像)
+
+        self.assertEqual(结果.页面, "系统维护")
+        self.assertTrue(any("黄黑维护警示带" in 依据 for 依据 in 结果.依据))
+
+    def test_维护页登录任务安全停止不点击(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        屏幕[:18, :] = (20, 210, 245)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=屏幕)),
+            数据库=Mock(),
+            机器人标志="robot_test",
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            点击已确认安全按钮=Mock(return_value=True),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
+
+        self.assertFalse(任务.执行(首次登录=False))
+        上下文.点击已确认安全按钮.assert_not_called()
+        self.assertTrue(上下文.页面恢复失败)
+        self.assertTrue(上下文.停止事件.is_set())
+        self.assertTrue(any("系统维护页面" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
     def test_右锚定断线弹窗识别为断线页面(self):
         """右侧横向布局的重新登入面板也必须被识别并拦截输入。"""
         画面 = np.full((600, 800, 3), (70, 100, 55), dtype=np.uint8)

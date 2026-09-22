@@ -56,6 +56,36 @@ class 页面识别器:
         下 = max(上, min(高, 下))
         return 图像[上:下, 左:右]
 
+    def _系统维护分数(self, 图像: np.ndarray) -> float:
+        """识别测试服/国际服的系统维护页顶部黄黑警示带。
+
+        维护页会在中间保留一个深色弹窗，旧规则容易把它误判成断线弹窗，
+        随后重复点击“再试一次”。顶部横跨画面的黄黑警示带是更稳定的页级
+        特征；只检查顶部 12% 的多行黄色覆盖率，不扫描地图或按钮区域。
+        """
+        if not isinstance(图像, np.ndarray) or 图像.ndim < 2 or 图像.size == 0:
+            return 0.0
+        try:
+            高, 宽 = 图像.shape[:2]
+            顶部 = 图像[:max(1, int(高 * 0.12))]
+            hsv = cv2.cvtColor(顶部, cv2.COLOR_BGR2HSV)
+            黄色 = (
+                (hsv[:, :, 0] >= 18)
+                & (hsv[:, :, 0] <= 40)
+                & (hsv[:, :, 1] >= 100)
+                & (hsv[:, :, 2] >= 120)
+            )
+            行覆盖率 = 黄色.mean(axis=1)
+            有效行数 = int(np.count_nonzero(行覆盖率 >= 0.55))
+            # 维护横幅在 1280×720 原图约 20 行，在 800×600 逻辑图约
+            # 17 行；要求连续横幅覆盖顶部约五分之一即可，避免因缩放
+            # 插值把横幅压薄后漏检。
+            if 有效行数 >= max(4, int(顶部.shape[0] * 0.18)):
+                return 0.98
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return 0.0
+        return 0.0
+
     def _最佳分数(self, 图像: np.ndarray, 模板路径: str) -> float:
         if 图像.size == 0:
             return 0.0
@@ -482,6 +512,14 @@ class 页面识别器:
 
     def 识别(self, 屏幕图像: np.ndarray, 战斗中: bool = False) -> 页面识别结果:
         """识别当前页面；不确定时返回 ``页面=未知``，不触发任何输入。"""
+        维护分数 = self._系统维护分数(屏幕图像)
+        if 维护分数 >= 0.90:
+            return 页面识别结果(
+                页面="系统维护",
+                世界=None,
+                可信度=维护分数,
+                依据=(f"顶部黄黑维护警示带{维护分数:.2f}",),
+            )
         断线分数 = self._断线弹窗分数(屏幕图像)
         if 断线分数 >= 0.90:
             return 页面识别结果(
