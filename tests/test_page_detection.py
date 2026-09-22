@@ -254,6 +254,19 @@ class 页面识别测试(unittest.TestCase):
         结果 = self.识别器.识别(图像)
         self.assertEqual(结果.页面, "主世界主页")
 
+    def test_当前实机缩放主世界不会误报战斗结算(self):
+        """主世界草地大面积变绿时，不能被视觉结算兜底误判。"""
+        from pathlib import Path
+
+        路径 = Path(__file__).resolve().parents[2] / ".tmp" / "current_logical_full.png"
+        if not 路径.exists():
+            self.skipTest("当前维护截图未提供")
+        图像 = cv2.imread(str(路径))
+        self.assertIsNotNone(图像)
+        结果 = self.识别器.识别(图像)
+        self.assertEqual(结果.页面, "主世界主页")
+        self.assertEqual(结果.世界, "主世界")
+
     def test_实机结算截图识别为战斗结算(self):
         图像 = self._读取截图("runtime_after_battle_wait.png")
         if 图像 is None:
