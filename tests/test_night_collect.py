@@ -63,6 +63,25 @@ class 夜世界圣水车测试(unittest.TestCase):
         self.assertTrue(收集圣水车任务._是否圣水车标题([([], "圣水车", 0.99)]))
         self.assertFalse(收集圣水车任务._是否圣水车标题([([], "雙管加農炮", 0.99)]))
 
+    def test_候选点击后回到主世界立即停止剩余点击(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        任务 = self._任务(屏幕)
+        任务.模板识别 = Mock()
+        任务._世界识别器 = Mock()
+        任务._世界识别器.识别.side_effect = [
+            SimpleNamespace(当前世界="夜世界"),
+            SimpleNamespace(当前世界="主世界"),
+        ]
+        任务.是否出现图片 = Mock(return_value=(True, (200, 200)))
+        任务._生成圣水车候选点 = Mock(return_value=[(200, 200, "测试候选1"), (300, 300, "测试候选2")])
+        任务.尝试收集圣水 = Mock(return_value=False)
+        任务._关闭候选详情面板 = Mock(return_value=False)
+        任务.上下文.点击 = Mock()
+
+        self.assertFalse(任务.执行())
+        任务.上下文.点击.assert_called_once_with(200, 200)
+        self.assertTrue(any("回到主世界" in c.args[0] for c in 任务.上下文.置脚本状态.call_args_list))
+
 
 if __name__ == "__main__":
     unittest.main()

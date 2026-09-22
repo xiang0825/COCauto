@@ -117,6 +117,41 @@ class 任务计划测试(unittest.TestCase):
         刷天鹰.assert_not_called()
         检测登录.assert_not_called()
 
+    def test_夜世界圣水车未完成时禁止继续下一场战斗(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = threading.Event()
+        机器人.机器人标志 = "测试机器人"
+        状态 = SimpleNamespace(
+            状态数据={"夜世界资源": {"金币": 123456, "圣水": 234567, "识别成功": True}}
+        )
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            机器人标志="测试机器人",
+            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态)),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+
+        with patch("线程.自动化机器人.到夜世界任务") as 回夜世界, \
+                patch("线程.自动化机器人.收集资源任务"), \
+                patch("线程.自动化机器人.更新夜世界资源状态任务") as 更新资源, \
+                patch("线程.自动化机器人.收集圣水车任务") as 收集圣水车, \
+                patch("线程.自动化机器人.夜世界打鱼任务") as 打鱼, \
+                patch("线程.自动化机器人.是否夜世界资源打满", return_value=False):
+            回夜世界.return_value.执行.return_value = True
+            更新资源.return_value.执行.return_value = True
+            收集圣水车.return_value.执行.return_value = False
+
+            结果 = 机器人._执行夜世界刷资源计划(上下文, Mock())
+
+        self.assertFalse(结果)
+        self.assertTrue(上下文.页面恢复失败)
+        打鱼.return_value.执行.assert_not_called()
+        self.assertTrue(
+            any("禁止继续执行夜世界收集和下一场战斗" in 调用.args[0]
+                for 调用 in 上下文.置脚本状态.call_args_list)
+        )
+
     def test_刷墙普通无操作不会被当成页面故障(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
         机器人.停止事件 = threading.Event()

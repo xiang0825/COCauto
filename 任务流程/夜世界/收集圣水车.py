@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 from 任务流程.基础任务框架 import 任务上下文
 from 任务流程.夜世界.夜世界打鱼.夜世界基础任务类 import 夜世界基础任务
+from 任务流程.世界跳转.世界识别器 import 世界识别器
 
 
 @dataclass
@@ -24,13 +25,19 @@ class 收集圣水车任务(夜世界基础任务):
 
     def __init__(self, 上下文: '任务上下文'):
         super().__init__(上下文)
-        # self
+        self._世界识别器 = 世界识别器(self.模板识别)
 
     def 执行(self) -> bool:
         try:
             找不到夜世界船的次数 = 0
 
             while True:
+                if not self._夜世界仍在前台():
+                    self.上下文.置脚本状态(
+                        "收集圣水车前未确认仍在夜世界，停止所有候选点击",
+                        级别="警告",
+                    )
+                    return False
 
                 是否匹配, (x, y) = self.是否出现图片(
                     self.船模板路径, 相似度阈值=0.8
@@ -61,6 +68,12 @@ class 收集圣水车任务(夜世界基础任务):
                         # 错误页面。只在右上角明确识别到红色关闭按钮时关闭，
                         # 不发送无条件 ESC，避免退回主世界或模拟器桌面。
                         self._关闭候选详情面板()
+                        if not self._夜世界仍在前台():
+                            self.上下文.置脚本状态(
+                                "圣水车候选点击后已回到主世界，停止剩余候选点击",
+                                级别="警告",
+                            )
+                            return False
 
                     self.上下文.置脚本状态(
                         "未成功打开圣水车界面，已尝试动态气泡和全部安全备用点；"
@@ -84,6 +97,21 @@ class 收集圣水车任务(夜世界基础任务):
                         raise RuntimeError("无法定位圣水车位置")
         except RuntimeError as e:
             self.异常处理(e)
+            return False
+
+    def _夜世界仍在前台(self) -> bool:
+        """在每个候选点击边界确认仍处于夜世界。"""
+        try:
+            屏幕 = self.上下文.op.获取屏幕图像cv(0, 0, 800, 600)
+            结果 = self._世界识别器.识别(屏幕)
+            if 结果.当前世界 == "夜世界":
+                return True
+            self.上下文.置脚本状态(
+                f"圣水车流程页面复核失败：当前={结果.当前世界 or '未知'}；禁止继续点击"
+            )
+            return False
+        except (AttributeError, TypeError, ValueError, cv2.error) as 异常:
+            self.上下文.置脚本状态(f"圣水车流程页面复核异常，禁止继续点击：{异常}")
             return False
 
     def _生成圣水车候选点(self, 船x: int, 船y: int):

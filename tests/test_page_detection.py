@@ -91,6 +91,20 @@ class 页面识别测试(unittest.TestCase):
         self.assertAlmostEqual(关闭点[0], 707, delta=8)
         self.assertAlmostEqual(关闭点[1], 50, delta=8)
 
+    def test_1280x720右锚定活动弹窗红色X返回安全关闭点(self):
+        """MuMu 宽屏右边缘的活动 X 不能因 0.96 边界被漏检。"""
+        图像 = np.full((720, 1280, 3), (55, 115, 60), dtype=np.uint8)
+        cv2.rectangle(图像, (120, 24), (1130, 635), (80, 80, 80), -1)
+        cv2.rectangle(图像, (1200, 29), (1247, 77), (20, 20, 220), -1)
+        cv2.line(图像, (1210, 39), (1237, 68), (245, 245, 245), 7)
+        cv2.line(图像, (1237, 39), (1210, 68), (245, 245, 245), 7)
+
+        关闭点 = 任务上下文._检测主世界活动弹窗关闭点(图像)
+
+        self.assertIsNotNone(关闭点)
+        self.assertAlmostEqual(关闭点[0], 765, delta=10)
+        self.assertAlmostEqual(关闭点[1], 44, delta=8)
+
     def test_主世界右上普通红色控件不会被当活动弹窗(self):
         图像 = np.full((600, 800, 3), (55, 115, 60), dtype=np.uint8)
         cv2.rectangle(图像, (700, 20), (735, 55), (20, 20, 220), -1)

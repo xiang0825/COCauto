@@ -59,7 +59,41 @@ class 世界跳转测试(unittest.TestCase):
         self.assertEqual(坐标, (147, 494))
         self.assertAlmostEqual(分数, 0.55)
         区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
-        self.assertEqual(区域.shape[:2], (75, 110))
+        self.assertEqual(区域.shape[:2], (140, 120))
+
+    def test_同一入口连续未转场后停止重复点击(self):
+        模块 = importlib.import_module("任务流程.世界跳转.进入世界基类")
+        时钟 = SimpleNamespace(当前时间=0.0)
+
+        def 脚本延时(毫秒数):
+            时钟.当前时间 += 毫秒数 / 1000
+
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8))),
+            脚本延时=脚本延时,
+            置脚本状态=Mock(),
+            点击=Mock(),
+        )
+        任务 = object.__new__(进入世界任务基类)
+        任务.上下文 = 上下文
+        任务.状态文本 = "夜世界"
+        任务.船模板路径 = "船.bmp"
+        任务.滑动配置 = SimpleNamespace(起点=(1, 1), 终点=(2, 2))
+        任务.是否在目标世界 = Mock(return_value=False)
+        任务.识别当前世界 = Mock(return_value=SimpleNamespace(当前世界="主世界"))
+        任务.查找世界入口 = Mock(return_value=(True, (188, 562), 0.55))
+        任务.滑动屏幕 = Mock()
+
+        原时间函数 = 模块.time.time
+        模块.time.time = lambda: 时钟.当前时间
+        try:
+            self.assertFalse(任务.执行())
+        finally:
+            模块.time.time = 原时间函数
+
+        上下文.点击.assert_called_once_with(188, 562)
+        任务.滑动屏幕.assert_not_called()
+        self.assertTrue(any("连续点击后仍未转场" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
 
 
 if __name__ == "__main__":
