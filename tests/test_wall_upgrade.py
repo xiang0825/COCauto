@@ -89,6 +89,20 @@ class 刷墙识别测试(unittest.TestCase):
         self.assertFalse(self.任务.处理已选中的城墙(上下文, OCR结果, (205, 460)))
         self.任务.执行升级.assert_not_called()
 
+    def test_非城墙候选会安全取消选中面板而不是发送返回键(self):
+        上下文 = SimpleNamespace(
+            点击=Mock(),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+
+        self.assertTrue(self.任务._安全关闭非城墙选中面板(上下文))
+        上下文.点击.assert_called_once_with(90, 80, 延时=220, 是否精确点击=True)
+        self.assertTrue(any(
+            "安全取消选中面板" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
     def test_刷墙任务读取上下文停止事件(self):
         上下文 = SimpleNamespace(
             停止事件=threading.Event(),
