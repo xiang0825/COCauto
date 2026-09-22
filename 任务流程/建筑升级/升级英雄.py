@@ -1,5 +1,8 @@
 import random
 
+import cv2
+import numpy as np
+
 from 任务流程.基础任务框架 import 任务上下文
 from 任务流程.夜世界.夜世界打鱼.夜世界基础任务类 import 夜世界基础任务
 
@@ -32,6 +35,66 @@ class 升级英雄任务(夜世界基础任务):
         # 升级相似度阈值
         self.相似度阈值 = 0.85
 
+    @staticmethod
+    def _规范英雄文本(文本: str) -> str:
+        return (
+            str(文本 or "")
+            .replace("蠻", "蛮")
+            .replace("靈", "灵")
+            .replace("飛", "飞")
+            .replace("戰", "战")
+            .replace("護", "护")
+            .replace("龍", "龙")
+            .replace(" ", "")
+            .replace("\n", "")
+        )
+
+    @classmethod
+    def _英雄名称匹配(cls, 目标: str, 文本: str) -> bool:
+        目标文本 = cls._规范英雄文本(目标)
+        当前文本 = cls._规范英雄文本(文本)
+        if 目标文本 in 当前文本:
+            return True
+        关键词 = {
+            "野蛮人之王": ("野", "人", "王"),
+            "弓箭女皇": ("弓", "箭", "女", "皇"),
+            "大守护者": ("大", "守", "护", "者"),
+            "飞盾战神": ("飞", "盾", "战", "神"),
+            "亡灵王子": ("亡", "灵", "王", "子"),
+            "飞龙公爵": ("飞", "龙", "公", "爵"),
+        }.get(目标文本)
+        return bool(关键词 and all(字符 in 当前文本 for 字符 in 关键词))
+
+    @classmethod
+    def _识别英雄升级确认页(cls, OCR结果, 屏幕图像, 目标英雄: str) -> bool:
+        """用标题、目标英雄和绿色资源按钮确认升级页。"""
+        if 屏幕图像 is None or not hasattr(屏幕图像, "shape"):
+            return False
+        文本项 = [
+            cls._规范英雄文本(项[1])
+            for 项 in (OCR结果 or [])
+            if isinstance(项, (list, tuple)) and len(项) > 1
+        ]
+        全部文本 = "".join(文本项)
+        if any(词 in 全部文本 for 词 in ("宝石", "立即完成", "使用宝石", "购买")):
+            return False
+        if not cls._英雄名称匹配(目标英雄, 全部文本):
+            return False
+        if not any(词 in 全部文本 for 词 in ("升至", "升级", "提升")):
+            return False
+        try:
+            高, 宽 = 屏幕图像.shape[:2]
+            左, 上 = max(0, int(宽 * 0.58)), max(0, int(高 * 0.77))
+            右, 下 = min(宽, int(宽 * 0.80)), min(高, int(高 * 0.95))
+            区域 = 屏幕图像[上:下, 左:右]
+            if 区域.size == 0:
+                return False
+            HSV = cv2.cvtColor(区域, cv2.COLOR_BGR2HSV)
+            绿色 = cv2.inRange(HSV, np.array([35, 55, 70]), np.array([95, 255, 255]))
+            return float(np.count_nonzero(绿色)) / float(绿色.size) >= 0.08
+        except (cv2.error, ValueError, TypeError):
+            return False
+
     def 执行(self) -> bool:
         """检查英雄殿堂界面中指定英雄是否可升级，并执行升级"""
 
@@ -63,9 +126,16 @@ class 升级英雄任务(夜世界基础任务):
             # )
             #
             #
-            可升级, 坐标 = self.是否出现图片(
-                "英雄升级界面_确认.bmp",相似度阈值=self.相似度阈值
+            # 当前国际服的繁体字体在自适应画布上会让旧的“确认”小图
+            # 模板严重失配；改为标题/英雄/绿色资源按钮三重确认。
+            屏幕图像 = self.上下文.op.获取屏幕图像cv(
+                0, 0, 800, 600, 强制刷新=True
             )
+            OCR结果 = self.执行OCR识别((250, 0, 710, 590))
+            可升级 = self._识别英雄升级确认页(
+                OCR结果, 屏幕图像, self.要升级的英雄
+            )
+            坐标 = (560, 525)
 
 
             if 可升级:

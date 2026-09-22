@@ -1,9 +1,50 @@
+import re
 import time
 
 from 任务流程.夜世界.夜世界打鱼.夜世界基础任务类 import 夜世界基础任务
 
 
 class 更新工人状态任务(夜世界基础任务):
+
+    @staticmethod
+    def 解析工人计数(识别结果) -> tuple[int, int]:
+        """从顶部工人计数 OCR 中提取合法的 ``空闲/总数``。
+
+        在 MuMu 1280×720 画面中，RapidOCR 偶尔会把左侧数字的描边
+        误识别为前导 ``-``（真实画面 ``1/2`` 会变成 ``-1/2``）。
+        工人数量不可能为负数，因此只允许 0--7 的两个数字，并把这个
+        单独的前导噪声视为 OCR 误差。其它文本一律拒绝，避免把英雄栏
+        或升级提示误写入工人状态。
+        """
+        候选 = []
+        for 项 in 识别结果 or []:
+            if not isinstance(项, (list, tuple)) or len(项) < 2:
+                continue
+            文本 = str(项[1] or "").strip().replace(" ", "")
+            if not 文本:
+                continue
+            # O/o 是 OCR 对 0 的常见误识别；竖线/I/l 是斜线的常见误识别。
+            文本 = (
+                文本.replace("O", "0")
+                .replace("o", "0")
+                .replace("I", "/")
+                .replace("l", "/")
+                .replace("|", "/")
+            )
+            匹配 = re.search(r"(?<!\d)(?:[-—–_]\s*)?([0-7])\s*/\s*([0-7])(?!\d)", 文本)
+            if not 匹配:
+                continue
+            空闲工人 = int(匹配.group(1))
+            工人总数 = int(匹配.group(2))
+            if 工人总数 <= 0 or 空闲工人 > 工人总数:
+                continue
+            置信度 = float(项[2]) if len(项) >= 3 else 0.0
+            候选.append((置信度, 空闲工人, 工人总数, 文本))
+
+        if not 候选:
+            raise ValueError("未识别到合法工人计数")
+        _, 空闲工人, 工人总数, _ = max(候选, key=lambda 项: 项[0])
+        return 空闲工人, 工人总数
 
     def 执行(self) -> bool:
         """任务入口"""
@@ -21,14 +62,7 @@ class 更新工人状态任务(夜世界基础任务):
             if not 识别结果:
                 raise ValueError("OCR为空")
 
-            原始文本 = 识别结果[0][1]
-            清理文本 = (
-                原始文本.replace('O', '0')
-                .replace('o', '0')
-                .replace(' ', '')
-            )
-
-            空闲工人, 工人总数 = map(int, 清理文本.split("/"))
+            空闲工人, 工人总数 = self.解析工人计数(识别结果)
 
             状态字典 = {
                 "空闲工人": 空闲工人,
