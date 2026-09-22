@@ -39,9 +39,7 @@ class 收集圣水车任务(夜世界基础任务):
                     )
                     return False
 
-                是否匹配, (x, y) = self.是否出现图片(
-                    self.船模板路径, 相似度阈值=0.8
-                )
+                是否匹配, (x, y), 船分数 = self._查找海岸船锚点()
 
                 if 是否匹配:
                     if self.是否在危险区域内(x, y):
@@ -50,7 +48,8 @@ class 收集圣水车任务(夜世界基础任务):
                         return False
 
                     self.上下文.置脚本状态(
-                        "定位到夜世界入口，先用船模板偏移打开圣水车，再用动态候选点兜底"
+                        f"定位到海岸船锚点（模板分数{船分数:.2f}），"
+                        "点击船旁圣水车候选点并用标题 OCR 确认"
                     )
                     候选点 = self._生成圣水车候选点(x, y)
                     for 序号, (点击x, 点击y, 来源) in enumerate(候选点, 1):
@@ -118,6 +117,39 @@ class 收集圣水车任务(夜世界基础任务):
             self.异常处理(e)
             return False
 
+    def _查找海岸船锚点(self):
+        """在已确认的夜世界地图区寻找船，只返回安全的海岸锚点。
+
+        旧实现对整张画面调用 ``是否出现图片``。船模板很小，资源栏和
+        建筑纹理也能得到相似分数，且船移动到顶部时会被 UI 遮挡。这里
+        限制到游戏地图区，再用最佳模板分数和几何范围确认；返回的船坐标
+        只用于推导船旁圣水车位置，绝不把船本身当作收集按钮。
+        """
+        try:
+            屏幕 = self.上下文.op.获取屏幕图像cv(0, 0, 800, 600)
+            if not isinstance(屏幕, np.ndarray) or 屏幕.ndim < 2 or not 屏幕.size:
+                return False, (0, 0), 0.0
+            高, 宽 = 屏幕.shape[:2]
+            左, 上 = max(0, int(宽 * 0.10)), max(0, int(高 * 0.08))
+            右, 下 = min(宽, int(宽 * 0.94)), min(高, int(高 * 0.94))
+            区域 = 屏幕[上:下, 左:右]
+            最佳匹配 = getattr(self.模板识别, "执行最佳匹配", None)
+            if not callable(最佳匹配) or 区域.size == 0:
+                return False, (0, 0), 0.0
+            分数, 中心, _ = 最佳匹配(区域, self.船模板路径)
+            分数 = float(分数)
+            全局x = int(round(float(中心[0]))) + 左
+            全局y = int(round(float(中心[1]))) + 上
+            # 船是海岸地图物体；顶部资源栏和左右固定 UI 不得成为锚点。
+            if (
+                分数 < 0.68
+                or not (100 <= 全局x <= 730 and 65 <= 全局y <= 560)
+            ):
+                return False, (0, 0), 分数
+            return True, (全局x, 全局y), 分数
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return False, (0, 0), 0.0
+
     def _夜世界仍在前台(self) -> bool:
         """在每个候选点击边界确认仍处于夜世界。"""
         try:
@@ -138,55 +170,18 @@ class 收集圣水车任务(夜世界基础任务):
 
         旧实现只尝试一个偏移，而且只识别简体标题。当前 MuMu 实机的
         圣水车面板标题是“聖水車”，并且已确认船模板偏移1可以打开面板。
-        因此先尝试模板偏移，再用动态紫色候选点兜底；每个点击都必须经过
-        简繁 OCR 确认，所有点都必须在参考画布内。
+        现在只尝试船锚点附近的三个安全车位；动态紫色气泡仅作搜索提示，
+        不加入点击队列，避免把建筑气泡或世界切换船误当成收集入口。
         """
         候选: list[tuple[int, int, str]] = []
         # 实机验证过的船模板相对位置必须优先，不能让地图中的紫色建筑
         # 气泡抢先被点击；紫色气泡不是圣水车，可能只会打开建筑详情页。
         for 备用x, 备用y, 来源 in (
             (船x - 118, 船y + 46, "船模板兼容偏移1"),
-            (船x - 169, 船y - 64, "船模板兼容偏移2"),
-            (船x, 船y, "船模板中心备用点"),
+            (船x - 104, 船y + 58, "船模板兼容偏移2"),
+            (船x - 132, 船y + 34, "船模板兼容偏移3"),
         ):
             候选.append((备用x, 备用y, 来源))
-
-        try:
-            屏幕 = self.上下文.op.获取屏幕图像cv(0, 0, 800, 600)
-            if isinstance(屏幕, np.ndarray) and 屏幕.ndim >= 2 and 屏幕.size:
-                高, 宽 = 屏幕.shape[:2]
-                x左, x右 = max(0, int(宽 * 0.09)), min(宽, int(宽 * 0.91))
-                y上, y下 = max(0, int(高 * 0.25)), min(高, int(高 * 0.90))
-                地图 = 屏幕[y上:y下, x左:x右]
-                if 地图.size:
-                    hsv = cv2.cvtColor(地图, cv2.COLOR_BGR2HSV)
-                    遮罩 = cv2.inRange(
-                        hsv,
-                        np.array((125, 80, 70), dtype=np.uint8),
-                        np.array((175, 255, 255), dtype=np.uint8),
-                    )
-                    遮罩 = cv2.morphologyEx(
-                        遮罩,
-                        cv2.MORPH_CLOSE,
-                        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
-                    )
-                    数量, _, 统计, 重心 = cv2.connectedComponentsWithStats(遮罩, 8)
-                    气泡 = []
-                    for 索引 in range(1, 数量):
-                        _, _, 方宽, 方高, 面积 = [int(v) for v in 统计[索引]]
-                        if 面积 < max(120, int(宽 * 高 * 0.00018)):
-                            continue
-                        if 方宽 < 8 or 方高 < 8 or 方宽 > 宽 * 0.16 or 方高 > 高 * 0.16:
-                            continue
-                        if not 0.35 <= 方宽 / max(1, 方高) <= 2.8:
-                            continue
-                        中心x, 中心y = 重心[索引]
-                        气泡.append((面积, int(round(中心x + x左)), int(round(中心y + y上))))
-
-                    for _, 气泡x, 气泡y in sorted(气泡, reverse=True)[:4]:
-                        候选.append((气泡x, 气泡y, "动态紫色资源气泡"))
-        except (AttributeError, TypeError, ValueError, cv2.error) as 异常:
-            self.上下文.置脚本状态(f"圣水气泡扫描失败，使用模板备用点：{异常}")
 
         已有 = set()
         安全候选 = []

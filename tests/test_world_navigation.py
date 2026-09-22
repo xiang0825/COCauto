@@ -109,6 +109,23 @@ class 世界跳转测试(unittest.TestCase):
         self.assertEqual(坐标, (212, 447))
         self.assertAlmostEqual(分数, 0.60)
 
+    def test_当前实机船体中心约三百九十二像素仍可确认(self):
+        任务 = object.__new__(进入世界任务基类)
+        任务.船模板路径 = "船.bmp"
+        任务.模板识别 = Mock()
+        任务.模板识别.执行最佳匹配.return_value = (0.0, (0, 0), None)
+        任务.模板识别.执行匹配.return_value = (False, (0, 0), None)
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        # MuMu 当前实机截图中船体颜色连通块约为 x=263..314、
+        # y=357..427，重心约 (286,392)。
+        画面[357:427, 263:314] = (0, 0, 220)
+
+        命中, 坐标, 分数 = 任务.查找世界入口(画面)
+
+        self.assertTrue(命中)
+        self.assertEqual(坐标, (288, 392))
+        self.assertAlmostEqual(分数, 0.60)
+
     def test_同一入口连续未转场后停止重复点击(self):
         模块 = importlib.import_module("任务流程.世界跳转.进入世界基类")
         时钟 = SimpleNamespace(当前时间=0.0)

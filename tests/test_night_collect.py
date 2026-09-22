@@ -18,7 +18,7 @@ class 夜世界圣水车测试(unittest.TestCase):
         任务.上下文 = 上下文
         return 任务
 
-    def test_动态紫色气泡优先于旧船偏移(self):
+    def test_动态紫色气泡不进入点击候选(self):
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
         # 构造和实机一致的紫色收集气泡，位于地图区域内。
         cv2.circle(屏幕, (484, 224), 18, (180, 60, 220), -1)
@@ -27,7 +27,7 @@ class 夜世界圣水车测试(unittest.TestCase):
         候选 = 任务._生成圣水车候选点(692, 7)
 
         self.assertEqual(候选[0][2], "船模板兼容偏移1")
-        self.assertIn((484, 224, "动态紫色资源气泡"), 候选)
+        self.assertNotIn((484, 224, "动态紫色资源气泡"), 候选)
 
     def test_旧船模板未命中时仍能独立扫描动态气泡(self):
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
@@ -46,6 +46,40 @@ class 夜世界圣水车测试(unittest.TestCase):
 
         self.assertTrue(候选)
         self.assertTrue(all(12 <= x <= 788 and 12 <= y <= 588 for x, y, _ in 候选))
+
+    def test_海岸船锚点限制地图区域并还原坐标(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=屏幕)),
+            置脚本状态=Mock(),
+        )
+        任务 = object.__new__(收集圣水车任务)
+        任务.上下文 = 上下文
+        任务.船模板路径 = "船.bmp"
+        任务.模板识别 = Mock()
+        任务.模板识别.执行最佳匹配.return_value = (0.91, (516, 43), "船.bmp")
+
+        命中, 坐标, 分数 = 任务._查找海岸船锚点()
+
+        self.assertTrue(命中)
+        self.assertEqual(坐标, (596, 91))
+        self.assertAlmostEqual(分数, 0.91)
+
+    def test_海岸船锚点拒绝顶部资源栏假匹配(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=屏幕)),
+            置脚本状态=Mock(),
+        )
+        任务 = object.__new__(收集圣水车任务)
+        任务.上下文 = 上下文
+        任务.船模板路径 = "船.bmp"
+        任务.模板识别 = Mock()
+        任务.模板识别.执行最佳匹配.return_value = (0.95, (690, 10), "船.bmp")
+
+        命中, _, _ = 任务._查找海岸船锚点()
+
+        self.assertFalse(命中)
 
     def test_船模板覆盖全部变体(self):
         for 编号 in range(1, 13):
@@ -87,7 +121,7 @@ class 夜世界圣水车测试(unittest.TestCase):
             SimpleNamespace(当前世界="夜世界"),
             SimpleNamespace(当前世界="主世界"),
         ]
-        任务.是否出现图片 = Mock(return_value=(True, (200, 200)))
+        任务._查找海岸船锚点 = Mock(return_value=(True, (200, 200), 0.9))
         任务._生成圣水车候选点 = Mock(return_value=[(200, 200, "测试候选1"), (300, 300, "测试候选2")])
         任务.尝试收集圣水 = Mock(return_value=False)
         任务._关闭候选详情面板 = Mock(return_value=False)
