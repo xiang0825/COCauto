@@ -52,7 +52,7 @@ class 进攻目标选择测试(unittest.TestCase):
         self.assertEqual(结果[0]["类别名称"], "金库")
         self.assertLessEqual(len(结果), self.任务.最多集中目标数)
 
-    def test_资源模式先选择外圈采集器再处理内圈储存建筑(self):
+    def test_资源模式先选择高价值储存建筑再处理外围采集器(self):
         结果 = self.任务.选择集中进攻目标(
             self.上下文,
             [
@@ -61,7 +61,7 @@ class 进攻目标选择测试(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(结果[0]["类别名称"], "金矿")
+        self.assertEqual(结果[0]["类别名称"], "金库")
         self.assertIn("覆盖全部2个资源目标", self.上下文.状态[-1])
 
     def test_资源模式覆盖全部已识别资源目标(self):
@@ -77,6 +77,32 @@ class 进攻目标选择测试(unittest.TestCase):
         结果 = self.任务.选择集中进攻目标(self.上下文, 目标列表)
         self.assertEqual(len(结果), len(目标列表))
         self.assertIn("覆盖全部6个资源目标", self.上下文.状态[-1])
+
+    def test_资源模式兵力有限时储存建筑排在采集器之前(self):
+        目标列表 = [
+            {
+                "类别名称": "金矿",
+                "置信度": 1.0,
+                "中心坐标": 坐标(80 + 索引 * 30, 100 + 索引 * 10),
+                "靠近边缘": True,
+            }
+            for 索引 in range(8)
+        ] + [
+            {
+                "类别名称": "金库",
+                "置信度": 1.0,
+                "中心坐标": 坐标(250 + 索引 * 55, 285 + 索引 * 20),
+                "靠近边缘": False,
+            }
+            for 索引 in range(3)
+        ]
+
+        结果 = self.任务.选择集中进攻目标(self.上下文, 目标列表)
+
+        self.assertEqual(
+            [目标["类别名称"] for 目标 in 结果[:3]],
+            ["金库", "金库", "金库"],
+        )
 
     def test_资源模式低表现后按方向交错但仍覆盖全部目标(self):
         self.上下文.设置 = type(
