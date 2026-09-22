@@ -1,10 +1,18 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$PackageDirectory,
-    [string]$ReleaseDirectory = "$(Split-Path -Parent $PSScriptRoot)"
+    [string]$ReleaseDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
+$脚本目录 = if ($PSScriptRoot) {
+    $PSScriptRoot
+} else {
+    Split-Path -Parent $MyInvocation.MyCommand.Definition
+}
+if ([string]::IsNullOrWhiteSpace($ReleaseDirectory)) {
+    $ReleaseDirectory = Split-Path -Parent $脚本目录
+}
 $package = (Resolve-Path -LiteralPath $PackageDirectory).Path
 $source = Join-Path $package "部落冲突"
 $target = (Resolve-Path -LiteralPath $ReleaseDirectory).Path
