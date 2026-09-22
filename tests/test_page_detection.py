@@ -43,6 +43,19 @@ class 页面识别测试(unittest.TestCase):
         self.assertEqual(结果.页面, "战斗中")
         self.assertTrue(any("红色放弃按钮" in 依据 for 依据 in 结果.依据))
 
+    def test_1280x720战斗倒计时优先于奖励页误报(self):
+        """高分辨率实机中倒计时存在时，不能停在奖励选择页。"""
+        图像 = np.zeros((720, 1280, 3), dtype=np.uint8)
+        # 模拟当前 MuMu 实机布局：左下角放弃按钮和顶部倒计时。
+        cv2.rectangle(图像, (18, 512), (165, 563), (0, 0, 220), -1)
+        cv2.putText(
+            图像, "1:07", (545, 78), cv2.FONT_HERSHEY_SIMPLEX,
+            1.7, (255, 255, 255), 4, cv2.LINE_AA,
+        )
+        结果 = self.识别器.识别(图像, 战斗中=True)
+        self.assertEqual(结果.页面, "战斗中")
+        self.assertTrue(any("战斗倒计时" in 依据 for 依据 in 结果.依据))
+
     def test_升级详情弹窗只返回右上角安全关闭点(self):
         """遮罩上的绿色宝石按钮和最右侧控件都不能成为点击目标。"""
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
