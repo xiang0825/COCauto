@@ -548,7 +548,7 @@ class 自适应战斗测试(unittest.TestCase):
             "区域": (254, 493, 310, 594),
         }
         self.assertTrue(任务.尝试释放英雄技能(上下文, 兵栏项))
-        self.assertEqual(点击.call_args.args[:2], (282, 572))
+        self.assertEqual(点击.call_args_list[0].args[:2], (282, 572))
         self.assertIn(4, 上下文._本场已释放英雄技能)
         self.assertTrue(any("技能已点击" in 文本 for 文本 in 日志))
 
@@ -581,6 +581,40 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertIn(5, 上下文._本场技能复核重试槽位)
         self.assertTrue(any("复核点击后状态" in 文本 for 文本 in 日志))
 
+    def test_英雄技能备用点击仍限制在当前卡牌内(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        点击记录 = []
+        日志 = []
+        上下文 = SimpleNamespace(
+            _本场已部署槽位={5},
+            _本场已释放英雄技能=set(),
+            _本场技能复核重试槽位=set(),
+            英雄技能状态={"第5格/英雄_飞盾战神": "可用"},
+            停止事件=SimpleNamespace(is_set=lambda: False),
+            点击=lambda x, y, **_参数: 点击记录.append((x, y)) or True,
+            脚本延时=lambda _毫秒: None,
+            置脚本状态=日志.append,
+        )
+        任务.战斗是否仍在进行 = Mock(return_value=True)
+        任务.识别英雄技能状态 = Mock(
+            side_effect=[
+                {"第5格/英雄_飞盾战神": "可用"},
+                {"第5格/英雄_飞盾战神": "可用"},
+                {"第5格/英雄_飞盾战神": "可用"},
+            ]
+        )
+        区域 = (316, 493, 372, 594)
+        self.assertTrue(
+            任务.尝试释放英雄技能(
+                上下文,
+                {"槽位": 5, "名称": "英雄_飞盾战神", "区域": 区域},
+            )
+        )
+        self.assertEqual(len(点击记录), 3)
+        左, 上, 右, 下 = 区域
+        self.assertTrue(all(左 <= x < 右 and 上 <= y < 下 for x, y in 点击记录))
+        self.assertTrue(any("备用点击后仍显示可用" in 文本 for 文本 in 日志))
+
     def test_英雄落地后初判不可用会重新识别并释放技能(self):
         任务 = 进攻任务.__new__(进攻任务)
         日志 = []
@@ -606,7 +640,7 @@ class 自适应战斗测试(unittest.TestCase):
 
         self.assertTrue(任务.尝试释放英雄技能(上下文, 兵栏项))
         self.assertGreaterEqual(任务.识别英雄技能状态.call_count, 2)
-        self.assertEqual(点击.call_args.args[:2], (282, 572))
+        self.assertEqual(点击.call_args_list[0].args[:2], (282, 572))
         self.assertIn(4, 上下文._本场已释放英雄技能)
         self.assertTrue(any("准备复核" in 文本 for 文本 in 日志))
 
@@ -673,6 +707,40 @@ class 自适应战斗测试(unittest.TestCase):
 
         self.assertEqual(读取区域, [(56, 493, 112, 594)])
         self.assertTrue(any("当前数量已确认0" in 文本 for 文本 in 日志))
+
+    def test_战斗过渡开始漏兵检测时不读取兵栏也不点击(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        日志 = []
+        上下文 = SimpleNamespace(
+            置脚本状态=日志.append,
+            点击=lambda *_参数, **_关键字: self.fail("战斗过渡页不应点击"),
+        )
+        任务.战斗是否仍在进行 = Mock(return_value=False)
+        任务.准备可下兵区域 = Mock(side_effect=AssertionError("不应初始化下兵区域"))
+
+        任务.执行漏下兵种下兵流程(
+            上下文,
+            [{"中心坐标": 坐标(100, 100)}],
+        )
+
+        任务.战斗是否仍在进行.assert_called_once_with(上下文)
+        任务.准备可下兵区域.assert_not_called()
+        self.assertTrue(any("停止补下兵" in 文本 for 文本 in 日志))
+
+    def test_页面护栏识别到战斗过渡会立即停止战斗输入(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文 = SimpleNamespace(
+            停止事件=SimpleNamespace(is_set=lambda: False),
+            op=SimpleNamespace(获取屏幕图像cv=lambda *_区域: 屏幕),
+            _获取点击页面识别器=lambda: SimpleNamespace(
+                识别=lambda *_参数, **_关键字: SimpleNamespace(页面="战斗过渡")
+            ),
+        )
+
+        self.assertFalse(任务.战斗是否仍在进行(上下文))
+        self.assertTrue(上下文._战斗结束已确认)
+        np.testing.assert_array_equal(上下文._战斗结束截图, 屏幕)
 
     def test_读取槽位显示兵量能把OCR的XO识别为零(self):
         任务 = 进攻任务.__new__(进攻任务)
