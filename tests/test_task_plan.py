@@ -163,6 +163,29 @@ class 任务计划测试(unittest.TestCase):
         self.assertTrue(上下文.页面恢复失败)
         任务.尝试点击回营按钮.assert_not_called()
 
+    def test_夜世界结算页限制区域识别回营按钮(self):
+        任务 = 等待回营或第二次战斗.__new__(等待回营或第二次战斗)
+        调用 = {}
+
+        class 匹配器:
+            def 执行匹配(self, 图像, 模板路径, 相似度阈值=0.9):
+                调用["图像"] = 图像
+                调用["模板路径"] = 模板路径
+                调用["阈值"] = 相似度阈值
+                return True, (100, 40), None
+
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=lambda *区域: object()),
+            点击=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.模板识别 = 匹配器()
+
+        self.assertTrue(任务.尝试点击回营按钮())
+        self.assertEqual(调用["模板路径"], "夜世界_回营.bmp|夜世界_回营[1].bmp")
+        self.assertEqual(调用["阈值"], 0.58)
+        上下文.点击.assert_called_once_with(400, 490)
+
     def test_非主页时最多单次ESC并确认主世界主页(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
         键盘 = Mock()

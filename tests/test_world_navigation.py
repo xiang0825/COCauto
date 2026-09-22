@@ -3,6 +3,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import numpy as np
+
 from 任务流程.世界跳转.进入世界基类 import 进入世界任务基类
 
 
@@ -44,6 +46,20 @@ class 世界跳转测试(unittest.TestCase):
         self.assertTrue(
             any("禁止点击、滑动、ESC或返回键" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
         )
+
+    def test_世界入口只在左下安全区域匹配并还原坐标(self):
+        任务 = object.__new__(进入世界任务基类)
+        任务.船模板路径 = "船.bmp"
+        任务.模板识别 = Mock()
+        任务.模板识别.执行最佳匹配.return_value = (0.55, (12, 18), "船.bmp")
+
+        命中, 坐标, 分数 = 任务.查找世界入口(np.zeros((600, 800, 3), dtype=np.uint8))
+
+        self.assertTrue(命中)
+        self.assertEqual(坐标, (147, 494))
+        self.assertAlmostEqual(分数, 0.55)
+        区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
+        self.assertEqual(区域.shape[:2], (75, 110))
 
 
 if __name__ == "__main__":
