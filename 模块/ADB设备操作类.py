@@ -568,15 +568,64 @@ class ADB设备操作类:
                 )
             except (ADB错误, OSError, subprocess.TimeoutExpired):
                 continue
-            当前前台 = 包名 in 前台文本
+            当前前台 = cls._前台是否为包名(前台文本, 包名)
             评分 = (100 if 当前前台 else 0) + (10 if 已安装 else 0)
-            评分结果.append((评分, 设备))
+            # MuMu 有时会同时把同一实例暴露为网络 serial 和
+            # emulator-* serial。读取 guest 唯一标识后再去重，避免同一
+            # 台模拟器的两个别名被错误当成“两台设备”而拒绝启动。
+            身份输出 = 解码(
+                适配器.执行(["shell", "getprop", "ro.serialno"], timeout=5)
+            ).strip().splitlines()
+            身份 = 身份输出[0].strip() if 身份输出 else ""
+            if not 身份 or 身份.startswith("package:") or 身份 in {"unknown", "null"}:
+                # MuMu Android 15 的 ro.serialno 可能为空；android_id
+                # 仍能稳定标识同一 guest，用于合并网络 serial 与
+                # emulator-* serial 两个 ADB 别名。
+                身份输出 = 解码(
+                    适配器.执行(
+                        ["shell", "settings", "get", "secure", "android_id"],
+                        timeout=5,
+                    )
+                ).strip().splitlines()
+                身份 = 身份输出[0].strip() if 身份输出 else ""
+            if not 身份 or 身份.startswith("package:") or 身份 in {"unknown", "null"}:
+                身份 = ""
+            评分结果.append((评分, 设备, 身份))
 
         if not 评分结果:
             raise ADB错误(
                 f"无法在候选模拟器上确认游戏包 {包名}；"
                 "请在连接页手动扫描并选择设备。"
             )
+        去重结果: dict[str, tuple[int, ADB设备信息]] = {}
+        for 分数, 设备, 身份 in 评分结果:
+            分组键 = f"identity:{身份}" if 身份 else f"serial:{设备.序列号}"
+            现有 = 去重结果.get(分组键)
+            if 现有 is None:
+                去重结果[分组键] = (分数, 设备)
+                continue
+            现有分数, 现有设备 = 现有
+            def 序列号优先级(序列号: str) -> int:
+                if re.fullmatch(r"(?:127\.0\.0\.1|localhost):\d+", 序列号):
+                    try:
+                        端口 = int(序列号.rsplit(":", 1)[1])
+                    except (ValueError, IndexError):
+                        端口 = -1
+                    if 16384 <= 端口 <= 16499:
+                        return 2
+                if re.fullmatch(r"emulator-\d+", 序列号.lower()):
+                    return 1
+                return 0
+            if (
+                分数 > 现有分数
+                or (
+                    分数 == 现有分数
+                    and 序列号优先级(设备.序列号) > 序列号优先级(现有设备.序列号)
+                )
+            ):
+                去重结果[分组键] = (分数, 设备)
+
+        评分结果 = list(去重结果.values())
         评分结果.sort(key=lambda 项: 项[0], reverse=True)
         最高分 = 评分结果[0][0]
         最佳 = [设备 for 分数, 设备 in 评分结果 if 分数 == 最高分]
@@ -587,6 +636,23 @@ class ADB设备操作类:
                 "请在连接页手动选择并确认目标。"
             )
         return 最佳[0]
+
+    @staticmethod
+    def _前台是否为包名(窗口状态文本: str, 包名: str) -> bool:
+        """只按当前焦点字段判断前台应用，不扫描整个 dumpsys 历史。"""
+        包名 = str(包名 or "").strip()
+        if not 包名:
+            return False
+        # dumpsys activity/window 会同时列出后台任务栈、最近任务和历史
+        # Activity。仅在当前焦点字段中匹配，避免“后台曾打开过 CoC”把
+        # 模拟器错误打成前台候选。
+        当前字段 = re.compile(
+            r"(?:mCurrentFocus|mFocusedApp|mResumedActivity|ResumedActivity)\s*[:=].*"
+        )
+        return any(
+            包名 in 行 and 当前字段.search(行)
+            for 行 in str(窗口状态文本 or "").splitlines()
+        )
 
     @classmethod
     def 连接网络设备(

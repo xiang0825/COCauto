@@ -138,6 +138,66 @@ class ADB设备测试(unittest.TestCase):
                     自动检测路径=False,
                 )
 
+    def test_自动选择只看当前焦点而不看后台任务历史(self):
+        class 焦点Runner:
+            def __init__(自身):
+                自身.命令 = []
+
+            def __call__(自身, 命令, **_参数):
+                自身.命令.append(命令)
+                if 命令[1:] == ["devices", "-l"]:
+                    return 结果(
+                        b"List of devices attached\n"
+                        b"127.0.0.1:16416 device model:MuMu\n"
+                        b"emulator-5556 device model:MuMu\n"
+                    )
+                serial = 命令[2] if len(命令) > 2 and 命令[1] == "-s" else ""
+                if 命令[-3:] == ["list", "packages", "com.supercell.clashofclans"]:
+                    return 结果(b"package:com.supercell.clashofclans\n")
+                if serial == "127.0.0.1:16416":
+                    return 结果(
+                        b"mCurrentFocus=Window{u0 com.supercell.clashofclans/.GameApp}\n"
+                        b"RecentTask: com.supercell.clashofclans/.GameApp\n"
+                    )
+                return 结果(
+                    b"mCurrentFocus=Window{u0 app.lawnchair/.Launcher}\n"
+                    b"RecentTask: com.supercell.clashofclans/.GameApp\n"
+                )
+
+        runner = 焦点Runner()
+        with patch.object(ADB设备操作类, "解析ADB路径", return_value=ADB):
+            设备 = ADB设备操作类.自动选择游戏设备(
+                ADB,
+                runner=runner,
+                自动检测路径=False,
+            )
+        self.assertEqual(设备.序列号, "127.0.0.1:16416")
+
+    def test_自动选择合并同一MuMu的网络与emulator别名(self):
+        class 同一实例Runner:
+            def __call__(自身, 命令, **_参数):
+                if 命令[1:] == ["devices", "-l"]:
+                    return 结果(
+                        b"List of devices attached\n"
+                        b"127.0.0.1:16416 device model:MuMu\n"
+                        b"emulator-5556 device model:MuMu\n"
+                    )
+                if 命令[-3:] == ["list", "packages", "com.supercell.clashofclans"]:
+                    return 结果(b"package:com.supercell.clashofclans\n")
+                if 命令[-3:] == ["getprop", "ro.serialno"]:
+                    return 结果(b"mumu-test-instance\n")
+                return 结果(
+                    b"mCurrentFocus=Window{u0 com.supercell.clashofclans/.GameApp}\n"
+                )
+
+        with patch.object(ADB设备操作类, "解析ADB路径", return_value=ADB):
+            设备 = ADB设备操作类.自动选择游戏设备(
+                ADB,
+                runner=同一实例Runner(),
+                自动检测路径=False,
+            )
+        self.assertEqual(设备.序列号, "127.0.0.1:16416")
+
     def test_实体Samsung设备即使确认也会被阻止(self):
         runner = 假Runner(结果(b"List of devices attached\nR58M1234567 device model:SM_A5560 product:a55xchn\n"))
         设备 = ADB设备操作类(ADB, "R58M1234567", runner=runner)
