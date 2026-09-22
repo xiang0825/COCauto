@@ -449,36 +449,9 @@ class 页面识别器:
             hsv = cv2.cvtColor(图像, cv2.COLOR_BGR2HSV)
 
             # 回营按钮只看底部中央，排除右侧战斗速度按钮和兵栏药水。
-            bx1, bx2 = int(宽 * 0.38), int(宽 * 0.62)
-            by1, by2 = int(高 * 0.76), int(高 * 0.99)
-            绿色 = (
-                (hsv[by1:by2, bx1:bx2, 0] >= 30)
-                & (hsv[by1:by2, bx1:bx2, 0] <= 100)
-                & (hsv[by1:by2, bx1:bx2, 1] >= 70)
-                & (hsv[by1:by2, bx1:bx2, 2] >= 100)
-            )
-            if not 绿色.size or float(np.mean(绿色)) < 0.08:
-                return 0.0
-            # 战斗页兵栏/血条也会让底部中央出现绿色像素，不能只用
-            # 覆盖率判断。真正的“回营”是一个连续的大按钮；要求在
-            # 底部中央存在足够大的绿色连通块，过滤兵栏的细长状态条。
-            绿色连通 = cv2.morphologyEx(
-                绿色.astype(np.uint8),
-                cv2.MORPH_CLOSE,
-                cv2.getStructuringElement(cv2.MORPH_RECT, (7, 5)),
-            )
-            _, _, 绿色统计, _ = cv2.connectedComponentsWithStats(绿色连通, 8)
-            最小按钮面积 = max(3500, int(宽 * 高 * 0.008))
-            找到回营按钮 = False
-            for _, _, 按钮宽, 按钮高, 按钮面积 in 绿色统计[1:]:
-                if (
-                    按钮面积 >= 最小按钮面积
-                    and 按钮宽 >= int(宽 * 0.12)
-                    and 按钮高 >= int(高 * 0.06)
-                ):
-                    找到回营按钮 = True
-                    break
-            if not 找到回营按钮:
+            # 这里和下方的安全点击定位共用同一套几何条件，避免“识别
+            # 成功但点击时又找不到按钮”的分叉。
+            if self._定位绿色回营按钮(图像) is None:
                 return 0.0
 
             # 结果横幅必须是中央上半区的宽金色结构。
@@ -506,9 +479,83 @@ class 页面识别器:
                     and w / max(1, h) >= 2.0
                 ):
                     return 0.96
+
+            # 夜世界/测试服的结算页有时使用蓝紫结果背景，不再绘制旧版
+            # 金色结果横幅。底部大绿色回营按钮仍然稳定存在，同时中央
+            # 会出现星级和“0%/xx%”等大号亮色结构。该组合比单独找颜色
+            # 安全，且不会把普通主页当成结算页。
+            中央 = hsv[
+                int(高 * 0.12):int(高 * 0.60),
+                int(宽 * 0.20):int(宽 * 0.80),
+            ]
+            亮色结构 = (
+                (中央[:, :, 1] < 90)
+                & (中央[:, :, 2] > 175)
+            ).astype(np.uint8)
+            亮色结构 = cv2.morphologyEx(
+                亮色结构,
+                cv2.MORPH_OPEN,
+                np.ones((3, 3), dtype=np.uint8),
+            )
+            _, _, 亮色统计, _ = cv2.connectedComponentsWithStats(亮色结构, 8)
+            最小亮块面积 = max(80, int(中央.shape[0] * 中央.shape[1] * 0.00025))
+            大亮块数量 = sum(
+                1
+                for _, _, 亮块宽, 亮块高, 亮块面积 in 亮色统计[1:]
+                if 亮块面积 >= 最小亮块面积
+                and 亮块宽 >= max(8, int(宽 * 0.01))
+                and 亮块高 >= max(8, int(高 * 0.01))
+            )
+            if float(np.mean(亮色结构)) >= 0.014 and 大亮块数量 >= 3:
+                return 0.94
         except (AttributeError, TypeError, ValueError, cv2.error):
             return 0.0
         return 0.0
+
+    def _定位绿色回营按钮(self, 图像: np.ndarray):
+        """返回结算页底部绿色回营按钮中心，未找到则返回 ``None``。"""
+        if not isinstance(图像, np.ndarray) or 图像.ndim < 2 or 图像.size == 0:
+            return None
+        try:
+            高, 宽 = 图像.shape[:2]
+            hsv = cv2.cvtColor(图像, cv2.COLOR_BGR2HSV)
+            左, 右 = int(宽 * 0.38), int(宽 * 0.62)
+            上, 下 = int(高 * 0.76), int(高 * 0.99)
+            绿色 = (
+                (hsv[上:下, 左:右, 0] >= 30)
+                & (hsv[上:下, 左:右, 0] <= 100)
+                & (hsv[上:下, 左:右, 1] >= 70)
+                & (hsv[上:下, 左:右, 2] >= 100)
+            ).astype(np.uint8)
+            if not 绿色.size or float(np.mean(绿色)) < 0.08:
+                return None
+            绿色连通 = cv2.morphologyEx(
+                绿色,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (7, 5)),
+            )
+            _, _, 绿色统计, _ = cv2.connectedComponentsWithStats(绿色连通, 8)
+            最小按钮面积 = max(3500, int(宽 * 高 * 0.008))
+            候选 = []
+            for x, y, 按钮宽, 按钮高, 按钮面积 in 绿色统计[1:]:
+                if (
+                    按钮面积 >= 最小按钮面积
+                    and 按钮宽 >= int(宽 * 0.12)
+                    and 按钮高 >= int(高 * 0.06)
+                ):
+                    候选.append((按钮面积, x, y, 按钮宽, 按钮高))
+            if not 候选:
+                return None
+            _, x, y, 按钮宽, 按钮高 = max(候选)
+            return (左 + x + 按钮宽 // 2, 上 + y + 按钮高 // 2)
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return None
+
+    def 定位结算回营按钮(self, 图像: np.ndarray):
+        """仅在视觉确认结算页后返回安全的回营按钮坐标。"""
+        if self._结算结果视觉分数(图像) < 0.90:
+            return None
+        return self._定位绿色回营按钮(图像)
 
     def 识别(self, 屏幕图像: np.ndarray, 战斗中: bool = False) -> 页面识别结果:
         """识别当前页面；不确定时返回 ``页面=未知``，不触发任何输入。"""

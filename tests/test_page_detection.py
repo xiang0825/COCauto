@@ -208,6 +208,21 @@ class 页面识别测试(unittest.TestCase):
         self.assertEqual(结果.页面, "战斗结算")
         self.assertTrue(any("结果横幅+回营视觉" in 依据 for 依据 in 结果.依据))
 
+    def test_夜世界蓝紫结算页的绿色回营按钮可识别(self):
+        """夜世界结算页没有金色横幅时也必须能安全回营。"""
+        图像 = np.full((600, 800, 3), (18, 25, 42), dtype=np.uint8)
+        cv2.rectangle(图像, (315, 485), (485, 565), (90, 220, 120), -1)
+        # 模拟结算页中央星级/百分比的亮色结构，而不是依赖固定文字模板。
+        for 中心 in ((275, 175), (400, 175), (525, 175)):
+            cv2.circle(图像, 中心, 28, (235, 235, 235), -1)
+        cv2.putText(
+            图像, "0%", (350, 335), cv2.FONT_HERSHEY_SIMPLEX,
+            1.8, (255, 255, 255), 4, cv2.LINE_AA,
+        )
+        结果 = self.识别器.识别(图像, 战斗中=True)
+        self.assertEqual(结果.页面, "战斗结算")
+        self.assertEqual(self.识别器.定位结算回营按钮(图像), (400, 525))
+
     def test_实机断线弹窗识别为断线页面(self):
         """中央连接中断遮罩不能被当成未知页面继续发送输入。"""
         图像 = np.full((600, 800, 3), (10, 18, 22), dtype=np.uint8)

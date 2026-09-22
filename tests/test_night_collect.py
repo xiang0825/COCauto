@@ -57,12 +57,12 @@ class 夜世界圣水车测试(unittest.TestCase):
         任务.上下文 = 上下文
         任务.船模板路径 = "船.bmp"
         任务.模板识别 = Mock()
-        任务.模板识别.执行最佳匹配.return_value = (0.91, (516, 43), "船.bmp")
+        任务.模板识别.执行最佳匹配.return_value = (0.91, (516, 61), "船.bmp")
 
         命中, 坐标, 分数 = 任务._查找海岸船锚点()
 
         self.assertTrue(命中)
-        self.assertEqual(坐标, (596, 91))
+        self.assertEqual(坐标, (596, 109))
         self.assertAlmostEqual(分数, 0.91)
 
     def test_海岸船锚点拒绝顶部资源栏假匹配(self):
@@ -76,6 +76,24 @@ class 夜世界圣水车测试(unittest.TestCase):
         任务.船模板路径 = "船.bmp"
         任务.模板识别 = Mock()
         任务.模板识别.执行最佳匹配.return_value = (0.95, (690, 10), "船.bmp")
+
+        命中, _, _ = 任务._查找海岸船锚点()
+
+        self.assertFalse(命中)
+
+    def test_海岸船锚点拒绝右上资源栏低分假匹配(self):
+        """右上资源栏纹理的低分命中不能触发三次错误点击。"""
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=屏幕)),
+            置脚本状态=Mock(),
+        )
+        任务 = object.__new__(收集圣水车任务)
+        任务.上下文 = 上下文
+        任务.船模板路径 = "船.bmp"
+        任务.模板识别 = Mock()
+        # 与实机日志中的资源栏假匹配一致：全局约(631,91)，分数0.68。
+        任务.模板识别.执行最佳匹配.return_value = (0.68, (551, 43), "船.bmp")
 
         命中, _, _ = 任务._查找海岸船锚点()
 

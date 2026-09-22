@@ -1,9 +1,31 @@
 import argparse
+import sys
 import threading
 import queue
 import time
 from dataclasses import replace
 from time import sleep
+
+
+def _配置稳定的控制台输出():
+    """让 Windows 控制台不会因中文日志导致机器人线程崩溃。
+
+    MuMu/CoC 的任务线程会把中文状态打印到 stdout。某些启动方式（尤其
+    双击 EXE、旧版 cmd 或被重定向到文件时）会把 stdout 标成 cp1252，
+    这时普通 print 会抛出 UnicodeEncodeError，连带结束任务线程。这里
+    只调整 Python 文本流的编码和容错，不改变 ADB 或游戏操作。
+    """
+    for 流 in (getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
+        if 流 is None or not hasattr(流, "reconfigure"):
+            continue
+        try:
+            流.reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            # 无控制台/已关闭的重定向流不应阻止程序启动。
+            pass
+
+
+_配置稳定的控制台输出()
 
 from 数据库.任务数据库 import 任务数据库, 机器人设置
 from 模块.ADB设备操作类 import ADB设备操作类
