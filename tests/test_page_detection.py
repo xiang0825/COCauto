@@ -78,6 +78,35 @@ class 页面识别测试(unittest.TestCase):
 
         self.assertIsNone(任务上下文._检测升级详情弹窗关闭点(图像))
 
+    def test_中央教程提示只返回下半屏正文点击点(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.获取OCR引擎 = Mock(return_value=Mock(return_value=(
+            [
+                ([[200, 220], [500, 220], [500, 260], [200, 260]],
+                 "冠军，记得领取你可能错过的奖励。", 0.95),
+            ],
+            None,
+        )))
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+
+        候选 = 上下文._识别中央游戏提示(图像)
+
+        self.assertIsNotNone(候选)
+        self.assertEqual(候选["点击点"], (446, 384))
+
+    def test_顶部资源栏文字不能触发中央教程提示(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.获取OCR引擎 = Mock(return_value=Mock(return_value=(
+            [
+                ([[650, 10], [790, 10], [790, 35], [650, 35]],
+                 "领取奖励", 0.99),
+            ],
+            None,
+        )))
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+
+        self.assertIsNone(上下文._识别中央游戏提示(图像))
+
     def test_奖励选择横幅优先于左下角战斗按钮(self):
         """奖励覆盖层仍带放弃按钮时，不能继续被识别为战斗页。"""
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)

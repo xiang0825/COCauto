@@ -149,6 +149,102 @@ class 任务上下文:
         self.置脚本状态("当前连接不支持安全的游戏内拉远视距，跳过缩放按键")
         return False
 
+    def _识别中央游戏提示(self, 屏幕图像) -> dict[str, Any] | None:
+        """识别遮挡主世界的教程/活动对话气泡，并返回安全点击点。
+
+        这类对话会把主世界资源栏和入口留在背景中，导致模板识别误以为
+        已经可以继续操作。不能只靠 ESC：当前 CoC 测试服的对话气泡对
+        Android BACK 不响应，必须点击气泡正文推进。这里仅接受中央、
+        下半屏的 OCR 文字和教程/提示关键词，绝不把顶部资源栏、商店或
+        地图建筑文字当作可点击目标。
+        """
+        if 屏幕图像 is None or not hasattr(屏幕图像, "shape"):
+            return None
+        try:
+            高, 宽 = 屏幕图像.shape[:2]
+            if 高 < 120 or 宽 < 240:
+                return None
+            左 = int(宽 * 0.12)
+            上 = int(高 * 0.24)
+            右 = int(宽 * 0.88)
+            下 = int(高 * 0.92)
+            区域 = 屏幕图像[上:下, 左:右]
+            OCR返回 = self.获取OCR引擎()(区域)
+            OCR结果 = OCR返回[0] if isinstance(OCR返回, tuple) else OCR返回
+            OCR结果 = OCR结果 or []
+        except Exception as 异常:
+            if self.是否内存异常(异常):
+                self.触发内存保护("中央提示OCR", 异常)
+            return None
+
+        提示关键词 = (
+            "首领", "就是你", "新晋", "欢迎", "恭喜", "冠军", "奖励",
+            "记得", "领取", "村长", "解锁", "能力", "reward", "welcome",
+            "congrat", "leader", "chief",
+        )
+        命中 = []
+        for 识别项 in OCR结果:
+            if not isinstance(识别项, (list, tuple)) or len(识别项) < 2:
+                continue
+            文本 = self._规范升级弹窗OCR文本(识别项[1])
+            if not 文本 or not any(关键词.lower() in 文本 for 关键词 in 提示关键词):
+                continue
+            框 = self._解析升级弹窗OCR框(识别项)
+            if 框 is None:
+                continue
+            x1, y1, x2, y2 = 框
+            中心x = (x1 + x2) / 2 + 左
+            中心y = (y1 + y2) / 2 + 上
+            # 只接受中央对话正文；顶部资源栏、右下商店和普通建筑
+            # 标签都不在这个区域内。
+            if not (
+                宽 * 0.18 <= 中心x <= 宽 * 0.82
+                and 高 * 0.48 <= 中心y <= 高 * 0.88
+            ):
+                continue
+            命中.append((x1, y1, x2, y2, 中心x, 中心y, 文本))
+
+        if not 命中:
+            return None
+        _, _, _, _, 中心x, 中心y, 文本 = max(
+            命中, key=lambda 项: (项[2] - 项[0]) * (项[3] - 项[1])
+        )
+        return {
+            "文本": 文本,
+            "点击点": (
+                int(round(中心x * 800 / 宽)),
+                int(round(中心y * 600 / 高)),
+            ),
+        }
+
+    def 清理中央游戏提示(self, 屏幕图像=None) -> bool:
+        """点击一页已确认的中央提示，返回是否确实处理了提示。"""
+        if bool(getattr(self, "_战斗中", False)):
+            return False
+        if 屏幕图像 is None:
+            try:
+                屏幕图像 = self.op.获取屏幕图像cv(
+                    0, 0, 800, 600, 强制刷新=True
+                )
+            except TypeError:
+                屏幕图像 = self.op.获取屏幕图像cv(0, 0, 800, 600)
+        候选 = self._识别中央游戏提示(屏幕图像)
+        if not 候选:
+            return False
+        x, y = 候选["点击点"]
+        self.置脚本状态(
+            f"检测到中央教程/活动提示：{候选['文本']}；"
+            f"点击对话气泡{ x},{ y}推进，不进入商店或宝石页面"
+        )
+        if not self.点击已确认安全按钮(x, y, 延时=220):
+            self.页面恢复失败 = True
+            self.置脚本状态("中央教程/活动提示点击失败，禁止继续操作")
+            return False
+        # 清除点击前缓存，下一页必须重新抓取同一 CoC display 的画面。
+        self._点击识别截图 = None
+        self._点击识别截图时间 = 0.0
+        return True
+
     @staticmethod
     def _规范升级弹窗OCR文本(文本: Any) -> str:
         """把升级弹窗 OCR 文本压缩成便于安全匹配的形式。"""

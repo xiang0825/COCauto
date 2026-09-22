@@ -668,38 +668,59 @@ class 进攻任务(基础任务):
             return "集中资源"
 
     def _按方向交错资源目标(self, 目标列表: list) -> list:
-        """把资源目标按进攻方向交错，避免一轮兵力连续压在同一侧。
+        """按“储存建筑优先”且多方向交错排列资源目标。
 
-        资源模式仍保留全部已识别目标；这里只调整访问顺序。每个方向
-        内继续按资源价值排序，方向之间按总价值排序后轮流取一个目标，
-        这样低表现后的“分散探索”不会牺牲高价值目标，也不会让前几
-        个批次全部落在同一条边。
+        资源模式仍保留全部已识别目标；这里只调整访问顺序。先把金库/圣水瓶
+        按多个方向交错，确保有限兵力先覆盖高价值储存资源，再对金矿/圣水采集器
+        做同样的方向探索。旧实现把储存建筑和采集器放在同一个方向轮询队列中，
+        某一侧采集器数量较多时会抢在另一侧储存建筑之前，实机仍会出现低收益。
         """
-        分方向目标 = {}
-        for 目标 in 目标列表:
-            try:
-                方向 = 取进攻方向(目标["中心坐标"])
-            except (KeyError, TypeError, AttributeError):
-                方向 = "未知"
-            分方向目标.setdefault(方向, []).append(目标)
+        def 交错同类目标(同类目标列表: list) -> list:
+            分方向目标 = {}
+            for 目标 in 同类目标列表:
+                try:
+                    方向 = 取进攻方向(目标["中心坐标"])
+                except (KeyError, TypeError, AttributeError):
+                    方向 = "未知"
+                分方向目标.setdefault(方向, []).append(目标)
 
-        有序分组 = []
-        for 方向, 方向目标 in 分方向目标.items():
-            排序目标 = sorted(方向目标, key=self.资源模式目标排序键, reverse=True)
-            有序分组.append((
-                方向,
-                排序目标,
-                sum(self.计算资源目标价值(目标) for 目标 in 排序目标),
-            ))
-        有序分组.sort(key=lambda 项目: (项目[2], len(项目[1])), reverse=True)
+            有序分组 = []
+            for 方向, 方向目标 in 分方向目标.items():
+                排序目标 = sorted(
+                    方向目标,
+                    key=self.资源模式目标排序键,
+                    reverse=True,
+                )
+                有序分组.append((
+                    方向,
+                    排序目标,
+                    sum(self.计算资源目标价值(目标) for 目标 in 排序目标),
+                ))
+            有序分组.sort(
+                key=lambda 项目: (项目[2], len(项目[1])),
+                reverse=True,
+            )
 
-        结果 = []
-        最大长度 = max((len(项目[1]) for 项目 in 有序分组), default=0)
-        for 索引 in range(最大长度):
-            for _, 方向目标, _ in 有序分组:
-                if 索引 < len(方向目标):
-                    结果.append(方向目标[索引])
-        return 结果
+            结果 = []
+            最大长度 = max(
+                (len(项目[1]) for 项目 in 有序分组),
+                default=0,
+            )
+            for 索引 in range(最大长度):
+                for _, 方向目标, _ in 有序分组:
+                    if 索引 < len(方向目标):
+                        结果.append(方向目标[索引])
+            return 结果
+
+        储存目标 = [
+            目标 for 目标 in 目标列表
+            if 目标.get("类别名称") in self.储存建筑类别
+        ]
+        采集器目标 = [
+            目标 for 目标 in 目标列表
+            if 目标.get("类别名称") not in self.储存建筑类别
+        ]
+        return 交错同类目标(储存目标) + 交错同类目标(采集器目标)
 
     def 生成分散下兵点(self, 有效目标列表: list) -> list[tuple[int, int]]:
         """为每个目标确定性生成多个沿边落点，降低反复打同一坐标。"""
