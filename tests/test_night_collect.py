@@ -54,13 +54,19 @@ class 夜世界圣水车测试(unittest.TestCase):
     def test_只识别右上角明确红色关闭按钮(self):
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
         # OpenCV 使用 BGR；用红色方块模拟游戏内详情面板的关闭按钮。
-        cv2.rectangle(屏幕, (660, 12), (716, 68), (0, 0, 220), -1)
+        cv2.rectangle(屏幕, (660, 30), (716, 86), (0, 0, 220), -1)
 
         关闭点 = 收集圣水车任务._检测详情面板关闭点(屏幕)
 
         self.assertIsNotNone(关闭点)
         self.assertTrue(650 <= 关闭点[0] <= 730)
-        self.assertTrue(10 <= 关闭点[1] <= 80)
+        self.assertTrue(28 <= 关闭点[1] <= 90)
+
+    def test_贴近画面顶边的红色像素不允许作为关闭按钮(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(屏幕, (660, 0), (716, 20), (0, 0, 220), -1)
+
+        self.assertIsNone(收集圣水车任务._检测详情面板关闭点(屏幕))
 
     def test_主页没有红色关闭按钮时不发送关闭输入(self):
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
