@@ -74,6 +74,16 @@ class 回营状态机测试(unittest.TestCase):
         self.assertEqual(等待战斗结束并回营任务.校正星数("胜利", 3, 100), 3)
         self.assertIn("未识别战斗结果", 等待战斗结束并回营任务.生成战斗诊断("未知", None, None, {}))
 
+    def test_百分百摧毁时结果页星形误识别不应记录为矛盾(self):
+        原始星数 = 2
+        星数 = 等待战斗结束并回营任务.校正星数("胜利", 原始星数, 100)
+        说明 = 等待战斗结束并回营任务.星数校正说明(
+            "胜利", 原始星数, 星数, 100
+        )
+        self.assertEqual(星数, 3)
+        self.assertIn("按规则确认3星", 说明)
+        self.assertNotIn("矛盾", 说明)
+
     def test_低摧毁率诊断使用本场下兵证据(self):
         上下文 = SimpleNamespace(
             本场进攻目标数量=18,
