@@ -207,7 +207,7 @@ class 页面识别测试(unittest.TestCase):
         self.assertTrue(上下文.检查宝石商店危险页面())
         上下文.停止事件.set.assert_not_called()
         self.assertTrue(上下文._战斗结束已确认)
-        self.assertIn((600,), [调用.args for 调用 in 上下文.脚本延时.call_args_list])
+        self.assertIn((800,), [调用.args for 调用 in 上下文.脚本延时.call_args_list])
 
     def test_奖励过渡连续慢帧后仍能复核到结算页(self):
         上下文 = 任务上下文.__new__(任务上下文)
@@ -225,7 +225,7 @@ class 页面识别测试(unittest.TestCase):
         上下文.停止事件.set.assert_not_called()
         self.assertTrue(上下文._战斗结束已确认)
         self.assertEqual(上下文.识别点击画面.call_count, 3)
-        self.assertIn((400,), [调用.args for 调用 in 上下文.脚本延时.call_args_list])
+        self.assertIn((500,), [调用.args for 调用 in 上下文.脚本延时.call_args_list])
 
     def test_单独红色横幅不会误报奖励页(self):
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
@@ -330,7 +330,7 @@ class 页面识别测试(unittest.TestCase):
         self.assertTrue(上下文.检查宝石商店危险页面())
         self.assertTrue(any("尚未确认战斗画面" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
 
-    def test_奖励选择弹窗阻止输入并停止任务(self):
+    def test_奖励选择过渡阻止输入但不提前停止任务(self):
         上下文 = 任务上下文.__new__(任务上下文)
         上下文._战斗中 = True
         上下文.停止事件 = Mock()
@@ -340,10 +340,21 @@ class 页面识别测试(unittest.TestCase):
         )
 
         self.assertTrue(上下文.检查宝石商店危险页面())
-        上下文.停止事件.set.assert_called_once()
+        上下文.停止事件.set.assert_not_called()
         self.assertTrue(上下文._战斗奖励弹窗已确认)
-        self.assertTrue(上下文.页面恢复失败)
-        self.assertTrue(any("奖励选择弹窗" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+        self.assertFalse(getattr(上下文, "页面恢复失败", False))
+        self.assertTrue(any("等待结算页" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
+    def test_实机战败结算截图不会识别为奖励选择(self):
+        from pathlib import Path
+
+        路径 = Path(__file__).resolve().parents[2] / ".tmp" / "battle_v1_latest.png"
+        if not 路径.exists():
+            self.skipTest("没有维护实机战败结算截图")
+        图像 = cv2.imdecode(np.fromfile(路径, dtype=np.uint8), cv2.IMREAD_COLOR)
+        self.assertIsNotNone(图像)
+        结果 = self.识别器.识别(图像)
+        self.assertEqual(结果.页面, "战斗结算")
 
     def test_启动时结算页先回营不误判主页(self):
         上下文 = 任务上下文.__new__(任务上下文)

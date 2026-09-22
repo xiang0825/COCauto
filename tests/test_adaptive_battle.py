@@ -11,6 +11,45 @@ from 任务流程.主世界打鱼.等待战斗结束并回营 import 等待战�
 
 
 class 自适应战斗测试(unittest.TestCase):
+    def test_奖励页过渡最终结算时交给回营流程(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        class 可控停止事件:
+            def is_set(self):
+                return False
+            def wait(self, timeout=None):
+                return False
+        上下文 = SimpleNamespace(
+            停止事件=可控停止事件(),
+            识别点击画面=Mock(side_effect=[
+                SimpleNamespace(页面="战斗奖励选择"),
+                SimpleNamespace(页面="战斗奖励选择"),
+                SimpleNamespace(页面="战斗结算"),
+            ]),
+            置脚本状态=Mock(),
+            _战斗奖励弹窗已确认=True,
+        )
+        self.assertTrue(任务.等待奖励页结算过渡(上下文, 超时秒=3))
+        self.assertFalse(上下文._战斗奖励弹窗已确认)
+        self.assertTrue(上下文._战斗结束已确认)
+        self.assertTrue(any("交给回营流程" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
+    def test_奖励页过渡回到战斗时不重新下兵(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        class 可控停止事件:
+            def is_set(self):
+                return False
+            def wait(self, timeout=None):
+                return False
+        上下文 = SimpleNamespace(
+            停止事件=可控停止事件(),
+            识别点击画面=Mock(return_value=SimpleNamespace(页面="战斗中")),
+            置脚本状态=Mock(),
+            _战斗奖励弹窗已确认=True,
+        )
+        self.assertTrue(任务.等待奖励页结算过渡(上下文, 超时秒=3))
+        self.assertFalse(上下文._战斗奖励弹窗已确认)
+        self.assertTrue(any("交给回营流程" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
     def test_单目标也会生成多个不同落点(self):
         任务 = 进攻任务.__new__(进攻任务)
         落点 = 任务.生成分散下兵点([
