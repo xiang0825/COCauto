@@ -29,7 +29,7 @@ class 完成宠物升级任务(基础任务):
         安全返回键 = getattr(self.上下文, "安全返回键", None)
         if callable(安全返回键):
             for 说明 in 说明列表:
-                if not 安全返回键(说明):
+                if not 安全返回键(说明, 已确认可关闭面板=True):
                     return False
             return True
         for _ in 说明列表:

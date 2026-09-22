@@ -114,6 +114,17 @@ class 建筑升级边界测试(unittest.TestCase):
 
         self.assertEqual(任务._定位升级确认按钮(), (570, 502))
 
+    def test_建筑升级页面关闭时明确授权已确认面板(self):
+        返回 = Mock(return_value=True)
+        任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
+        任务.上下文 = SimpleNamespace(安全返回键=返回)
+
+        任务.关闭建筑升级页面()
+
+        返回.assert_called_once_with(
+            "关闭建筑升级页面", 已确认可关闭面板=True
+        )
+
     def test_绿色立即完成区域不会被当成资源确认按钮(self):
         任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
         任务.上下文 = SimpleNamespace(
