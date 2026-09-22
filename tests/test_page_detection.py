@@ -78,6 +78,25 @@ class 页面识别测试(unittest.TestCase):
 
         self.assertIsNone(任务上下文._检测升级详情弹窗关闭点(图像))
 
+    def test_主世界活动弹窗红色X返回安全关闭点(self):
+        图像 = np.full((600, 800, 3), (55, 115, 60), dtype=np.uint8)
+        cv2.rectangle(图像, (80, 20), (720, 570), (80, 80, 80), -1)
+        cv2.rectangle(图像, (680, 20), (735, 80), (20, 20, 220), -1)
+        cv2.line(图像, (695, 35), (720, 65), (245, 245, 245), 7)
+        cv2.line(图像, (720, 35), (695, 65), (245, 245, 245), 7)
+
+        关闭点 = 任务上下文._检测主世界活动弹窗关闭点(图像)
+
+        self.assertIsNotNone(关闭点)
+        self.assertAlmostEqual(关闭点[0], 707, delta=8)
+        self.assertAlmostEqual(关闭点[1], 50, delta=8)
+
+    def test_主世界右上普通红色控件不会被当活动弹窗(self):
+        图像 = np.full((600, 800, 3), (55, 115, 60), dtype=np.uint8)
+        cv2.rectangle(图像, (700, 20), (735, 55), (20, 20, 220), -1)
+
+        self.assertIsNone(任务上下文._检测主世界活动弹窗关闭点(图像))
+
     def test_中央教程提示只返回下半屏正文点击点(self):
         上下文 = 任务上下文.__new__(任务上下文)
         上下文.获取OCR引擎 = Mock(return_value=Mock(return_value=(

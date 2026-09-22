@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Tuple, Any, Optional
 
 import cv2
+import numpy as np
 
 from 工具包.工具函数 import 生成贝塞尔轨迹
 from 数据库.任务数据库 import 任务数据库, 机器人设置
@@ -519,6 +520,124 @@ class 任务上下文:
             )
         except (AttributeError, TypeError, ValueError, cv2.error):
             return None
+
+    @staticmethod
+    def _检测主世界活动弹窗关闭点(屏幕图像) -> tuple[int, int] | None:
+        """识别覆盖主世界的活动/奖励弹窗右上角红色 X。
+
+        CoC 会在主世界上方弹出赛季、活动或奖励面板。资源栏和家乡入口
+        仍然露在弹窗后面，单靠主页锚点会误以为页面可操作。这里仅接受
+        右上区域内带白色 X 的红色方形按钮，并要求同时存在大面积中央面板；
+        主世界常驻红色徽标没有白色 X 或面板证据，不会触发。
+        """
+        if 屏幕图像 is None or not hasattr(屏幕图像, "shape"):
+            return None
+        try:
+            高, 宽 = 屏幕图像.shape[:2]
+            if 高 < 300 or 宽 < 500 or len(屏幕图像.shape) < 3:
+                return None
+            hsv = cv2.cvtColor(屏幕图像, cv2.COLOR_BGR2HSV)
+            色相 = hsv[:, :, 0]
+            红色 = (
+                ((色相 <= 15) | (色相 >= 165))
+                & (hsv[:, :, 1] >= 115)
+                & (hsv[:, :, 2] >= 120)
+            ).astype(np.uint8)
+            x起点, x终点 = int(宽 * 0.78), int(宽 * 0.98)
+            y终点 = int(高 * 0.24)
+            区域 = 红色[:y终点, x起点:x终点]
+            if 区域.size == 0:
+                return None
+            区域 = cv2.morphologyEx(
+                区域,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+            )
+            _, _, 统计, 重心 = cv2.connectedComponentsWithStats(区域, 8)
+            灰度 = cv2.cvtColor(屏幕图像, cv2.COLOR_BGR2GRAY)
+            候选 = []
+            for 序号 in range(1, len(统计)):
+                x, y, 方宽, 方高, 面积 = [int(值) for 值 in 统计[序号]]
+                中心x, 中心y = [float(值) for 值 in 重心[序号]]
+                中心x += x起点
+                if not (
+                    宽 * 0.82 <= 中心x <= 宽 * 0.96
+                    and 高 * 0.025 <= 中心y <= 高 * 0.20
+                    and 宽 * 0.025 <= 方宽 <= 宽 * 0.10
+                    and 高 * 0.035 <= 方高 <= 高 * 0.16
+                    and 面积 >= 方宽 * 方高 * 0.22
+                    and 0.55 <= 方宽 / max(1, 方高) <= 1.8
+                ):
+                    continue
+                左 = max(0, x + x起点)
+                上 = max(0, y)
+                右 = min(宽, 左 + 方宽)
+                下 = min(高, 上 + 方高)
+                if 右 <= 左 or 下 <= 上:
+                    continue
+                灰色块 = 灰度[上:下, 左:右]
+                饱和度 = hsv[上:下, 左:右, 1]
+                亮白 = (饱和度 < 100) & (灰色块 > 180)
+                if int(np.count_nonzero(亮白)) < max(8, int(方宽 * 方高 * 0.015)):
+                    continue
+                面板区域 = 灰度[
+                    int(高 * 0.08):int(高 * 0.88),
+                    int(宽 * 0.08):int(宽 * 0.90),
+                ]
+                if 面板区域.size == 0:
+                    continue
+                中央亮度 = float(np.mean(面板区域))
+                边缘亮度 = float(np.mean(np.concatenate((
+                    灰度[:max(1, int(高 * 0.08))].ravel(),
+                    灰度[int(高 * 0.92):].ravel(),
+                ))))
+                # 不同活动主题的面板与主世界对比度可能很低；只用作
+                # 辅助证据，红色 X 和白色交叉线仍是必要条件。
+                if abs(中央亮度 - 边缘亮度) < 5.0:
+                    continue
+                候选.append((面积, 中心x, 中心y))
+            if not 候选:
+                return None
+            _, 中心x, 中心y = max(候选, key=lambda 项: 项[0])
+            return (
+                int(round(中心x * 800 / 宽)),
+                int(round(中心y * 600 / 高)),
+            )
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return None
+
+    def 清理主世界活动弹窗(self, 屏幕图像=None) -> bool:
+        """关闭已确认的主世界活动弹窗；识别不清时绝不点击。"""
+        if bool(getattr(self, "_战斗中", False)):
+            return False
+        try:
+            if 屏幕图像 is None:
+                try:
+                    屏幕图像 = self.op.获取屏幕图像cv(
+                        0, 0, 800, 600, 强制刷新=True
+                    )
+                except TypeError:
+                    屏幕图像 = self.op.获取屏幕图像cv(0, 0, 800, 600)
+            关闭点 = self._检测主世界活动弹窗关闭点(屏幕图像)
+            if 关闭点 is None:
+                return False
+            self.置脚本状态(
+                f"检测到主世界活动/奖励弹窗，安全关闭右上角X：{关闭点[0]},{关闭点[1]}"
+            )
+            if not self.点击已确认安全按钮(
+                关闭点[0], 关闭点[1], 延时=260
+            ):
+                self.页面恢复失败 = True
+                self.置脚本状态("活动弹窗关闭输入未通过安全复核，禁止继续点击")
+                return False
+            清理缓存 = getattr(self.op, "清理截图缓存", None)
+            if callable(清理缓存):
+                清理缓存()
+            return True
+        except Exception as 异常:
+            self.页面恢复失败 = True
+            self.置脚本状态(f"活动弹窗关闭失败，禁止继续点击：{异常}")
+            return False
 
     def 关闭升级详情弹窗(self, 屏幕图像=None) -> bool:
         """安全关闭升级详情弹窗；绝不点击宝石或立即完成。
