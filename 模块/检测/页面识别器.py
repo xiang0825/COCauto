@@ -163,7 +163,9 @@ class 页面识别器:
         测试服战斗画面会在顶部显示“剩余 45 秒”等白色数字。战场
         建筑也可能形成竖向边缘，不能只靠奖励卡片数量判断；出现两个
         相邻的大号白色字符时，优先保留战斗页，避免把战场误判为奖励
-        选择页。这里只做 HSV/连通域轻量检测，不调用 OCR。
+        选择页。倒计时进入最后阶段时，CoC 会把“离战斗结束剩下”和
+        数字改成红色；这一帧不能被奖励横幅/兵栏结构误报覆盖。因此
+        白色和红色都在同一个轻量连通域检测里处理，不调用 OCR。
         """
         if not isinstance(图像, np.ndarray) or 图像.ndim < 2 or 图像.size == 0:
             return 0.0
@@ -174,17 +176,57 @@ class 页面识别器:
             下 = int(高 * 0.18)
             区域 = 图像[0:下, 左:右]
             hsv = cv2.cvtColor(区域, cv2.COLOR_BGR2HSV)
-            掩码 = (
+            白色掩码 = (
                 (hsv[:, :, 1] <= 95)
                 & (hsv[:, :, 2] >= 165)
             ).astype(np.uint8)
-            掩码 = cv2.morphologyEx(
-                掩码,
+            红色掩码 = (
+                ((hsv[:, :, 0] <= 12) | (hsv[:, :, 0] >= 170))
+                & (hsv[:, :, 1] >= 90)
+                & (hsv[:, :, 2] >= 100)
+            ).astype(np.uint8)
+
+            def 有相邻大号字符(掩码: np.ndarray) -> bool:
+                处理掩码 = cv2.morphologyEx(
+                    掩码,
+                    cv2.MORPH_OPEN,
+                    cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)),
+                )
+                _, _, 统计, _ = cv2.connectedComponentsWithStats(处理掩码, 8)
+                字符 = []
+                for x, y, 连通宽, 连通高, 面积 in 统计[1:]:
+                    if (
+                        面积 >= 20
+                        and 连通高 >= max(12, int(高 * 0.018))
+                        and 连通高 <= int(高 * 0.14)
+                        and 连通宽 >= 3
+                        and y <= int(高 * 0.14)
+                    ):
+                        字符.append((x + 左, y, 连通宽, 连通高))
+                字符.sort(key=lambda 项: 项[0])
+                for 前, 后 in zip(字符, 字符[1:]):
+                    前中心y = 前[1] + 前[3] / 2
+                    后中心y = 后[1] + 后[3] / 2
+                    if (
+                        后[0] - (前[0] + 前[2]) <= max(28, int(宽 * 0.05))
+                        and abs(前中心y - 后中心y) <= max(14, int(高 * 0.025))
+                    ):
+                        return True
+                return False
+
+            if 有相邻大号字符(白色掩码):
+                return 0.96
+
+            # 最后几秒的红色倒计时有两层特征：上方一串较小的提示字，
+            # 下方紧邻一个较高的数字。奖励横幅通常在更低的位置，是
+            # 一条宽红色横条，不满足这个上下两层结构。
+            红色处理 = cv2.morphologyEx(
+                红色掩码,
                 cv2.MORPH_OPEN,
                 cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)),
             )
-            _, _, 统计, _ = cv2.connectedComponentsWithStats(掩码, 8)
-            字符 = []
+            _, _, 统计, _ = cv2.connectedComponentsWithStats(红色处理, 8)
+            红色字符 = []
             for x, y, 连通宽, 连通高, 面积 in 统计[1:]:
                 if (
                     面积 >= 20
@@ -193,16 +235,15 @@ class 页面识别器:
                     and 连通宽 >= 3
                     and y <= int(高 * 0.14)
                 ):
-                    字符.append((x + 左, y, 连通宽, 连通高))
-            字符.sort(key=lambda 项: 项[0])
-            for 前, 后 in zip(字符, 字符[1:]):
-                前中心y = 前[1] + 前[3] / 2
-                后中心y = 后[1] + 后[3] / 2
-                if (
-                    后[0] - (前[0] + 前[2]) <= max(28, int(宽 * 0.05))
-                    and abs(前中心y - 后中心y) <= max(14, int(高 * 0.025))
-                ):
-                    return 0.96
+                    红色字符.append((x + 左, y, 连通宽, 连通高, 面积))
+            提示字 = [项 for 项 in 红色字符 if 项[1] <= int(高 * 0.08)]
+            大号数字 = [
+                项 for 项 in 红色字符
+                if int(高 * 0.045) <= 项[1] <= int(高 * 0.13)
+                and 项[3] >= max(17, int(高 * 0.028))
+            ]
+            if len(提示字) >= 3 and 大号数字:
+                return 0.96
         except Exception:
             return 0.0
         return 0.0

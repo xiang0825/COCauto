@@ -99,6 +99,29 @@ class 页面识别测试(unittest.TestCase):
         self.assertEqual(结果.页面, "战斗中")
         self.assertTrue(any("战斗倒计时" in 依据 for 依据 in 结果.依据))
 
+    def test_红色最后倒计时存在时不误判奖励选择(self):
+        """最后几秒倒计时变红时，仍不能把战场结构误判为奖励页。"""
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
+        cv2.rectangle(图像, (10, 430), (105, 470), (0, 0, 220), -1)
+        for 左, 上, 右, 下 in (
+            (175, 185, 305, 445),
+            (340, 190, 470, 450),
+            (500, 135, 625, 420),
+        ):
+            cv2.rectangle(图像, (左, 上), (右, 下), (220, 220, 220), 8)
+        cv2.putText(
+            图像, "TIME", (300, 40), cv2.FONT_HERSHEY_SIMPLEX,
+            0.8, (0, 0, 220), 3, cv2.LINE_AA,
+        )
+        cv2.putText(
+            图像, "6", (390, 92), cv2.FONT_HERSHEY_SIMPLEX,
+            1.8, (0, 0, 220), 4, cv2.LINE_AA,
+        )
+        结果 = self.识别器.识别(图像, 战斗中=True)
+        self.assertEqual(结果.页面, "战斗中")
+        self.assertTrue(any("战斗倒计时" in 依据 for 依据 in 结果.依据))
+
     def test_实机断线弹窗识别为断线页面(self):
         """中央连接中断遮罩不能被当成未知页面继续发送输入。"""
         图像 = np.full((600, 800, 3), (10, 18, 22), dtype=np.uint8)
