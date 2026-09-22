@@ -234,6 +234,19 @@ class 进入世界任务基类(基础任务):
         """
         if not isinstance(屏幕图像, np.ndarray) or 屏幕图像.ndim < 2:
             return False, (0, 0), 0.0
+        # 世界入口坐标和模板区域统一按 800×600 逻辑画布计算。正常
+        # 路径会由 ADB屏幕先完成缩放，但部分旧适配器/启动过渡帧可能
+        # 直接传入 MuMu 的 1280×720 原图；若把原图按逻辑坐标裁剪，
+        # 右上飞艇会被裁到搜索区之外，表现为“入口明明在画面上却找不到”。
+        # 这里再做一次轻量归一化，保证入口识别不会依赖调用方的截图层。
+        if 屏幕图像.shape[1] != 800 or 屏幕图像.shape[0] != 600:
+            try:
+                import cv2
+                屏幕图像 = cv2.resize(
+                    屏幕图像, (800, 600), interpolation=cv2.INTER_AREA
+                )
+            except Exception:
+                return False, (0, 0), 0.0
         左, 上, 右, 下 = self.世界入口搜索区域
         高, 宽 = 屏幕图像.shape[:2]
         左 = max(0, min(宽, int(左)))

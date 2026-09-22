@@ -126,14 +126,45 @@ class 打开进攻页面任务(基础任务):
         return None
 
     def _检测攻击按钮(self, 屏幕图像: np.ndarray) -> tuple[int, int] | None:
-        """在 800×600 参考画布中找右下角绿色攻击按钮中心。"""
+        """在确认军队配置面板后找右下角绿色攻击按钮中心。"""
         if not isinstance(屏幕图像, np.ndarray) or 屏幕图像.size == 0:
             return None
         if len(屏幕图像.shape) != 3 or 屏幕图像.shape[2] < 3:
             return None
 
+        # 调用方通常已经返回逻辑画布；旧截图适配器可能直接传入
+        # 1280×720 原图，先统一尺寸，避免候选坐标被按错画布解释。
+        if 屏幕图像.shape[1] != self._参考宽度 or 屏幕图像.shape[0] != self._参考高度:
+            try:
+                屏幕图像 = cv2.resize(
+                    屏幕图像,
+                    (self._参考宽度, self._参考高度),
+                    interpolation=cv2.INTER_AREA,
+                )
+            except (AttributeError, TypeError, ValueError, cv2.error):
+                return None
+
         图像高度, 图像宽度 = 屏幕图像.shape[:2]
         hsv = cv2.cvtColor(屏幕图像, cv2.COLOR_BGR2HSV)
+        # 主世界商店、任务徽章和资源按钮也会出现绿色大块。军队配置
+        # 页才会同时拥有中央大面积浅色面板；没有这项独立证据时，
+        # 即使右下出现绿色矩形也不能授权点击。
+        面板 = hsv[
+            int(图像高度 * 0.13):int(图像高度 * 0.88),
+            int(图像宽度 * 0.12):int(图像宽度 * 0.88),
+        ]
+        浅色面板比例 = float(
+            ((面板[:, :, 1] <= 130) & (面板[:, :, 2] >= 130)).mean()
+        ) if 面板.size else 0.0
+        棕色配置面板比例 = float(
+            (
+                (面板[:, :, 0] <= 30)
+                & (面板[:, :, 1] >= 50)
+                & (面板[:, :, 2] >= 60)
+            ).mean()
+        ) if 面板.size else 0.0
+        if 浅色面板比例 < 0.35 and 棕色配置面板比例 < 0.35:
+            return None
         # 当前 CoC 的攻击按钮为高亮黄绿色；只看画面右下区域，避免把
         # 资源按钮、强化按钮或地图内容当成攻击按钮。
         x起点 = max(0, int(图像宽度 * 0.58))

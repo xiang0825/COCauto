@@ -15,6 +15,7 @@ from 任务流程.夜世界.夜世界打鱼.等待回营或第二场战斗 impor
 from 任务流程.兵种或法术升级 import 兵种或法术升级任务
 from 任务流程.战宠升级 import 战宠升级任务
 from 任务流程.建筑升级 import 建筑升级任务
+from 任务流程.基础任务框架 import 任务上下文
 
 
 class 任务计划测试(unittest.TestCase):
@@ -34,6 +35,38 @@ class 任务计划测试(unittest.TestCase):
         检测登录.执行.assert_called_once_with(首次登录=False)
         self.assertFalse(上下文.页面恢复失败)
         self.assertTrue(any("重新登入" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list))
+
+    def test_战后资源识别前发现断线不会调用OCR(self):
+        """战后断线弹窗必须先恢复，不能让 OCR 解析弹窗并抛异常。"""
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = threading.Event()
+        机器人.机器人标志 = "测试机器人"
+        状态 = SimpleNamespace(
+            状态数据={"家乡资源": {"金币": 1000000, "圣水": 1000000, "黑油": 10000}}
+        )
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            机器人标志="测试机器人",
+            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态)),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+        检测登录 = Mock()
+        # 进入主世界、收集后两次通过；战斗结束后的预检发现断线并失败。
+        机器人._断线时恢复游戏连接 = Mock(side_effect=[True, True, False])
+        机器人._进入并确认主世界 = Mock(return_value=True)
+
+        with patch("线程.自动化机器人.收集资源任务") as 收集资源, \
+                patch("线程.自动化机器人.更新家乡资源状态任务") as 更新资源, \
+                patch("线程.自动化机器人.主世界打鱼任务") as 打鱼, \
+                patch("线程.自动化机器人.是否家乡资源打满", return_value=False):
+            更新资源.return_value.执行.return_value = True
+            打鱼.return_value.执行.return_value = True
+            结果 = 机器人._执行主世界刷资源计划(上下文, 检测登录)
+
+        self.assertFalse(结果)
+        self.assertEqual(更新资源.return_value.执行.call_count, 1)
+        self.assertEqual(机器人._断线时恢复游戏连接.call_count, 3)
 
     def test_启动时已有战斗先回营再执行任务计划(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
@@ -251,6 +284,7 @@ class 任务计划测试(unittest.TestCase):
         上下文 = SimpleNamespace(
             op=SimpleNamespace(获取屏幕图像cv=lambda *区域: object()),
             点击=Mock(),
+            置脚本状态=Mock(),
         )
         任务.上下文 = 上下文
         任务.模板识别 = 匹配器()
@@ -259,6 +293,60 @@ class 任务计划测试(unittest.TestCase):
         self.assertEqual(调用["模板路径"], "夜世界_回营.bmp|夜世界_回营[1].bmp")
         self.assertEqual(调用["阈值"], 0.58)
         上下文.点击.assert_called_once_with(400, 490)
+
+    def test_夜世界结算视觉确认后使用安全回营按钮(self):
+        任务 = 等待回营或第二次战斗.__new__(等待回营或第二次战斗)
+        识别器 = Mock()
+        识别器.识别.return_value = SimpleNamespace(页面="战斗结算")
+        识别器.定位结算回营按钮.return_value = (400, 508)
+        安全点击 = Mock(return_value=True)
+        上下文 = SimpleNamespace(
+            _战斗中=True,
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=object())),
+            _获取点击页面识别器=Mock(return_value=识别器),
+            点击已确认安全按钮=安全点击,
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.是否出现图片 = Mock(return_value=(False, (0, 0)))
+
+        self.assertTrue(任务.尝试点击回营按钮())
+        识别器.定位结算回营按钮.assert_called_once()
+        安全点击.assert_called_once_with(400, 508, 延时=300)
+        self.assertFalse(上下文._战斗中)
+
+    def test_星级奖励弹窗使用中央安全确定按钮(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._内存保护已触发 = False
+        上下文._战斗中 = False
+        上下文._战斗结束已确认 = True
+        上下文._获取点击页面识别器 = Mock(return_value=SimpleNamespace(
+            识别=Mock(return_value=SimpleNamespace(页面="战斗星级奖励")),
+            定位战斗星级奖励确定按钮=Mock(return_value=(400, 468)),
+        ))
+        上下文._获取点击识别截图 = Mock(return_value=object())
+        上下文.点击已确认安全按钮 = Mock(return_value=True)
+        上下文.置脚本状态 = Mock()
+
+        self.assertTrue(上下文.处理战斗星级奖励弹窗())
+        上下文.点击已确认安全按钮.assert_called_once_with(400, 468, 延时=300)
+        self.assertFalse(上下文._战斗结束已确认)
+
+    def test_夜世界有限批次下兵不依赖旧版完成模板(self):
+        任务 = 下兵.__new__(下兵)
+        上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            点击=Mock(return_value=True),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+
+        self.assertTrue(任务.执行下兵操作())
+        self.assertEqual(上下文.点击.call_count, 65)
+        self.assertTrue(any(
+            "有限批次下兵" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
 
     def test_非主页时最多单次ESC并确认主世界主页(self):
         机器人 = 自动化机器人.__new__(自动化机器人)

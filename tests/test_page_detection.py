@@ -223,6 +223,36 @@ class 页面识别测试(unittest.TestCase):
         self.assertEqual(结果.页面, "战斗结算")
         self.assertEqual(self.识别器.定位结算回营按钮(图像), (400, 525))
 
+    def test_夜世界暗色结果遮罩仍可识别结算页(self):
+        """实机暗色结算动画中亮色星级结构不足时仍必须能回营。"""
+        图像 = np.full((600, 800, 3), (12, 18, 30), dtype=np.uint8)
+        cv2.rectangle(图像, (315, 485), (485, 565), (90, 220, 120), -1)
+        cv2.putText(
+            图像, "0%", (350, 335), cv2.FONT_HERSHEY_SIMPLEX,
+            1.8, (255, 255, 255), 4, cv2.LINE_AA,
+        )
+        结果 = 页面识别器(Mock()).识别(图像, 战斗中=True)
+        self.assertEqual(结果.页面, "战斗结算")
+
+    def test_夜世界胜利之星奖励弹窗定位中央确定按钮(self):
+        """回营后的星级奖励遮罩不能被底层夜世界资源栏掩盖。"""
+        图像 = np.full((600, 800, 3), (154, 68, 40), dtype=np.uint8)
+        cv2.rectangle(图像, (120, 70), (680, 540), (154, 68, 40), -1)
+        cv2.rectangle(图像, (340, 420), (460, 500), (70, 210, 140), -1)
+        识别器 = 页面识别器(Mock())
+        识别器._最佳分数 = Mock(return_value=0.0)
+        识别器._红色放弃按钮分数 = Mock(return_value=0.0)
+        识别器._战斗倒计时分数 = Mock(return_value=0.0)
+        结果 = 识别器.识别(图像)
+        self.assertEqual(结果.页面, "战斗星级奖励")
+        self.assertEqual(识别器.定位战斗星级奖励确定按钮(图像), (400, 460))
+
+    def test_夜世界结算页底部回营按钮不误判星级奖励(self):
+        """结算页按钮在更低位置，不能被当成中央确定按钮。"""
+        图像 = np.full((600, 800, 3), (18, 25, 42), dtype=np.uint8)
+        cv2.rectangle(图像, (315, 485), (485, 565), (90, 220, 120), -1)
+        self.assertIsNone(self.识别器.定位战斗星级奖励确定按钮(图像))
+
     def test_实机断线弹窗识别为断线页面(self):
         """中央连接中断遮罩不能被当成未知页面继续发送输入。"""
         图像 = np.full((600, 800, 3), (10, 18, 22), dtype=np.uint8)

@@ -33,4 +33,8 @@ class 夜世界打鱼任务(基础任务):
         except RuntimeError as e:
             self.异常处理(e)
             return False
+        finally:
+            # 无论回营成功、失败还是收到停止事件，都不能把战斗护栏
+            # 状态带到下一项世界/资源任务。
+            self.上下文._战斗中 = False
 

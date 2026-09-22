@@ -224,6 +224,23 @@ class 世界跳转测试(unittest.TestCase):
         区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
         self.assertEqual(区域.shape[:2], (250, 350))
 
+    def test_原始设备截图会先归一化再搜索右上入口(self):
+        """1280×720 原图不能按 800×600 坐标直接裁剪。"""
+        任务 = object.__new__(到主世界任务)
+        任务.船模板路径 = "船.bmp"
+        任务.模板识别 = Mock()
+        任务.模板识别.执行最佳匹配.return_value = (0.925, (96, 46), "船.bmp")
+
+        命中, 坐标, 分数 = 任务.查找世界入口(
+            np.zeros((720, 1280, 3), dtype=np.uint8)
+        )
+
+        self.assertTrue(命中)
+        self.assertEqual(坐标, (521, 72))
+        self.assertAlmostEqual(分数, 0.925)
+        区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
+        self.assertEqual(区域.shape[:2], (250, 350))
+
     def test_同一入口连续未转场后停止重复点击(self):
         模块 = importlib.import_module("任务流程.世界跳转.进入世界基类")
         时钟 = SimpleNamespace(当前时间=0.0)

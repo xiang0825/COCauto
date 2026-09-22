@@ -436,6 +436,45 @@ class 任务上下文:
         finally:
             self._升级完成弹窗检查中 = False
 
+    def 处理战斗星级奖励弹窗(self, 强制=True) -> bool:
+        """安全确认夜世界战斗后的“胜利之星奖励”弹窗。
+
+        该弹窗底下仍保留主页资源栏，若直接按主页识别结果继续任务，
+        下一轮攻击按钮会被弹窗遮挡。只有页面识别器同时确认蓝紫面板和
+        中央绿色确定按钮时才允许精确点击；识别不到时保持阻断，不发送
+        ESC、不进入商店，也不点击任何宝石入口。
+        """
+        if getattr(self, "_内存保护已触发", False) or bool(getattr(self, "_战斗中", False)):
+            return False
+        try:
+            识别器 = self._获取点击页面识别器()
+            屏幕图像 = self._获取点击识别截图(强制=bool(强制))
+            页面结果 = 识别器.识别(屏幕图像, 战斗中=False)
+            if getattr(页面结果, "页面", "") != "战斗星级奖励":
+                if str(getattr(页面结果, "页面", "")).endswith("主页"):
+                    self._战斗结束已确认 = False
+                return False
+            确认点 = 识别器.定位战斗星级奖励确定按钮(屏幕图像)
+            if 确认点 is None:
+                self.置脚本状态("已识别星级奖励弹窗但未确认按钮位置，阻止后续输入")
+                return True
+            点击成功 = self.点击已确认安全按钮(
+                确认点[0], 确认点[1], 延时=300
+            )
+            if not 点击成功:
+                self.置脚本状态("星级奖励确认按钮输入被拒绝，保持当前画面")
+                return True
+            self._战斗结束已确认 = False
+            self._点击识别截图 = None
+            self._点击识别截图时间 = 0.0
+            self.置脚本状态(
+                f"已确认夜世界星级奖励弹窗，安全点击确定：{确认点[0]},{确认点[1]}"
+            )
+            return True
+        except Exception as 异常:
+            self.置脚本状态(f"星级奖励弹窗处理失败，阻止后续输入：{异常}")
+            return True
+
     @staticmethod
     def _检测升级详情弹窗关闭点(屏幕图像) -> tuple[int, int] | None:
         """只检测升级详情弹窗右上角的红色关闭按钮。
@@ -887,6 +926,9 @@ class 任务上下文:
         if 结果 is None:
             结果 = self.识别点击画面()
         if self._系统维护页阻断输入(结果):
+            return True
+        if 结果 is not None and 结果.页面 == "战斗星级奖励":
+            self.处理战斗星级奖励弹窗(强制=True)
             return True
         if 结果 is not None and 结果.页面 == "断线弹窗":
             self.页面恢复失败 = True
@@ -1421,6 +1463,26 @@ class 任务上下文:
                     if 当前单调时间 - 上次错误 >= 5.0:
                         self.置脚本状态(f"升级完成弹窗处理暂时失败：{异常}")
                         self._升级完成弹窗调度错误时间 = 当前单调时间
+
+            # 回营后可能先显示覆盖主页的夜世界星级奖励确认框。低频
+            # 视觉检查只在战斗结束链路仍未清理时运行，避免长期待机时
+            # 每个机器人持续做全屏 OCR/模板操作。
+            if 当前单调时间 - float(getattr(self, "_星级奖励调度时间", 0.0)) >= 0.75:
+                self._星级奖励调度时间 = 当前单调时间
+                if (
+                    not getattr(self, "_战斗中", False)
+                    and (
+                        bool(getattr(self, "_战斗结束已确认", False))
+                        or getattr(getattr(self, "_最近点击页面结果", None), "页面", "")
+                        in {"战斗结算", "战斗星级奖励"}
+                    )
+                ):
+                    try:
+                        self.处理战斗星级奖励弹窗(强制=True)
+                    except SystemExit:
+                        raise
+                    except Exception as 异常:
+                        self.置脚本状态(f"星级奖励弹窗检查暂时失败：{异常}")
 
             # 每1秒检查一次定时上报（基于实际时间，而不是循环次数）。
             if self.企业微信通知器 and self.上报间隔秒 > 0:

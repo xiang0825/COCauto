@@ -508,6 +508,23 @@ class 页面识别器:
             )
             if float(np.mean(亮色结构)) >= 0.014 and 大亮块数量 >= 3:
                 return 0.94
+
+            # 某些测试服结算动画会把星级/百分比压暗，亮色连通块会低于
+            # 上面的阈值，但底部绿色“回营”按钮和中央暗色结果遮罩仍
+            # 稳定存在。绿色按钮已经限定在底部中央；再要求中央区域有
+            # 明显暗化和少量白色结果文字，避免把主页的普通绿色控件当
+            # 成结算页。
+            灰度 = cv2.cvtColor(图像, cv2.COLOR_BGR2GRAY)
+            结果区 = 灰度[
+                int(高 * 0.10):int(高 * 0.65),
+                int(宽 * 0.15):int(宽 * 0.85),
+            ]
+            if (
+                float(np.mean(结果区)) < 90.0
+                and float(np.mean(结果区 < 80)) >= 0.45
+                and float(np.mean(结果区 > 180)) >= 0.004
+            ):
+                return 0.92
         except (AttributeError, TypeError, ValueError, cv2.error):
             return 0.0
         return 0.0
@@ -557,6 +574,76 @@ class 页面识别器:
             return None
         return self._定位绿色回营按钮(图像)
 
+    def _定位战斗星级奖励确定按钮(self, 图像: np.ndarray):
+        """定位夜世界“胜利之星奖励”中央确定按钮。
+
+        该弹窗会覆盖在已回营的主页上，底层资源栏仍然可见，不能仅凭
+        世界 HUD 判断已经回到可操作主页。按钮位于中央偏下且明显高于
+        结算页的底部“回营”按钮；同时要求中央存在大面积蓝紫奖励面板，
+        避免把普通主页绿色控件当成确认目标。
+        """
+        if not isinstance(图像, np.ndarray) or 图像.ndim < 2 or 图像.size == 0:
+            return None
+        try:
+            高, 宽 = 图像.shape[:2]
+            hsv = cv2.cvtColor(图像, cv2.COLOR_BGR2HSV)
+            左, 右 = int(宽 * 0.28), int(宽 * 0.72)
+            上, 下 = int(高 * 0.65), int(高 * 0.92)
+            区域 = hsv[上:下, 左:右]
+            绿色 = (
+                (区域[:, :, 0] >= 30)
+                & (区域[:, :, 0] <= 100)
+                & (区域[:, :, 1] >= 70)
+                & (区域[:, :, 2] >= 100)
+            ).astype(np.uint8)
+            if not 绿色.size:
+                return None
+            绿色 = cv2.morphologyEx(
+                绿色,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (7, 5)),
+            )
+            _, _, 统计, _ = cv2.connectedComponentsWithStats(绿色, 8)
+            候选 = []
+            for x, y, 按钮宽, 按钮高, 面积 in 统计[1:]:
+                中心y = 上 + y + 按钮高 / 2
+                if (
+                    面积 >= max(500, int(宽 * 高 * 0.005))
+                    and 按钮宽 >= int(宽 * 0.12)
+                    and 按钮高 >= int(高 * 0.07)
+                    and 高 * 0.70 <= 中心y <= 高 * 0.84
+                ):
+                    候选.append((面积, 左 + x + 按钮宽 // 2, int(round(中心y))))
+            if not 候选:
+                return None
+
+            中央 = hsv[
+                int(高 * 0.10):int(高 * 0.90),
+                int(宽 * 0.12):int(宽 * 0.88),
+            ]
+            蓝紫面板 = (
+                (中央[:, :, 0] >= 88)
+                & (中央[:, :, 0] <= 125)
+                & (中央[:, :, 1] >= 45)
+                & (中央[:, :, 2] >= 70)
+            )
+            if float(np.mean(蓝紫面板)) < 0.40:
+                return None
+            _, x, y = max(候选)
+            return (x, y)
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return None
+
+    def _战斗星级奖励视觉分数(self, 图像: np.ndarray) -> float:
+        """识别覆盖主页的夜世界星级奖励确认弹窗。"""
+        return 0.96 if self._定位战斗星级奖励确定按钮(图像) is not None else 0.0
+
+    def 定位战斗星级奖励确定按钮(self, 图像: np.ndarray):
+        """仅在视觉确认星级奖励弹窗后返回中央确定按钮。"""
+        if self._战斗星级奖励视觉分数(图像) < 0.90:
+            return None
+        return self._定位战斗星级奖励确定按钮(图像)
+
     def 识别(self, 屏幕图像: np.ndarray, 战斗中: bool = False) -> 页面识别结果:
         """识别当前页面；不确定时返回 ``页面=未知``，不触发任何输入。"""
         维护分数 = self._系统维护分数(屏幕图像)
@@ -574,6 +661,14 @@ class 页面识别器:
                 世界=None,
                 可信度=断线分数,
                 依据=(f"中央断线弹窗{断线分数:.2f}",),
+            )
+        星级奖励分数 = self._战斗星级奖励视觉分数(屏幕图像)
+        if 星级奖励分数 >= 0.90:
+            return 页面识别结果(
+                页面="战斗星级奖励",
+                世界=None,
+                可信度=星级奖励分数,
+                依据=(f"蓝紫星级奖励面板+中央确定按钮{星级奖励分数:.2f}",),
             )
         模板战斗分数 = self._最佳分数(
             self._裁剪(屏幕图像, self.放弃战斗区域),

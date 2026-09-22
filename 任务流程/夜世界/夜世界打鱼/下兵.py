@@ -2,8 +2,16 @@ from 任务流程.基础任务框架 import 任务上下文
 from 任务流程.夜世界.夜世界打鱼.夜世界基础任务类 import 夜世界基础任务
 import random
 import threading
+import time
 
 class 下兵(夜世界基础任务):
+    # 夜世界新版兵栏的第 2 格可能是灰色/空槽；其余槽位按 800×600
+    # 逻辑画布排列。这里只选择普通兵种槽，不把左侧英雄槽误当兵种。
+    兵种槽位 = ((150, 520), (278, 520), (340, 520), (402, 520), (465, 520))
+    # 这些点位位于基地外沿，避开兵栏、放弃按钮和基地内部；每个槽位
+    # 只执行有限批次，防止旧模板失配时随机点击拖满整场战斗。
+    可下兵点 = ((45, 250), (400, 80), (755, 250), (45, 500), (755, 500))
+
     def __init__(self ,上下文: '任务上下文'):
         super().__init__(上下文)
 
@@ -11,7 +19,14 @@ class 下兵(夜世界基础任务):
     def 执行(self) -> bool:
 
         try:
-            self.上下文.脚本延时(random.randint(500, 1000))
+            self.上下文._战斗中 = True
+            self.上下文.脚本延时(random.randint(300, 600))
+            if not self._等待真实战斗画面():
+                self.上下文.页面恢复失败 = True
+                self.上下文.置脚本状态(
+                    "夜世界战斗仍在过渡或已结束，禁止向非战斗画面下兵"
+                )
+                return False
             if not self.执行下兵操作():
                 self.上下文.页面恢复失败 = True
                 self.上下文.置脚本状态(
@@ -20,7 +35,7 @@ class 下兵(夜世界基础任务):
                 return False
 
             # 选择英雄
-            if self.上下文.点击(47, 545) is False:
+            if self.上下文.点击(80, 520) is False:
                 self.上下文.页面恢复失败 = True
                 self.上下文.置脚本状态("夜世界英雄槽点击未确认成功，停止本场操作")
                 return False
@@ -59,21 +74,59 @@ class 下兵(夜世界基础任务):
             self.异常处理(e)
             return False
 
-    def 执行下兵操作(self) -> bool:
-        区域字典 = {
-            "左上": ((21, 257), (389, 29)),
-            "右上": ((467, 26), (751, 249)),
-            "右下": ((769, 336), (557, 463)),
-            "左下": ((145, 399), (29, 280)),
-        }
-
-        区域项列表 = list(区域字典.items())
-        random.shuffle(区域项列表)
-
-        for 名称, (左上, 右下) in 区域项列表:
-            if self.尝试在区域内完成下兵(左上, 右下):
-                self.上下文.置脚本状态("兵已经下完")
+    def _等待真实战斗画面(self) -> bool:
+        """等待战斗过渡结束，避免把过渡页误当成可下兵画面。"""
+        识别 = getattr(self.上下文, "识别点击画面", None)
+        if not callable(识别):
+            # 旧测试替身没有页面识别接口；真实运行时由基础上下文提供。
+            return True
+        截止时间 = time.monotonic() + 20
+        while time.monotonic() < 截止时间:
+            if getattr(self.上下文, "停止事件", None) is not None and self.上下文.停止事件.is_set():
+                return False
+            结果 = 识别()
+            页面 = str(getattr(结果, "页面", "") or "") if 结果 is not None else ""
+            if 页面 == "战斗中":
+                self.上下文.置脚本状态("夜世界战斗过渡完成，允许开始下兵")
                 return True
+            if 页面 in {"断线弹窗", "战斗结算", "系统维护"}:
+                return False
+            self.上下文.脚本延时(250)
+        return False
+
+    def 执行下兵操作(self) -> bool:
+        # 旧版依赖“请选择其它兵种”模板作为结束条件。测试服更新后该
+        # 模板可能永远不出现，导致程序在战斗中随机点击几十秒。改为
+        # 固定少量安全槽位和边缘点，点击是否被战斗护栏接受作为反馈。
+        总成功点击 = 0
+        有效槽位 = 0
+        for 槽位, (槽位x, 槽位y) in enumerate(self.兵种槽位, start=1):
+            if getattr(self.上下文, "停止事件", None) is not None and self.上下文.停止事件.is_set():
+                break
+            选中 = self.上下文.点击(槽位x, 槽位y, 80, 是否精确点击=True)
+            if 选中 is False:
+                break
+            本槽成功 = 0
+            for 重复次数 in range(12):
+                点位 = self.可下兵点[重复次数 % len(self.可下兵点)]
+                if self.上下文.点击(*点位, 80, 是否精确点击=True) is False:
+                    break
+                本槽成功 += 1
+            if 本槽成功:
+                有效槽位 += 1
+                总成功点击 += 本槽成功
+                self.上下文.置脚本状态(
+                    f"夜世界第{槽位}格完成边缘下兵{本槽成功}次"
+                )
+            if 本槽成功 == 0:
+                break
+
+        if 总成功点击:
+            self.上下文.置脚本状态(
+                f"夜世界已完成有限批次下兵：{有效槽位}个兵种槽，共{总成功点击}次；"
+                "不再依赖旧版请选择其它兵种模板"
+            )
+            return True
         return False
 
     def 尝试在区域内完成下兵(self, 左上角: tuple, 右下角: tuple) -> bool:
