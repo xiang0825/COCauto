@@ -158,6 +158,31 @@ class 页面识别测试(unittest.TestCase):
         self.assertEqual(结果.页面, "断线弹窗")
         self.assertTrue(any("中央断线弹窗" in 依据 for 依据 in 结果.依据))
 
+    def test_右锚定断线弹窗识别为断线页面(self):
+        """右侧横向布局的重新登入面板也必须被识别并拦截输入。"""
+        画面 = np.full((600, 800, 3), (70, 100, 55), dtype=np.uint8)
+        # 复现实机截图的右锚定面板：x=309、y=235、491x247。
+        画面[235:482, 309:800] = (36, 39, 45)
+        # 三段亮色文字的几何占位，模拟标题、正文和左侧重新登入按钮。
+        画面[270:300, 345:590] = (235, 235, 235)
+        画面[330:360, 345:700] = (225, 225, 225)
+        画面[425:455, 345:560] = (240, 240, 240)
+        结果 = self.识别器.识别(画面)
+        self.assertEqual(结果.页面, "断线弹窗")
+        self.assertGreaterEqual(结果.可信度, 0.90)
+
+    def test_实机右锚定断线截图识别(self):
+        """若维护实测截图存在，直接回放当前实机画面，防止规则回退。"""
+        from pathlib import Path
+
+        路径 = Path(__file__).resolve().parents[2] / ".tmp" / "continuation_current.png"
+        if not 路径.exists():
+            self.skipTest("当前实机截图未提供")
+        画面 = cv2.imread(str(路径))
+        self.assertIsNotNone(画面)
+        结果 = self.识别器.识别(画面)
+        self.assertEqual(结果.页面, "断线弹窗")
+
     def test_结算按钮优先于结算动画奖励横幅(self):
         识别器 = 页面识别器(Mock())
         识别器._最佳分数 = Mock(side_effect=lambda _图像, 模板: 0.85 if "回营" in 模板 else 0.0)
