@@ -52,6 +52,14 @@ class ADB设备测试(unittest.TestCase):
                 数据库路径 = 任务数据库.默认数据库路径()
             self.assertEqual(Path(数据库路径), Path(临时目录) / "数据库" / "任务系统.db")
 
+    def test_源码模式也遵守共享数据库环境变量(self):
+        with tempfile.TemporaryDirectory() as 临时目录:
+            目标 = Path(临时目录) / "共享" / "任务系统.db"
+            with patch.dict("os.environ", {"COCAUTO_DB_PATH": str(目标)}, clear=False), \
+                    patch.object(sys, "frozen", False, create=True):
+                数据库路径 = 任务数据库.默认数据库路径()
+            self.assertEqual(Path(数据库路径), 目标.resolve())
+
     def test_解析列表并保留状态与描述(self):
         设备 = 解析ADB设备列表(
             "List of devices attached\n127.0.0.1:16384 device product:MuMu model:MuMuPlayer\n"
