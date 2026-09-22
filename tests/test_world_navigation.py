@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import numpy as np
 
 from 任务流程.世界跳转.进入世界基类 import 进入世界任务基类
+from 任务流程.世界跳转.到主世界任务 import 到主世界任务
 from 任务流程.世界跳转.世界识别器 import 世界识别器
 
 
@@ -125,6 +126,22 @@ class 世界跳转测试(unittest.TestCase):
         self.assertTrue(命中)
         self.assertEqual(坐标, (288, 392))
         self.assertAlmostEqual(分数, 0.60)
+
+    def test_夜世界返回主世界使用右上入口区域(self):
+        任务 = object.__new__(到主世界任务)
+        任务.船模板路径 = "船.bmp"
+        任务.模板识别 = Mock()
+        任务.模板识别.执行最佳匹配.return_value = (0.925, (96, 46), "船.bmp")
+
+        命中, 坐标, 分数 = 任务.查找世界入口(
+            np.zeros((600, 800, 3), dtype=np.uint8)
+        )
+
+        self.assertTrue(命中)
+        self.assertEqual(坐标, (521, 72))
+        self.assertAlmostEqual(分数, 0.925)
+        区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
+        self.assertEqual(区域.shape[:2], (250, 350))
 
     def test_同一入口连续未转场后停止重复点击(self):
         模块 = importlib.import_module("任务流程.世界跳转.进入世界基类")
