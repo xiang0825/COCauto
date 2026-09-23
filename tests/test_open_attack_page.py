@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 
 from 任务流程.主世界打鱼.打开进攻页面 import 打开进攻页面任务
+from 任务流程.主世界打鱼 import 主世界打鱼任务
 from 任务流程.主世界打鱼.搜索页面识别 import 搜索页面识别器
 from 任务流程.主世界打鱼.进攻 import 进攻任务
 from 任务流程.夜世界.夜世界打鱼.打开进攻页面任务 import 打开进攻页面
@@ -216,9 +217,28 @@ class 打开进攻页面测试(unittest.TestCase):
 
         self.assertTrue(任务._等待并点击攻击按钮(上下文))
         self.assertTrue(上下文._入口已进入战斗)
+        self.assertEqual(上下文.本场资源评分状态, "不可用")
+        self.assertIsNone(上下文.本场目标战利品["资源易窃取评分"])
+        self.assertIn("直接进入战斗", 上下文.本场资源评分说明)
         上下文.点击.assert_called_once_with(
             705, 535, 延时=700, 是否精确点击=True
         )
+
+    def test_新一场开始会清除上一场资源评分(self):
+        上下文 = SimpleNamespace(
+            本场目标战利品={"金币": 900000},
+            本场资源易窃取评分=8.8,
+            本场资源评估={"评分依据": "旧目标"},
+            本场资源评分状态="已完成",
+            本场资源评分说明="旧目标",
+        )
+
+        主世界打鱼任务._重置本场目标评估(上下文)
+
+        self.assertEqual(上下文.本场目标战利品, {})
+        self.assertIsNone(上下文.本场资源易窃取评分)
+        self.assertEqual(上下文.本场资源评估, {})
+        self.assertEqual(上下文.本场资源评分状态, "未确认")
 
     def test_繁体下一個按钮通过颜色和位置识别(self):
         画面 = np.zeros((600, 800, 3), dtype=np.uint8)
