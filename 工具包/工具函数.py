@@ -68,7 +68,7 @@ def 是否夜世界资源打满(资源字典: dict) -> bool:
             是打满(资源字典.get("圣水", 0))
     )
 
-def 单行资源识别(ocr引擎, img, 允许完整识别=False):
+def 单行资源识别(ocr引擎, img, 允许完整识别=False, 最大值=None):
     """识别已裁剪好的单行资源数字。
 
     右上角资源图在调用前已经按行裁剪；再运行文字检测和方向分类会额外
@@ -101,9 +101,9 @@ def 单行资源识别(ocr引擎, img, 允许完整识别=False):
         5
     )
 
-    def 提取数字(结果):
+    def 提取候选数字(结果):
         if not 结果:
-            return 0
+            return []
         # OCR 偶尔会把资源图标或阴影识别成额外的一项；取最长的数字
         # 串，而不是固定使用 result[0]，提高不同主题/分辨率下的稳定性。
         候选 = []
@@ -123,13 +123,19 @@ def 单行资源识别(ocr引擎, img, 允许完整识别=False):
             数字 = ''.join(字符 for 字符 in 清理文本 if 字符 in "0123456789")
             if 数字:
                 候选.append(数字)
+        return 候选
+
+    def 提取数字(结果, 只取合法=False):
+        候选 = 提取候选数字(结果)
+        if 只取合法 and 最大值 is not None:
+            候选 = [数字 for 数字 in 候选 if int(数字) <= 最大值]
         return max(候选, key=len) if 候选 else ""
 
     # 彩色原图保留浅色数字的边缘；二值图作为不同主题下的备用输入。
     轻量数字 = ""
     for 输入图 in (img, 二值图):
         result, _ = ocr引擎(输入图, use_det=False, use_cls=False)
-        数字 = 提取数字(result)
+        数字 = 提取数字(result, 只取合法=最大值 is not None)
         if len(数字) > len(轻量数字):
             轻量数字 = 数字
         if len(数字) >= 7 and not 允许完整识别:
@@ -146,7 +152,7 @@ def 单行资源识别(ocr引擎, img, 允许完整识别=False):
         完整数字 = ""
         for 输入图 in (img, 二值图):
             result, _ = ocr引擎(输入图, use_cls=False)
-            数字 = 提取数字(result)
+            数字 = 提取数字(result, 只取合法=最大值 is not None)
             if len(数字) > len(完整数字):
                 完整数字 = 数字
             if 数字 and len(数字) >= 8:
@@ -155,7 +161,11 @@ def 单行资源识别(ocr引擎, img, 允许完整识别=False):
                 return int(数字)
         if len(完整数字) > len(轻量数字):
             轻量数字 = 完整数字
-    return int(轻量数字) if 轻量数字 else 0
+    if not 轻量数字:
+        return 0
+    if 最大值 is not None and int(轻量数字) > 最大值:
+        return 0
+    return int(轻量数字)
 
 
 from tkinter import ttk

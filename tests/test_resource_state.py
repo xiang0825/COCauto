@@ -61,6 +61,20 @@ class 资源状态测试(unittest.TestCase):
         self.assertEqual(结果, 14552022)
         self.assertEqual(引擎.call_count, 2)
 
+    def test_黑油上限丢弃二值图八位误读并保留彩色结果(self):
+        引擎 = Mock(side_effect=[
+            ([("8", 0.32)], None),
+            ([([[0, 0], [1, 0], [1, 1], [0, 1]], "349956", 0.99)], None),
+            ([([[0, 0], [1, 0], [1, 1], [0, 1]], "34919567", 0.88)], None),
+        ])
+        图像 = np.zeros((53, 120, 3), dtype=np.uint8)
+
+        结果 = 单行资源识别(
+            引擎, 图像, 允许完整识别=True, 最大值=1_000_000
+        )
+
+        self.assertEqual(结果, 349956)
+
     def test_OCR连续失败时不覆盖数据库(self):
         任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
         上下文 = SimpleNamespace(
