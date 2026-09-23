@@ -246,6 +246,18 @@ class 页面识别测试(unittest.TestCase):
         结果 = 识别器.识别(图像, 战斗中=True)
         self.assertNotEqual(结果.页面, "战斗结算")
 
+    def test_夜世界结算绿色回营按钮可识别(self):
+        """夜世界实机按钮较窄，不能被战斗兵栏保护条件排除。"""
+        识别器 = 页面识别器(Mock())
+        图像 = np.full((600, 800, 3), (38, 45, 70), dtype=np.uint8)
+        cv2.rectangle(图像, (348, 481), (452, 535), (105, 225, 75), -1)
+        cv2.putText(
+            图像, "69%", (335, 280), cv2.FONT_HERSHEY_SIMPLEX,
+            2.0, (245, 245, 245), 4, cv2.LINE_AA
+        )
+        self.assertIsNotNone(识别器._定位绿色回营按钮(图像))
+        self.assertEqual(识别器.识别(图像, 战斗中=False).页面, "战斗结算")
+
     def test_夜世界胜利之星奖励弹窗定位中央确定按钮(self):
         """回营后的星级奖励遮罩不能被底层夜世界资源栏掩盖。"""
         图像 = np.full((600, 800, 3), (154, 68, 40), dtype=np.uint8)
