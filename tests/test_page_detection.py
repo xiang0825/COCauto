@@ -385,6 +385,43 @@ class 页面识别测试(unittest.TestCase):
                 self.assertTrue(上下文.输入前安全检查())
                 上下文.清理官方评分弹窗.assert_called_once_with()
 
+    def test_主页识别到升级面板几何候选时先走安全关闭器(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文._点击识别截图 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文.检查宝石商店危险页面 = Mock(return_value=False)
+        上下文._最近点击页面结果 = SimpleNamespace(页面="主世界主页")
+        上下文._检测升级详情弹窗关闭点 = Mock(return_value=(710, 45))
+        上下文.关闭升级详情弹窗 = Mock(return_value=True)
+
+        self.assertTrue(上下文.输入前安全检查())
+        上下文.关闭升级详情弹窗.assert_called_once_with(上下文._点击识别截图)
+
+    def test_普通主页没有升级面板几何候选时不触发OCR关闭器(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文._点击识别截图 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文.检查宝石商店危险页面 = Mock(return_value=False)
+        上下文._最近点击页面结果 = SimpleNamespace(页面="主世界主页")
+        上下文._检测升级详情弹窗关闭点 = Mock(return_value=None)
+        上下文.关闭升级详情弹窗 = Mock(return_value=True)
+
+        self.assertFalse(上下文.输入前安全检查())
+        上下文.关闭升级详情弹窗.assert_not_called()
+
+    def test_城墙已确认资源点击时不被升级面板护栏拦截(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文._城墙升级资源点击中 = True
+        上下文._点击识别截图 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文.检查宝石商店危险页面 = Mock(return_value=False)
+        上下文._最近点击页面结果 = SimpleNamespace(页面="主世界主页")
+        上下文._检测升级详情弹窗关闭点 = Mock(return_value=(710, 45))
+        上下文.关闭升级详情弹窗 = Mock(return_value=True)
+
+        self.assertFalse(上下文.输入前安全检查())
+        上下文.关闭升级详情弹窗.assert_not_called()
+
     def test_系统维护页优先于断线弹窗识别(self):
         """维护页的黄黑警示带优先于中央深色面板，避免重复点击重试。"""
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)

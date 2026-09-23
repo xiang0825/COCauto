@@ -554,6 +554,7 @@ class 刷墙识别测试(unittest.TestCase):
             "禁止使用宝石" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
+        self.assertTrue(上下文.刷墙安全中止)
 
 
 if __name__ == "__main__":
