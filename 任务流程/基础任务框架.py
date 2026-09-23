@@ -1168,7 +1168,33 @@ class 任务上下文:
             and 结果 is not None
             and 结果.页面 in {"主世界主页", "夜世界主页"}
         ):
+            # 活动/奖励面板会保留底层资源栏，轻量识别因此可能仍返回
+            # “主页”。先做纯几何的红色 X + 中央面板预检；只有命中候选
+            # 才调用安全关闭器，避免普通主页每次输入都触发 OCR。
             当前帧 = getattr(self, "_点击识别截图", None)
+            try:
+                活动关闭点 = (
+                    当前帧 is not None
+                    and self._检测主世界活动弹窗关闭点(当前帧)
+                )
+            except Exception:
+                活动关闭点 = None
+            if 活动关闭点:
+                if self.清理主世界活动弹窗(当前帧):
+                    return True
+                if getattr(self, "页面恢复失败", False):
+                    return True
+        # 主世界/夜世界 HUD 可能仍露在升级详情面板后方，轻量页面识别
+        # 因此会返回“主页”。只在当前缓存帧出现中央标题栏+右上角红色
+        # X 的几何候选时，复用同一个安全关闭器做 OCR 复核；普通主页
+        # 没有该候选，不会额外执行 OCR，也不会影响战斗输入路径。
+        if (
+            not getattr(self, "_战斗中", False)
+            and not getattr(self, "_城墙升级确认中", False)
+            and not getattr(self, "_城墙升级资源点击中", False)
+            and 结果 is not None
+            and 结果.页面 in {"主世界主页", "夜世界主页"}
+        ):
             try:
                 有升级面板候选 = (
                     当前帧 is not None

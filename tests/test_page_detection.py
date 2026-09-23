@@ -422,6 +422,21 @@ class 页面识别测试(unittest.TestCase):
         self.assertFalse(上下文.输入前安全检查())
         上下文.关闭升级详情弹窗.assert_not_called()
 
+    def test_主页活动面板候选时先安全关闭不穿透(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文._点击识别截图 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文.检查宝石商店危险页面 = Mock(return_value=False)
+        上下文._最近点击页面结果 = SimpleNamespace(页面="主世界主页")
+        上下文._检测主世界活动弹窗关闭点 = Mock(return_value=(710, 38))
+        上下文.清理主世界活动弹窗 = Mock(return_value=True)
+        上下文._检测升级详情弹窗关闭点 = Mock(return_value=None)
+        上下文.关闭升级详情弹窗 = Mock(return_value=True)
+
+        self.assertTrue(上下文.输入前安全检查())
+        上下文.清理主世界活动弹窗.assert_called_once_with(上下文._点击识别截图)
+        上下文.关闭升级详情弹窗.assert_not_called()
+
     def test_系统维护页优先于断线弹窗识别(self):
         """维护页的黄黑警示带优先于中央深色面板，避免重复点击重试。"""
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
