@@ -6,7 +6,7 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from 任务流程.建筑升级.寻找建筑 import 寻找建筑
+from 任务流程.建筑升级.寻找建筑 import 寻找建筑, 建筑查找模式
 from 任务流程.建筑升级.升级普通建筑 import (
     提取建议升级建筑名称,
     提取建议升级建筑,
@@ -17,6 +17,31 @@ from 任务流程.建筑升级.升级英雄 import 升级英雄任务
 
 
 class 建筑升级边界测试(unittest.TestCase):
+    def test_建议列表没有可安全目标时收敛为安全跳过(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.查找模式 = 建筑查找模式.建议升级中的第一个可用建筑
+        任务.建筑列表 = []
+        任务.安全跳过 = False
+        任务.排除建筑名称 = set()
+        任务.上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+        )
+        任务.打开建筑页面 = Mock(return_value=True)
+        任务.执行OCR识别 = Mock(return_value=[
+            ([[0, 0], [80, 0], [80, 20], [0, 20]], "建議升級", 0.99),
+            ([[0, 40], [80, 40], [80, 60], [0, 60]], "復活法術", 0.90),
+            ([[0, 80], [80, 80], [80, 100], [0, 100]], "其他升級", 0.99),
+        ])
+        任务.尝试选中指定建筑 = Mock(return_value=False)
+
+        self.assertFalse(任务.执行())
+        self.assertTrue(任务.安全跳过)
+        self.assertTrue(any(
+            "安全跳过并等待下次检查" in 调用.args[0]
+            for 调用 in 任务.上下文.置脚本状态.call_args_list
+        ))
+
     def test_建筑扫描收到停止请求后不再OCR或滑动(self):
         任务 = 寻找建筑.__new__(寻找建筑)
         任务.建筑列表 = ["兵营"]
@@ -293,6 +318,23 @@ class 建筑升级边界测试(unittest.TestCase):
         self.assertTrue(任务._安全关闭当前建筑面板())
         关闭详情.assert_called_once_with()
         点击.assert_called_once_with(700, 300, 延时=700, 是否精确点击=True)
+
+    def test_安全空白点击后主页复核会清除详情器遗留失败标志(self):
+        任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
+        上下文 = SimpleNamespace(
+            关闭升级详情弹窗=Mock(return_value=False),
+            点击=Mock(return_value=True),
+            识别点击画面=Mock(
+                return_value=SimpleNamespace(页面="主世界主页", 世界="主世界")
+            ),
+            页面恢复失败=True,
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+
+        self.assertTrue(任务._安全关闭当前建筑面板())
+        self.assertFalse(上下文.页面恢复失败)
+        上下文.识别点击画面.assert_called_once_with(强制=True)
 
     def test_绿色立即完成区域不会被当成资源确认按钮(self):
         任务 = 升级普通建筑任务.__new__(升级普通建筑任务)

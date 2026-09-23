@@ -898,6 +898,94 @@ class 任务计划测试(unittest.TestCase):
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
+    def test_建议建筑无安全目标时请求检查退避而不是五秒重试(self):
+        上下文 = SimpleNamespace(
+            设置=机器人设置(
+                欲升级的英雄或建筑=[],
+                是否升级建议升级的建筑=True,
+                建筑升级检查间隔=0,
+            ),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            请求任务计划等待=Mock(),
+            机器人标志="测试机器人",
+        )
+        数据库 = Mock(
+            获取最新完整状态=Mock(return_value=SimpleNamespace(状态数据={})),
+            更新状态=Mock(),
+        )
+        任务 = 建筑升级任务.__new__(建筑升级任务)
+        任务.上下文 = 上下文
+        任务.数据库 = 数据库
+        任务.机器人标志 = 上下文.机器人标志
+
+        with patch("任务流程.建筑升级.更新工人状态任务") as 工人状态, \
+             patch("任务流程.建筑升级.寻找建筑") as 寻找:
+            工人状态.return_value.执行.return_value = True
+            工人状态.return_value.是否有空闲工人.return_value = True
+            寻找.return_value.执行.return_value = False
+            寻找.return_value.安全跳过 = True
+
+            self.assertTrue(任务.执行())
+
+        上下文.请求任务计划等待.assert_called_once()
+        self.assertGreaterEqual(
+            上下文.请求任务计划等待.call_args.args[0], 60
+        )
+
+    def test_建议候选全部安全跳过后不再做转场工人OCR(self):
+        """本轮候选处理完后直接退避，不能把转场空帧记录成任务失败。"""
+        上下文 = SimpleNamespace(
+            设置=机器人设置(
+                欲升级的英雄或建筑=[],
+                是否升级建议升级的建筑=True,
+                建筑升级检查间隔=0,
+            ),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            请求任务计划等待=Mock(),
+            机器人标志="测试机器人",
+        )
+        数据库 = Mock(
+            获取最新完整状态=Mock(return_value=SimpleNamespace(状态数据={})),
+            更新状态=Mock(),
+        )
+        任务 = 建筑升级任务.__new__(建筑升级任务)
+        任务.上下文 = 上下文
+        任务.数据库 = 数据库
+        任务.机器人标志 = 上下文.机器人标志
+
+        第一个候选 = SimpleNamespace(
+            执行=Mock(return_value=True),
+            当前建筑="頭號殺手",
+            建筑列表=["頭號殺手", "復活法術"],
+        )
+        第二个候选 = SimpleNamespace(
+            执行=Mock(return_value=True),
+            当前建筑="復活法術",
+            建筑列表=["頭號殺手", "復活法術"],
+        )
+        第一个升级 = SimpleNamespace(执行=Mock(return_value=False), 安全跳过=True)
+        第二个升级 = SimpleNamespace(执行=Mock(return_value=False), 安全跳过=True)
+
+        with patch("任务流程.建筑升级.更新工人状态任务") as 工人状态, \
+             patch("任务流程.建筑升级.寻找建筑", side_effect=[第一个候选, 第二个候选]) as 寻找, \
+             patch("任务流程.建筑升级.升级普通建筑任务", side_effect=[第一个升级, 第二个升级]):
+            工人状态.return_value.执行.side_effect = [True, True]
+            工人状态.return_value.是否有空闲工人.return_value = True
+
+            self.assertTrue(任务.执行())
+
+        self.assertEqual(工人状态.return_value.执行.call_count, 2)
+        上下文.请求任务计划等待.assert_called_once()
+        self.assertGreaterEqual(
+            上下文.请求任务计划等待.call_args.args[0], 60
+        )
+        self.assertFalse(any(
+            "建筑升级失败记录已写入数据库" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
     def test_固定建筑提交后先收尾面板再结束任务(self):
         上下文 = SimpleNamespace(
             设置=机器人设置(
