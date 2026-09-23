@@ -545,6 +545,39 @@ class 任务计划测试(unittest.TestCase):
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
+    def test_夜世界部分下兵成功后拒绝仍禁止英雄和后续槽位(self):
+        for 拒绝序号 in (3, 14):
+            with self.subTest(拒绝序号=拒绝序号):
+                任务 = 下兵.__new__(下兵)
+                上下文 = SimpleNamespace(
+                    停止事件=threading.Event(), 页面恢复失败=False,
+                    点击=Mock(side_effect=[True] * (拒绝序号 - 1) + [False]),
+                    置脚本状态=Mock(), 脚本延时=Mock(),
+                )
+                任务.上下文 = 上下文
+                任务._等待真实战斗画面 = Mock(return_value=True)
+                任务.异常处理 = Mock()
+                任务.启动后台放英雄技能 = Mock()
+                self.assertFalse(任务.执行())
+                self.assertEqual(上下文.点击.call_count, 拒绝序号)
+                self.assertTrue(上下文.页面恢复失败)
+                任务.异常处理.assert_not_called()
+                任务.启动后台放英雄技能.assert_not_called()
+
+    def test_夜世界一批下兵中收到停止请求不继续点下一兵(self):
+        任务 = 下兵.__new__(下兵)
+        停止 = threading.Event()
+        def 点击(*args, **kwargs):
+            if 上下文.点击.call_count == 2:
+                停止.set()
+            return True
+        上下文 = SimpleNamespace(
+            停止事件=停止, 点击=Mock(side_effect=点击), 置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        self.assertFalse(任务.执行下兵操作())
+        self.assertEqual(上下文.点击.call_count, 2)
+
     def test_非主页时最多单次ESC并确认主世界主页(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
         键盘 = Mock()

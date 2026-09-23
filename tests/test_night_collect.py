@@ -9,6 +9,29 @@ from 任务流程.夜世界.收集圣水车 import 收集圣水车任务
 
 
 class 夜世界圣水车测试(unittest.TestCase):
+    def test_完整收集调用链遇到输入拒绝不重试其它候选或关闭(self):
+        for 拒绝阶段 in ("收集", "安全关闭", "候选关闭"):
+            with self.subTest(拒绝阶段=拒绝阶段):
+                任务 = self._任务(np.zeros((600, 800, 3), dtype=np.uint8))
+                任务._夜世界仍在前台 = Mock(return_value=True)
+                任务._查找海岸船锚点 = Mock(return_value=(True, (200, 200), .95))
+                任务._生成圣水车候选点 = Mock(return_value=[
+                    (200, 200, "候选1"), (300, 300, "候选2")])
+                任务.是否在危险区域内 = Mock(return_value=False)
+                任务.执行OCR识别 = Mock(return_value=[([], "聖水車", .99)])
+                任务._查找OCR文本中心 = Mock(return_value=(588, 507))
+                任务._检测详情面板关闭点 = Mock(return_value=(680, 50))
+                任务.上下文.脚本延时 = Mock()
+                任务.上下文.点击 = Mock(side_effect=[True, 拒绝阶段 != "收集"])
+                任务.上下文.点击已确认安全按钮 = Mock(return_value=False)
+                if 拒绝阶段 == "候选关闭":
+                    任务.执行OCR识别.return_value = [([], "加農炮", .99)]
+                self.assertFalse(任务.执行())
+                self.assertTrue(任务._输入已拒绝)
+                self.assertEqual(任务.上下文.点击.call_count, 1 if 拒绝阶段 == "候选关闭" else 2)
+                self.assertEqual(任务.上下文.点击已确认安全按钮.call_count,
+                                 0 if 拒绝阶段 == "收集" else 1)
+
     def _任务(self, 屏幕):
         上下文 = SimpleNamespace(
             op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=屏幕)),

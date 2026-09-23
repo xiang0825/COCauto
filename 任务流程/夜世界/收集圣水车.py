@@ -29,6 +29,7 @@ class 收集圣水车任务(夜世界基础任务):
 
     def 执行(self) -> bool:
         try:
+            self._输入已拒绝 = False
             找不到夜世界船的次数 = 0
 
             while True:
@@ -67,11 +68,15 @@ class 收集圣水车任务(夜世界基础任务):
                                 f"已确认圣水车面板并完成收集：{点击x},{点击y}"
                             )
                             return True
+                        if self._输入已拒绝:
+                            return False
                         # 点击候选点可能打开了普通建筑详情页。不能把下一
                         # 个地图坐标继续点在详情页上，否则会把后续输入带到
                         # 错误页面。只在右上角明确识别到红色关闭按钮时关闭，
                         # 不发送无条件 ESC，避免退回主世界或模拟器桌面。
                         self._关闭候选详情面板()
+                        if self._输入已拒绝:
+                            return False
                         if not self._夜世界仍在前台():
                             self.上下文.置脚本状态(
                                 "圣水车候选点击后已回到主世界，停止剩余候选点击",
@@ -266,10 +271,14 @@ class 收集圣水车任务(夜世界基础任务):
             )
             点击安全 = getattr(self.上下文, "点击已确认安全按钮", None)
             if callable(点击安全):
-                return bool(点击安全(*关闭点, 延时=180))
-            return self.上下文.点击(
-                *关闭点, 延时=180, 是否精确点击=True
-            ) is not False
+                成功 = 点击安全(*关闭点, 延时=180)
+            else:
+                成功 = self.上下文.点击(*关闭点, 延时=180, 是否精确点击=True)
+            if 成功 is False:
+                self._输入已拒绝 = True
+                self.上下文.置脚本状态("候选详情面板关闭被拒绝，停止剩余候选点击")
+                return False
+            return True
         except (AttributeError, TypeError, ValueError, cv2.error) as 异常:
             self.上下文.置脚本状态(f"详情面板关闭预检失败，停止候选尝试：{异常}")
             return False
@@ -338,6 +347,7 @@ class 收集圣水车任务(夜世界基础任务):
         if 收集点 is None:
             收集点 = (588, 507)
         if self.上下文.点击(*收集点) is False:
+            self._输入已拒绝 = True
             self.上下文.置脚本状态(
                 "圣水车收集按钮点击被安全输入层拒绝，停止本次收集",
                 级别="警告",
@@ -355,16 +365,16 @@ class 收集圣水车任务(夜世界基础任务):
         if 关闭点 is not None:
             点击安全 = getattr(self.上下文, "点击已确认安全按钮", None)
             if callable(点击安全):
-                点击安全(*关闭点, 延时=180)
+                关闭成功 = 点击安全(*关闭点, 延时=180)
             else:
-                if self.上下文.点击(
-                    *关闭点, 延时=180, 是否精确点击=True
-                ) is False:
-                    self.上下文.置脚本状态(
-                        "圣水车面板关闭点击被安全输入层拒绝，保留当前面板",
-                        级别="警告",
-                    )
-                    return False
+                关闭成功 = self.上下文.点击(*关闭点, 延时=180, 是否精确点击=True)
+            if 关闭成功 is False:
+                self._输入已拒绝 = True
+                self.上下文.置脚本状态(
+                    "圣水车面板关闭点击被安全输入层拒绝，保留当前面板",
+                    级别="警告",
+                )
+                return False
         self.收集圣水连续出错次数 = 0
         return True
 

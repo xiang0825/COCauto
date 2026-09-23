@@ -102,15 +102,19 @@ class 下兵(夜世界基础任务):
         有效槽位 = 0
         for 槽位, (槽位x, 槽位y) in enumerate(self.兵种槽位, start=1):
             if getattr(self.上下文, "停止事件", None) is not None and self.上下文.停止事件.is_set():
-                break
+                return False
             选中 = self.上下文.点击(槽位x, 槽位y, 80, 是否精确点击=True)
             if 选中 is False:
-                break
+                self.上下文.置脚本状态("夜世界兵槽选择被拒绝，中止本次下兵及后续英雄操作")
+                return False
             本槽成功 = 0
             for 重复次数 in range(12):
+                if getattr(self.上下文, "停止事件", None) is not None and self.上下文.停止事件.is_set():
+                    return False
                 点位 = self.可下兵点[重复次数 % len(self.可下兵点)]
                 if self.上下文.点击(*点位, 80, 是否精确点击=True) is False:
-                    break
+                    self.上下文.置脚本状态("夜世界下兵中途输入被拒绝，中止本次下兵及后续英雄操作")
+                    return False
                 本槽成功 += 1
             if 本槽成功:
                 有效槽位 += 1
