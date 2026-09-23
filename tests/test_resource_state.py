@@ -214,6 +214,28 @@ class 资源状态测试(unittest.TestCase):
         self.assertTrue(结果["识别成功"])
         self.assertEqual(结果["黑油"], 469_558)
 
+    def test_资源行使用重叠切分修复黑油漏首位(self):
+        任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((160, 210, 3), dtype=np.uint8)),
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.ocr引擎 = Mock()
+
+        # 轻量黑油值36,295来自旧切分；重叠切分后完整复核应读回362,905。
+        with patch(
+            "任务流程.更新主世界账号资源状态.单行资源识别",
+            side_effect=[20_004_120, 20_020_360, 36_295, 362_905],
+        ):
+            结果 = 任务.识别当前资源(上下文)
+
+        self.assertTrue(结果["识别成功"])
+        self.assertEqual(结果["黑油"], 362_905)
+
 
 if __name__ == "__main__":
     unittest.main()
