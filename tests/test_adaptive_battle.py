@@ -89,8 +89,8 @@ class 自适应战斗测试(unittest.TestCase):
         上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
         任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
         评分, 可达比例, 说明 = 任务.获取自适应资源筛选门槛(上下文)
-        self.assertEqual(评分, 7.5)
-        self.assertEqual(可达比例, 0.65)
+        self.assertEqual(评分, 8.5)
+        self.assertEqual(可达比例, 0.85)
         self.assertIn("提高可达性门槛", 说明)
 
     def test_没有学习反馈时仍保持用户设定的五分门槛(self):
