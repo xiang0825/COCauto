@@ -168,6 +168,20 @@ class 升级面板关闭安全测试(unittest.TestCase):
             489, 450, 延时=350, 是否精确点击=True
         )
 
+    def test_战宠小屋按钮输入被拒绝时停止并标记页面失败(self):
+        任务 = 寻找战宠小屋任务.__new__(寻找战宠小屋任务)
+        上下文 = SimpleNamespace(
+            脚本延时=Mock(),
+            点击=Mock(return_value=False),
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+        任务.上下文 = 上下文
+        任务.是否出现图片 = Mock(return_value=(True, (489, 450)))
+
+        self.assertFalse(任务._点击打开按钮())
+        self.assertTrue(上下文.页面恢复失败)
+
     def test_战宠小屋使用放大地图切片并还原参考坐标(self):
         任务 = 寻找战宠小屋任务.__new__(寻找战宠小屋任务)
         调用次数 = 0

@@ -211,7 +211,13 @@ class 升级英雄任务(夜世界基础任务):
 
                 # 点击升级
                 x, y = 坐标
-                self.上下文.点击(x, y, )
+                if self.上下文.点击(x, y, ) is False:
+                    self.上下文.置脚本状态(
+                        f"{self.要升级的英雄}确认按钮点击被安全层拒绝，未报告升级成功"
+                    )
+                    self.安全跳过 = True
+                    self.关闭英雄升级页面()
+                    return False
                 self.关闭英雄升级页面()
                 return True
             else:

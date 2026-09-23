@@ -514,6 +514,22 @@ class 英雄升级确认页测试(unittest.TestCase):
             升级英雄任务._识别英雄升级确认页(OCR, 屏幕, "野蛮人之王")
         )
 
+    def test_英雄升级确认点击被拒绝时不报告成功(self):
+        任务 = 升级英雄任务.__new__(升级英雄任务)
+        任务.上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8))),
+            点击=Mock(return_value=False),
+            置脚本状态=Mock(),
+        )
+        任务.要升级的英雄 = "野蛮人之王"
+        任务.执行OCR识别 = Mock(return_value=[])
+        任务._识别英雄升级确认页 = Mock(return_value=True)
+        任务.关闭英雄升级页面 = Mock(return_value=True)
+        任务.安全跳过 = False
+
+        self.assertFalse(任务.执行())
+        任务.关闭英雄升级页面.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()
