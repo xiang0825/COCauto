@@ -1,4 +1,5 @@
 import gc
+import unicodedata
 
 from 任务流程.基础任务框架 import 任务上下文, 基础任务
 from 模块.检测.OCR识别器 import 安全OCR引擎
@@ -10,6 +11,60 @@ from 工具包.工具函数 import 单行资源识别
 
 class 更新家乡资源状态任务(基础任务):
     """自动检测并升级城墙"""
+
+    def _完整资源栏复核(self, 资源栏图像) -> tuple[int, int, int] | None:
+        """对可疑的三行资源栏做一次整块 OCR，并按文字坐标归位。
+
+        单行轻量 OCR 在主世界刚回营、资源动画或上下行间距变化时，
+        可能把圣水/黑水行裁到邻行，只留下较短数字。整块检测 OCR 能
+        同时看到三行文字；这里只在可疑读数时调用，避免常态重复加载
+        ONNX 检测模型造成内存峰值。
+        """
+        try:
+            结果, _ = self.ocr引擎(资源栏图像, use_cls=False)
+            高, 宽 = 资源栏图像.shape[:2]
+            行候选 = {0: [], 1: [], 2: []}
+            目标行 = (0.20 * 高, 0.43 * 高, 0.64 * 高)
+            for 项 in (结果 or []):
+                if not isinstance(项, (list, tuple)) or len(项) < 3:
+                    continue
+                框, 原文, 置信度 = 项[0], 项[1], 项[2]
+                try:
+                    点 = [
+                        (float(坐标[0]), float(坐标[1]))
+                        for 坐标 in 框
+                        if len(坐标) >= 2
+                    ]
+                    if not 点:
+                        continue
+                    中心x = sum(点x for 点x, _ in 点) / len(点)
+                    中心y = sum(点y for _, 点y in 点) / len(点)
+                    # 资源数字在裁剪区域右侧；排除左侧图标、背景噪声。
+                    if 中心x < 宽 * 0.35 or 中心x > 宽 * 0.98:
+                        continue
+                    文本 = unicodedata.normalize("NFKC", str(原文))
+                    数字 = "".join(字符 for 字符 in 文本 if 字符 in "0123456789")
+                    if not 数字:
+                        continue
+                    行号 = min(range(3), key=lambda 索引: abs(中心y - 目标行[索引]))
+                    行候选[行号].append((数字, float(置信度)))
+                except (TypeError, ValueError, IndexError):
+                    continue
+
+            读数 = []
+            for 行号 in range(3):
+                if not 行候选[行号]:
+                    return None
+                数字, _ = max(
+                    行候选[行号],
+                    key=lambda 项: (项[1], len(项[0])),
+                )
+                读数.append(int(数字))
+            if 读数[2] > 1_000_000:
+                return None
+            return tuple(读数)
+        except (AttributeError, TypeError, ValueError, IndexError):
+            return None
 
     def 执行(self) -> bool:
         上下文 = self.上下文
@@ -76,6 +131,21 @@ class 更新家乡资源状态任务(基础任务):
                 黑油文本 = 单行资源识别(
                     self.ocr引擎, 黑油图, 最大值=1_000_000
                 )
+
+                # 主资源已经是百万级、高本常见的圣水/黑水却突然变成
+                # 短数字时，说明单行切分可能错位。先对整块资源栏做复核，
+                # 再决定是否进入逐行完整 OCR 回退，避免错误读数先参与后续
+                # 判断，也避免重复创建 OCR 会话造成内存抖动。
+                if (
+                    max(金币文本, 圣水文本) >= 10_000_000
+                    and (圣水文本 < 2_000_000 or 黑油文本 < 100_000)
+                ):
+                    完整读数 = self._完整资源栏复核(全屏图像)
+                    if 完整读数 is not None:
+                        金币文本, 圣水文本, 黑油文本 = 完整读数
+                        上下文.置脚本状态(
+                            "资源栏可疑读数已完成整栏OCR复核，按文字坐标重新归位"
+                        )
 
                 # 自适应 16:9 画面中，轻量 OCR 可能漏掉主资源数字的首位，
                 # 例如把 14,552,022 读成 1,455,202；这类错误仍然是七位数，

@@ -30,6 +30,9 @@ build/
 # 本地构建输出（不同版本目录不上传仓库）
 dist_*/
 build_*/
+# 根目录仅保留给本机直接运行的发布产物，不提交二进制及其运行时目录
+/部落冲突.exe
+/_internal/
 
 # Jupyter Notebook 检查点
 .ipynb_checkpoints/

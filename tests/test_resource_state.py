@@ -236,6 +236,36 @@ class 资源状态测试(unittest.TestCase):
         self.assertTrue(结果["识别成功"])
         self.assertEqual(结果["黑油"], 362_905)
 
+    def test_主资源很高但下两行偏低时使用整栏坐标复核(self):
+        任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((160, 210, 3), dtype=np.uint8)),
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.ocr引擎 = Mock(return_value=(
+            [
+                ([[100, 24], [176, 24], [176, 42], [100, 42]], "20009412", 0.94),
+                ([[100, 61], [176, 61], [176, 76], [100, 76]], "20042036", 0.99),
+                ([[125, 95], [176, 95], [176, 110], [125, 110]], "362905", 0.99),
+            ],
+            None,
+        ))
+
+        with patch(
+            "任务流程.更新主世界账号资源状态.单行资源识别",
+            side_effect=[20_009_412, 181_658, 204_858],
+        ):
+            结果 = 任务.识别当前资源(上下文)
+
+        self.assertTrue(结果["识别成功"])
+        self.assertEqual(结果["金币"], 20_009_412)
+        self.assertEqual(结果["圣水"], 20_042_036)
+        self.assertEqual(结果["黑油"], 362_905)
+
 
 if __name__ == "__main__":
     unittest.main()
