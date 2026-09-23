@@ -43,6 +43,21 @@ class 页面识别测试(unittest.TestCase):
         self.assertEqual(结果.页面, "战斗中")
         self.assertTrue(any("红色放弃按钮" in 依据 for 依据 in 结果.依据))
 
+    def test_主世界左下竖向回营卡片识别为结算页(self):
+        """国际服主世界结算页的左下“回营”卡片不能漏检。"""
+        图像 = np.full((600, 800, 3), (35, 35, 35), dtype=np.uint8)
+        # 主世界结算结果区域：暗色结果遮罩加少量亮色统计文字。
+        cv2.rectangle(图像, (360, 165), (475, 195), (235, 235, 235), -1)
+        # 实机约为 x=12..93、y=478..584 的浅色竖向回营卡片。
+        cv2.rectangle(图像, (12, 478), (93, 584), (180, 180, 180), -1)
+
+        回营点 = self.识别器.定位结算回营按钮(图像)
+        self.assertIsNotNone(回营点)
+        self.assertAlmostEqual(回营点[0], 52, delta=8)
+        self.assertAlmostEqual(回营点[1], 531, delta=10)
+        结果 = self.识别器.识别(图像)
+        self.assertEqual(结果.页面, "战斗结算")
+
     def test_1280x720战斗倒计时优先于奖励页误报(self):
         """高分辨率实机中倒计时存在时，不能停在奖励选择页。"""
         图像 = np.zeros((720, 1280, 3), dtype=np.uint8)

@@ -536,7 +536,13 @@ class 页面识别器:
         return 0.0
 
     def _定位绿色回营按钮(self, 图像: np.ndarray):
-        """返回结算页底部绿色回营按钮中心，未找到则返回 ``None``。"""
+        """返回结算页回营按钮中心，未找到则返回 ``None``。
+
+        夜世界/部分测试服使用底部中央横向绿色按钮；主世界国际服的
+        结算页则常把“回营”放在左下角竖向角色卡片里。两种布局都必须
+        先通过结果页结构确认，不能把普通战场兵栏或主世界控件授权为
+        回营点击目标。
+        """
         if not isinstance(图像, np.ndarray) or 图像.ndim < 2 or 图像.size == 0:
             return None
         try:
@@ -550,33 +556,74 @@ class 页面识别器:
                 & (hsv[上:下, 左:右, 1] >= 70)
                 & (hsv[上:下, 左:右, 2] >= 100)
             ).astype(np.uint8)
-            if not 绿色.size or float(np.mean(绿色)) < 0.08:
+            if not 绿色.size:
                 return None
-            绿色连通 = cv2.morphologyEx(
-                绿色,
-                cv2.MORPH_CLOSE,
-                cv2.getStructuringElement(cv2.MORPH_RECT, (7, 5)),
-            )
-            _, _, 绿色统计, _ = cv2.connectedComponentsWithStats(绿色连通, 8)
-            最小按钮面积 = max(3500, int(宽 * 高 * 0.008))
             候选 = []
-            for x, y, 按钮宽, 按钮高, 按钮面积 in 绿色统计[1:]:
-                if (
-                    按钮面积 >= 最小按钮面积
-                    and 按钮宽 >= int(宽 * 0.12)
-                    and 按钮高 >= int(高 * 0.06)
-                    # 战斗底部的兵栏/部署区域在测试服会连成一块
-                    # 绿色矩形；它通常比真实回营按钮更宽、更高。
-                    # 夜世界实机的绿色按钮约为 104x54（宽高比约
-                    # 1.93），不能再用过高的 2.0 比例把它排除；同时
-                    # 加上最大宽高约束，排除战场兵栏的大片绿色区域。
-                    and 按钮宽 / max(1, 按钮高) >= 1.70
-                    and 按钮宽 <= int(宽 * 0.22)
-                    and 按钮高 <= int(高 * 0.14)
-                ):
-                    候选.append((按钮面积, x, y, 按钮宽, 按钮高))
+            if float(np.mean(绿色)) >= 0.08:
+                绿色连通 = cv2.morphologyEx(
+                    绿色,
+                    cv2.MORPH_CLOSE,
+                    cv2.getStructuringElement(cv2.MORPH_RECT, (7, 5)),
+                )
+                _, _, 绿色统计, _ = cv2.connectedComponentsWithStats(绿色连通, 8)
+                最小按钮面积 = max(3500, int(宽 * 高 * 0.008))
+                for x, y, 按钮宽, 按钮高, 按钮面积 in 绿色统计[1:]:
+                    if (
+                        按钮面积 >= 最小按钮面积
+                        and 按钮宽 >= int(宽 * 0.12)
+                        and 按钮高 >= int(高 * 0.06)
+                        # 战斗底部的兵栏/部署区域在测试服会连成一块
+                        # 绿色矩形；它通常比真实回营按钮更宽、更高。
+                        # 夜世界实机的绿色按钮约为 104x54（宽高比约
+                        # 1.93），不能再用过高的 2.0 比例把它排除；同时
+                        # 加上最大宽高约束，排除战场兵栏的大片绿色区域。
+                        and 按钮宽 / max(1, 按钮高) >= 1.70
+                        and 按钮宽 <= int(宽 * 0.22)
+                        and 按钮高 <= int(高 * 0.14)
+                    ):
+                        候选.append((按钮面积, x, y, 按钮宽, 按钮高))
             if not 候选:
-                return None
+                # 主世界结算页的回营卡片位于左下角，通常是浅灰/浅绿
+                # 外框加角色图，不满足“绿色横向按钮”条件。只在限定的
+                # 左下区域寻找一个竖向浅色卡片，避免扫描整张地图。
+                左区 = 0
+                右区 = int(宽 * 0.20)
+                上区 = int(高 * 0.76)
+                下区 = int(高 * 0.995)
+                左下 = hsv[上区:下区, 左区:右区]
+                if 左下.size == 0:
+                    return None
+                浅色 = (
+                    (左下[:, :, 1] <= 120)
+                    & (左下[:, :, 2] >= 145)
+                ).astype(np.uint8)
+                浅色 = cv2.morphologyEx(
+                    浅色,
+                    cv2.MORPH_CLOSE,
+                    cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7)),
+                )
+                _, _, 浅色统计, _ = cv2.connectedComponentsWithStats(浅色, 8)
+                左下候选 = []
+                for x, y, 卡片宽, 卡片高, 卡片面积 in 浅色统计[1:]:
+                    if not (
+                        卡片面积 >= max(1200, int(宽 * 高 * 0.006))
+                        and 卡片宽 >= int(宽 * 0.07)
+                        and 卡片宽 <= int(宽 * 0.20)
+                        and 卡片高 >= int(高 * 0.12)
+                        and 卡片高 <= int(高 * 0.28)
+                        and 0.40 <= 卡片宽 / max(1, 卡片高) <= 1.30
+                        and x <= int(宽 * 0.04)
+                        and y + 卡片高 >= int(高 * 0.88) - 上区
+                    ):
+                        continue
+                    左下候选.append((int(卡片面积), int(x), int(y), int(卡片宽), int(卡片高)))
+                if not 左下候选:
+                    return None
+                _, x, y, 卡片宽, 卡片高 = max(左下候选)
+                return (
+                    int(x + 卡片宽 // 2),
+                    int(上区 + y + 卡片高 // 2),
+                )
             _, x, y, 按钮宽, 按钮高 = max(候选)
             return (左 + x + 按钮宽 // 2, 上 + y + 按钮高 // 2)
         except (AttributeError, TypeError, ValueError, cv2.error):
