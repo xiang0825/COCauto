@@ -224,6 +224,41 @@ class 打开进攻页面测试(unittest.TestCase):
             705, 535, 延时=700, 是否精确点击=True
         )
 
+    def test_攻击后结算过渡单帧不会跳过下兵(self):
+        """攻击点击后的结算视觉过渡帧必须等下一帧，不能误判为已结算。"""
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        页面状态 = iter((
+            None,          # 军队配置页，允许点击攻击
+            "战斗结算",    # 上一场结果层残留
+            "战斗结算",    # 即使连续命中也不能跳过本场下兵
+            "战斗中",      # 下一帧真实战斗页
+        ))
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=self.军队配置画面())
+            ),
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务._识别已存在的战斗页面 = Mock(
+            side_effect=lambda *args, **kwargs: next(页面状态)
+        )
+        任务._检测攻击按钮 = Mock(side_effect=[(705, 535), None, None, None])
+        任务._检测寻找目标按钮 = Mock(return_value=None)
+        任务._是否出现下一个 = Mock(return_value=False)
+
+        self.assertTrue(任务._等待并点击攻击按钮(上下文))
+        self.assertTrue(上下文._入口已进入战斗)
+        self.assertFalse(getattr(上下文, "_入口已进入结算", False))
+        self.assertTrue(any(
+            "攻击后出现战斗结算视觉过渡层" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+        上下文.点击.assert_called_once_with(
+            705, 535, 延时=700, 是否精确点击=True
+        )
+
     def test_新一场开始会清除上一场资源评分(self):
         上下文 = SimpleNamespace(
             本场目标战利品={"金币": 900000},
