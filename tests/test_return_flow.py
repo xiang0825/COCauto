@@ -450,6 +450,27 @@ class 回营状态机测试(unittest.TestCase):
         self.assertEqual(上下文.点击记录, [])
         self.assertIn("未完整确认", " ".join(上下文.状态))
 
+    def test_回营按钮输入被拒绝时不继续确认主界面(self):
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = _匹配器()
+        任务.记录战斗结果 = lambda *_参数, **_关键字: True
+        任务.等待主界面就绪 = unittest.mock.Mock(return_value=True)
+        上下文 = _上下文()
+        上下文._战斗结束已确认 = True
+        原始点击 = 上下文.点击
+
+        def 拒绝点击(*参数, **关键字):
+            原始点击(*参数, **关键字)
+            return False
+
+        上下文.点击 = 拒绝点击
+
+        结果 = 任务.等待回营地按钮出现(上下文)
+
+        self.assertFalse(结果)
+        任务.等待主界面就绪.assert_not_called()
+        self.assertIn("输入被拒绝", " ".join(上下文.状态))
+
 
 if __name__ == "__main__":
     unittest.main()

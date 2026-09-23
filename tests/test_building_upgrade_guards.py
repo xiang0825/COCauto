@@ -66,6 +66,29 @@ class 建筑升级边界测试(unittest.TestCase):
         点击.assert_not_called()
         任务.上下文.置脚本状态.assert_called_once()
 
+    def test_建筑升级入口点击被拒绝时不继续读取列表(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.上下文 = SimpleNamespace(
+            设置=SimpleNamespace(是否刷主世界=False),
+            点击=Mock(return_value=False),
+            置脚本状态=Mock(),
+            op=SimpleNamespace(),
+        )
+        任务._建筑升级面板已打开 = Mock(return_value=False)
+
+        self.assertFalse(任务.打开建筑页面(划到底部=False))
+        self.assertTrue(任务.上下文.页面恢复失败)
+
+    def test_建筑候选点击被拒绝时不报告已选中(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.上下文 = SimpleNamespace(
+            点击=Mock(return_value=False),
+            置脚本状态=Mock(),
+        )
+
+        self.assertFalse(任务.选中建筑(100, 100, 140, 140))
+        self.assertTrue(任务.上下文.页面恢复失败)
+
     def test_关闭英雄殿堂后清除主世界升级浮层(self):
         点击 = Mock(return_value=True)
         任务 = 寻找建筑.__new__(寻找建筑)
@@ -207,6 +230,48 @@ class 建筑升级边界测试(unittest.TestCase):
 
         self.assertTrue(任务._当前已在升级中())
         self.assertIsNone(任务._定位升级确认按钮())
+
+    def test_建筑升级入口点击被拒绝时不继续识别确认按钮(self):
+        任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
+        点击 = Mock(return_value=False)
+        任务.上下文 = SimpleNamespace(
+            点击=点击,
+            置脚本状态=Mock(),
+        )
+        任务.要升级的建筑 = "测试建筑"
+        任务.相似度阈值 = 0.8
+        任务.安全跳过 = False
+        任务._当前已在升级中 = Mock(return_value=False)
+        任务._当前是英雄或研究详情 = Mock(return_value=False)
+        任务.是否出现图片 = Mock(return_value=(True, (480, 500)))
+        任务._OCR定位升级按钮 = Mock(return_value=(480, 500))
+        任务._升级确认按钮可用 = Mock(return_value=True)
+        任务._安全关闭当前建筑面板 = Mock(return_value=True)
+
+        self.assertFalse(任务.执行())
+        任务._升级确认按钮可用.assert_not_called()
+        任务._安全关闭当前建筑面板.assert_called_once_with()
+
+    def test_建筑升级确认点击被拒绝时不报告提交成功(self):
+        任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
+        点击 = Mock(side_effect=[True, False])
+        任务.上下文 = SimpleNamespace(
+            点击=点击,
+            置脚本状态=Mock(),
+        )
+        任务.要升级的建筑 = "测试建筑"
+        任务.相似度阈值 = 0.8
+        任务.安全跳过 = False
+        任务._当前已在升级中 = Mock(return_value=False)
+        任务._当前是英雄或研究详情 = Mock(return_value=False)
+        任务.是否出现图片 = Mock(return_value=(True, (480, 500)))
+        任务._OCR定位升级按钮 = Mock(return_value=(480, 500))
+        任务._升级确认按钮可用 = Mock(side_effect=[True])
+        任务._定位升级确认按钮 = Mock(return_value=(500, 500))
+        任务._安全关闭当前建筑面板 = Mock(return_value=True)
+
+        self.assertFalse(任务.执行())
+        任务._安全关闭当前建筑面板.assert_called_once_with()
 
     def test_英雄研究详情不会走普通建筑锤子模板(self):
         任务 = 升级普通建筑任务.__new__(升级普通建筑任务)

@@ -275,6 +275,37 @@ class 世界跳转测试(unittest.TestCase):
         任务.滑动屏幕.assert_not_called()
         self.assertTrue(any("连续点击后仍未转场" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
 
+    def test_世界入口点击被输入层拒绝时停止转场(self):
+        模块 = importlib.import_module("任务流程.世界跳转.进入世界基类")
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8))),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            点击=Mock(return_value=False),
+            页面恢复失败=False,
+        )
+        任务 = object.__new__(进入世界任务基类)
+        任务.上下文 = 上下文
+        任务.状态文本 = "夜世界"
+        任务.船模板路径 = "船.bmp"
+        任务.滑动配置 = SimpleNamespace(起点=(1, 1), 终点=(2, 2))
+        任务.是否在目标世界 = Mock(return_value=False)
+        任务.识别当前世界 = Mock(return_value=SimpleNamespace(当前世界="主世界"))
+        任务.查找世界入口 = Mock(return_value=(True, (188, 562), 0.85))
+        任务.滑动屏幕 = Mock()
+        任务._等待目标世界确认 = Mock()
+
+        原时间函数 = 模块.time.time
+        模块.time.time = lambda: 0.0
+        try:
+            self.assertFalse(任务.执行())
+        finally:
+            模块.time.time = 原时间函数
+
+        self.assertTrue(上下文.页面恢复失败)
+        任务._等待目标世界确认.assert_not_called()
+        任务.滑动屏幕.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
