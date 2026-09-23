@@ -42,6 +42,33 @@ class 建筑升级边界测试(unittest.TestCase):
             for 调用 in 任务.上下文.置脚本状态.call_args_list
         ))
 
+    def test_建议列表混入研究项目时建筑任务不点击研究卡片(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.查找模式 = 建筑查找模式.建议升级中的第一个可用建筑
+        任务.建筑列表 = []
+        任务.安全跳过 = False
+        任务.排除建筑名称 = set()
+        任务.上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+        )
+        任务.打开建筑页面 = Mock(return_value=True)
+        任务.执行OCR识别 = Mock(return_value=[
+            ([[0, 0], [80, 0], [80, 20], [0, 20]], "建議升級", 0.99),
+            ([[0, 40], [80, 40], [80, 60], [0, 60]], "復活法術", 0.90),
+            ([[0, 80], [80, 80], [80, 100], [0, 100]], "頭號殺手", 0.90),
+            ([[0, 120], [80, 120], [80, 140], [0, 140]], "其他升級", 0.99),
+        ])
+        任务.尝试选中指定建筑 = Mock(return_value=False)
+
+        self.assertFalse(任务.执行())
+        self.assertTrue(任务.安全跳过)
+        任务.尝试选中指定建筑.assert_not_called()
+        self.assertTrue(any(
+            "只有研究或非建筑项目" in 调用.args[0]
+            for 调用 in 任务.上下文.置脚本状态.call_args_list
+        ))
+
     def test_建筑扫描收到停止请求后不再OCR或滑动(self):
         任务 = 寻找建筑.__new__(寻找建筑)
         任务.建筑列表 = ["兵营"]
