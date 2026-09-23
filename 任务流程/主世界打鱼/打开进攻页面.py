@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 
 import cv2
@@ -21,6 +22,7 @@ class 打开进攻页面任务(基础任务):
 
     _参考宽度 = 800
     _参考高度 = 600
+    _军队容量检查间隔秒 = 2.0
 
     @staticmethod
     def _标记本场资源评分不可用(上下文: 任务上下文, 原因: str) -> None:
@@ -51,6 +53,10 @@ class 打开进攻页面任务(基础任务):
 
     def 执行(self) -> bool:
         上下文 = self.上下文
+        # 这个标志只代表“本轮入口已确认，但军队还在恢复”，由上层
+        # 主世界任务消费；每次新建入口任务前先清除，避免把上一轮状态
+        # 带入下一轮。
+        上下文._军队未满待机 = False
         上下文.置脚本状态("开始进攻,打开进攻页面")
         # 机器人可能在上一场战斗中被关闭或因 ADB 短暂异常重新启动。
         # 这时画面已经不是主世界，不能继续点击固定入口，否则一次
@@ -110,6 +116,113 @@ class 打开进攻页面任务(基础任务):
         # 落在面板空白处；现在交给下面的状态机动态识别“寻找战斗目标”，
         # 再进入军队配置页，不再发送第二个盲点。
         return self._等待并点击攻击按钮(上下文, 主世界入口已点击=True)
+
+    @classmethod
+    def _规范军队容量OCR文本(cls, 文本) -> str:
+        """规范容量 OCR 的斜杠和常见误识别字符。"""
+        文本 = str(文本 or "")
+        return (
+            文本.replace("／", "/")
+            .replace("\\", "/")
+            .replace("|", "/")
+            .replace("I", "1")
+            .replace("l", "1")
+            .replace("O", "0")
+            .replace("o", "0")
+        )
+
+    @classmethod
+    def _从军队容量OCR提取(cls, OCR结果) -> tuple[int, int] | None:
+        """从军队页顶部容量区域提取 ``当前/上限``。
+
+        只接受同一条 OCR 文本中的斜杠分数，避免把军队页其它的
+        ``11/11`` 法术或 ``3/3`` 攻城器状态当成主军队容量。
+        """
+        if isinstance(OCR结果, tuple):
+            OCR结果 = OCR结果[0]
+        候选文本 = []
+        for 项 in OCR结果 or []:
+            try:
+                文本 = cls._规范军队容量OCR文本(项[1])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if "/" in 文本:
+                候选文本.append(文本)
+        for 文本 in 候选文本:
+            匹配 = re.search(r"(?<!\d)(\d{1,4})\s*/\s*(\d{1,4})(?!\d)", 文本)
+            if not 匹配:
+                continue
+            当前, 上限 = (int(匹配.group(1)), int(匹配.group(2)))
+            if 上限 > 0 and 0 <= 当前 <= 上限:
+                return 当前, 上限
+        return None
+
+    def _检查军队容量(self, 上下文: 任务上下文, 屏幕图像: np.ndarray) -> bool:
+        """在攻击按钮前确认军队已恢复；无法 OCR 时安全放行。
+
+        训练中的军队不能进入下一场，否则会出现战斗页能打开但兵栏
+        没有可部署兵种、随后一直识别和空点的问题。容量检查只在攻击
+        按钮已被视觉识别后触发，并做 2 秒节流，避免增加 ADB/OCR 压力。
+        """
+        当前时间 = time.monotonic()
+        上次检查 = float(getattr(self, "_军队容量上次检查时间", 0.0) or 0.0)
+        最近状态 = getattr(self, "_最近军队容量状态", None)
+        if 当前时间 - 上次检查 < self._军队容量检查间隔秒:
+            return not (
+                isinstance(最近状态, tuple)
+                and 最近状态[0] < 最近状态[1]
+            )
+
+        self._军队容量上次检查时间 = 当前时间
+        try:
+            图像 = 屏幕图像
+            if 图像.shape[1] != self._参考宽度 or 图像.shape[0] != self._参考高度:
+                图像 = cv2.resize(
+                    图像,
+                    (self._参考宽度, self._参考高度),
+                    interpolation=cv2.INTER_AREA,
+                )
+            # 实机 800×600 中主军队容量位于约 x=360..435,y=130..150；
+            # 留出布局变化，但不包含左侧 2/4 或下方法术/攻城器计数。
+            区域 = 图像[105:175, 285:505]
+            获取OCR = getattr(上下文, "获取OCR引擎", None)
+            if not callable(获取OCR):
+                return True
+            OCR返回 = 获取OCR()(区域)
+            状态 = self._从军队容量OCR提取(OCR返回)
+        except Exception as 异常:
+            # OCR 属于增强证据，不得因为 native OCR 短暂异常阻断正常
+            # 战斗；训练未完成只有在明确读到 current/total 时才拦截。
+            上下文.置脚本状态(f"军队容量 OCR 暂时失败，跳过本次容量拦截：{异常}")
+            return True
+
+        if 状态 is None:
+            return True
+        self._最近军队容量状态 = 状态
+        当前, 上限 = 状态
+        if 当前 < 上限:
+            上下文._军队未满待机 = True
+            请求等待 = getattr(上下文, "请求任务计划等待", None)
+            if callable(请求等待):
+                请求等待(60, "军队容量未满")
+            else:
+                上下文.任务计划等待秒 = max(
+                    60.0, float(getattr(上下文, "任务计划等待秒", 0.0) or 0.0)
+                )
+                上下文._任务计划等待原因 = "军队容量未满"
+            上次记录 = getattr(self, "_上次军队容量日志", None)
+            if 上次记录 != 状态:
+                上下文.置脚本状态(
+                    f"军队容量未恢复：{当前}/{上限}，暂不点击攻击，等待训练完成"
+                )
+                self._上次军队容量日志 = 状态
+            return False
+
+        if getattr(self, "_上次军队容量日志", None) is not None:
+            上下文.置脚本状态(f"军队容量已恢复：{当前}/{上限}，允许进入战斗")
+            self._上次军队容量日志 = None
+        上下文._军队未满待机 = False
+        return True
 
     @staticmethod
     def _确认主世界主页(上下文) -> bool:
@@ -507,6 +620,9 @@ class 打开进攻页面任务(基础任务):
             if not 已点击:
                 攻击点 = self._检测攻击按钮(屏幕图像)
                 if 攻击点 is not None:
+                    if not self._检查军队容量(上下文, 屏幕图像):
+                        上下文.脚本延时(350)
+                        continue
                     上下文.置脚本状态(
                         f"识别到军队配置页攻击按钮，动态点击{攻击点[0]},{攻击点[1]}"
                     )
@@ -558,6 +674,11 @@ class 打开进攻页面任务(基础任务):
                 上次提示时间 = 当前时间
             上下文.脚本延时(350)
 
+        if getattr(上下文, "_军队未满待机", False):
+            上下文.置脚本状态(
+                "军队容量在等待窗口内仍未恢复，本轮跳过进攻；下一轮继续检查"
+            )
+            return True
         上下文.置脚本状态("进入进攻页面失败：45秒内未确认军队配置、搜索页或战斗页")
         return False
 

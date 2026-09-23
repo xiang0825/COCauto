@@ -47,6 +47,43 @@ class 打开进攻页面测试(unittest.TestCase):
         self.assertAlmostEqual(结果[0], 705, delta=3)
         self.assertAlmostEqual(结果[1], 535, delta=3)
 
+    def test_军队容量OCR只提取主军队容量(self):
+        OCR结果 = (
+            [
+                [None, "352/352", 0.99],
+                [None, "11/11", 0.99],
+                [None, "3/3", 0.99],
+            ],
+            [1.0, 1.0, 1.0],
+        )
+        self.assertEqual(
+            打开进攻页面任务._从军队容量OCR提取(OCR结果),
+            (352, 352),
+        )
+
+    def test_军队容量未满时阻止攻击并请求等待(self):
+        OCR引擎 = Mock(return_value=(
+            [[[0, 0], "120/352", 0.99]],
+            [1.0],
+        ))
+        上下文 = SimpleNamespace(
+            获取OCR引擎=Mock(return_value=OCR引擎),
+            请求任务计划等待=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        任务._军队容量上次检查时间 = 0.0
+
+        self.assertFalse(任务._检查军队容量(
+            上下文, np.zeros((600, 800, 3), dtype=np.uint8)
+        ))
+        self.assertTrue(上下文._军队未满待机)
+        上下文.请求任务计划等待.assert_called_once_with(60, "军队容量未满")
+        self.assertTrue(any(
+            "120/352" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
     def test_攻击选择面板动态识别寻找目标按钮(self):
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
         结果 = 任务._检测寻找目标按钮(self.攻击选择画面())
@@ -325,6 +362,50 @@ class 打开进攻页面测试(unittest.TestCase):
             "主世界打鱼任务出口未连续确认主世界，禁止开始下一轮",
             [调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list],
         )
+
+    def test_军队未满时主世界任务跳过搜索和下兵(self):
+        主世界打鱼模块 = importlib.import_module("任务流程.主世界打鱼.__init__")
+        执行顺序 = []
+
+        class 假入口任务:
+            def __init__(自身, _上下文):
+                pass
+
+            def 执行(自身):
+                执行顺序.append("入口")
+                上下文._军队未满待机 = True
+                return True
+
+        class 不应执行任务:
+            def __init__(自身, _上下文):
+                pass
+
+            def 执行(自身):
+                执行顺序.append("错误执行")
+                return True
+
+        上下文 = SimpleNamespace(
+            机器人标志="robot_1",
+            数据库=SimpleNamespace(),
+            置脚本状态=Mock(),
+            请求任务计划等待=Mock(),
+        )
+        with patch.object(
+            主世界打鱼模块, "打开进攻页面任务", 假入口任务
+        ), patch.object(
+            主世界打鱼模块, "搜索目标敌人任务", 不应执行任务
+        ), patch.object(
+            主世界打鱼模块, "进攻任务", 不应执行任务
+        ), patch.object(
+            主世界打鱼模块, "等待战斗结束并回营任务", 不应执行任务
+        ):
+            任务 = 主世界打鱼模块.主世界打鱼任务(上下文)
+            self.assertTrue(任务.执行())
+
+        self.assertEqual(执行顺序, ["入口"])
+        上下文.请求任务计划等待.assert_called_once_with(60, "军队容量未满")
+        # 保留给外层资源计划消费；外层处理后才会清除该标志。
+        self.assertTrue(getattr(上下文, "_军队未满待机", False))
 
     def test_繁体下一個按钮通过颜色和位置识别(self):
         画面 = np.zeros((600, 800, 3), dtype=np.uint8)

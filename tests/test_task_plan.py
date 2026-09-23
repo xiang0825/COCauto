@@ -70,6 +70,49 @@ class 任务计划测试(unittest.TestCase):
         self.assertEqual(更新资源.return_value.执行.call_count, 1)
         self.assertEqual(机器人._断线时恢复游戏连接.call_count, 3)
 
+    def test_军队未满时资源计划不进入战后处理(self):
+        """半满军队只请求冷却，不得伪装成一场已完成战斗。"""
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = threading.Event()
+        机器人.机器人标志 = "测试机器人"
+        状态 = SimpleNamespace(
+            状态数据={"家乡资源": {"金币": 1000000, "圣水": 1000000, "黑油": 10000}}
+        )
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            机器人标志="测试机器人",
+            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态)),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            请求任务计划等待=Mock(),
+            任务计划等待秒=5.0,
+        )
+        检测登录 = Mock()
+        with patch("线程.自动化机器人.收集资源任务") as 收集资源, \
+                patch("线程.自动化机器人.更新家乡资源状态任务") as 更新资源, \
+                patch("线程.自动化机器人.主世界打鱼任务") as 打鱼, \
+                patch("线程.自动化机器人.是否家乡资源打满", return_value=False):
+            收集资源.return_value.执行.return_value = True
+            更新资源.return_value.执行.return_value = True
+
+            def 模拟半满入口():
+                上下文._军队未满待机 = True
+                return True
+
+            打鱼.return_value.执行.side_effect = 模拟半满入口
+            机器人._进入并确认主世界 = Mock(return_value=True)
+            机器人._断线时恢复游戏连接 = Mock(side_effect=[True, True])
+
+            self.assertTrue(
+                机器人._执行主世界刷资源计划(上下文, 检测登录)
+            )
+
+        self.assertEqual(打鱼.return_value.执行.call_count, 1)
+        上下文.请求任务计划等待.assert_called_once_with(60, "军队容量未满")
+        self.assertFalse(getattr(上下文, "_军队未满待机", False))
+        self.assertEqual(更新资源.return_value.执行.call_count, 1)
+        self.assertFalse(上下文.页面恢复失败)
+
     def test_启动时已有战斗先回营再执行任务计划(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
         机器人.停止事件 = threading.Event()
