@@ -611,6 +611,36 @@ class 页面识别测试(unittest.TestCase):
         self.assertTrue(上下文.停止事件.is_set())
         self.assertTrue(any("恢复3次仍未消失" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
 
+    def test_登录确定按钮被拒绝时停止恢复不继续轮询(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=屏幕)),
+            数据库=Mock(),
+            机器人标志="robot_test",
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            点击已确认安全按钮=Mock(return_value=False),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
+
+        class 假引擎:
+            def 执行匹配(self, _图像, 模板路径, **_参数):
+                if "登录弹窗的确定" in 模板路径:
+                    return True, (320, 400), 0.95
+                return False, (0, 0), 0.0
+
+        with patch("任务流程.检测游戏登录状态.模板匹配引擎", return_value=假引擎()), \
+             patch("任务流程.检测游戏登录状态.页面识别器") as 页面识别器:
+            页面识别器.return_value.识别.return_value = SimpleNamespace(页面="未知")
+            任务._检测断线弹窗 = Mock(return_value=(False, (0, 0)))
+            self.assertFalse(任务.执行(首次登录=False))
+
+        self.assertTrue(上下文.页面恢复失败)
+        self.assertEqual(上下文.脚本延时.call_count, 1)
+        self.assertTrue(any("输入被拒绝" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
     def test_普通点击前后都会记录页面识别(self):
         屏幕 = self._读取截图("runtime_observation_after10s.png")
         if 屏幕 is None:
