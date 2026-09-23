@@ -25,6 +25,16 @@ class 刷墙识别测试(unittest.TestCase):
                 self.assertTrue(self.任务.文本是否城墙(文本))
         self.assertFalse(self.任务.文本是否城墙("防御塔"))
 
+    def test_实机OCR漏掉墙字仍能识别城墙标题(self):
+        self.assertTrue(self.任务.文本是否城墙("城（16级）"))
+        OCR结果 = [
+            ([[250, 416], [390, 416], [390, 443], [250, 443]], "城（16级）", 0.90),
+        ]
+        self.assertEqual(self.任务.解析城墙等级(OCR结果), 16)
+
+    def test_城堡标题不能因包含城字误认成城墙(self):
+        self.assertFalse(self.任务.文本是否城墙("部落城堡（10级）"))
+
     def test_候选墙段点位限制在地图搜索区域(self):
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         图像[:] = (50, 155, 45)
@@ -138,6 +148,18 @@ class 刷墙识别测试(unittest.TestCase):
             "安全取消选中面板" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
+
+    def test_已确认墙体面板继续扫描前先安全关闭避免重复旧面板(self):
+        上下文 = SimpleNamespace(
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+
+        self.assertTrue(self.任务._安全关闭已确认面板(上下文))
+        上下文.点击.assert_called_once_with(90, 80, 延时=220, 是否精确点击=True)
+        self.assertFalse(上下文.页面恢复失败)
 
     def test_断线重载按钮被输入层拒绝时停止扫描(self):
         上下文 = SimpleNamespace(

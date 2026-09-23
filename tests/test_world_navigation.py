@@ -224,6 +224,28 @@ class 世界跳转测试(unittest.TestCase):
         区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
         self.assertEqual(区域.shape[:2], (250, 350))
 
+    def test_夜世界返回主世界右上未命中时扫描备用地图区(self):
+        任务 = object.__new__(到主世界任务)
+        任务.船模板路径 = "船.bmp"
+        任务.模板识别 = Mock()
+        任务.模板识别.执行最佳匹配.side_effect = [
+            (0.61, (20, 30), "地图纹理.bmp"),
+            (0.86, (155, 351), "船.bmp"),
+        ]
+
+        命中, 坐标, 分数 = 任务.查找世界入口(
+            np.zeros((600, 800, 3), dtype=np.uint8)
+        )
+
+        self.assertTrue(命中)
+        self.assertEqual(坐标, (210, 457))
+        self.assertAlmostEqual(分数, 0.86)
+        self.assertEqual(任务.模板识别.执行最佳匹配.call_count, 2)
+        self.assertEqual(
+            任务.模板识别.执行最佳匹配.call_args_list[1].args[0].shape[:2],
+            (510, 680),
+        )
+
     def test_原始设备截图会先归一化再搜索右上入口(self):
         """1280×720 原图不能按 800×600 坐标直接裁剪。"""
         任务 = object.__new__(到主世界任务)
