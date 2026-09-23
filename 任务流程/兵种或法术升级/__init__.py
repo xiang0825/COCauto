@@ -60,8 +60,19 @@ class 兵种或法术升级任务(基础任务):
         冷却时间 = timedelta(hours=self.上下文.设置.研究升级检查间隔)
 
         if datetime.now() - 记录时间 < 冷却时间:
-            剩余分钟 = int((冷却时间 - (datetime.now() - 记录时间)).total_seconds() / 60)
+            剩余秒 = max(0.0, (冷却时间 - (datetime.now() - 记录时间)).total_seconds())
+            剩余分钟 = int(剩余秒 / 60)
             self.上下文.置脚本状态(f"研究升级：冷却中，{剩余分钟}分钟后再试")
+            请求等待 = getattr(self.上下文, "请求任务计划等待", None)
+            if callable(请求等待):
+                请求等待(剩余秒, "研究升级冷却")
+            else:
+                # 兼容单元测试和旧版上下文对象。
+                self.上下文.任务计划等待秒 = max(
+                    float(getattr(self.上下文, "任务计划等待秒", 0.0) or 0.0),
+                    min(3600.0, 剩余秒),
+                )
+                self.上下文._任务计划等待原因 = "研究升级冷却"
             return False
 
         return True
