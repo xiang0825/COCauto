@@ -1257,8 +1257,16 @@ class ADB设备操作类:
                 截图参数 = ["exec-out", "screencap"]
                 if self._是MuMu连接():
                     显示ID = self._获取MuMu截图显示ID()
-                    if 显示ID:
-                        截图参数.extend(["-d", 显示ID])
+                    # MuMu 可能同时存在启动器 display 0 和 CoC 游戏 display。
+                    # 解析不到游戏 display 时不能退回默认截图：默认层可能是
+                    # 模拟器桌面，后续页面识别会把桌面当成未知/过渡页，造成
+                    # 任务状态机误判。输入路径本来就会拒绝无 display 的操作，
+                    # 截图也必须同样 fail-closed，等待下一次在线复核。
+                    if not 显示ID:
+                        raise ADB错误(
+                            "未确认 CoC 所在的 MuMu 游戏显示层，已拒绝使用默认 display 截图"
+                        )
+                    截图参数.extend(["-d", 显示ID])
                 截图参数.append("-p")
                 原始PNG = self.执行(截图参数, timeout=15, binary=True)
                 if len(原始PNG) > 20 * 1024 * 1024:

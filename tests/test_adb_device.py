@@ -526,6 +526,20 @@ Input Reader State:
         self.assertEqual(裁剪.shape, (50, 50, 3))
         self.assertEqual(runner.命令[1][1:], ["-s", "emulator-5554", "exec-out", "screencap", "-p"])
 
+    def test_MuMu未确认游戏显示层时拒绝退回启动器截图(self):
+        设备 = ADB设备操作类(
+            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            "127.0.0.1:16416",
+            runner=假Runner(),
+            自动检测路径=False,
+        )
+        设备._截图重试上限 = 1
+        with patch.object(ADB设备操作类, "_验证目标"), \
+                patch.object(设备, "_获取MuMu截图显示ID", return_value=None), \
+                patch.object(设备, "_检查主机内存预算"):
+            with self.assertRaisesRegex(ADB错误, "未确认 CoC 所在的 MuMu 游戏显示层"):
+                设备.获取屏幕图像cv()
+
     def test_screencap完整截图哨兵不会裁剪超宽设备(self):
         图像 = np.zeros((1200, 2200, 3), dtype=np.uint8)
         编码成功, 编码 = cv2.imencode(".png", 图像)
