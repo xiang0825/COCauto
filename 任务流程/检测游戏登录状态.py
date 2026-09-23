@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 
 from 任务流程.基础任务框架 import 基础任务, 任务上下文
+from 模块.检测.OCR识别器 import 安全OCR引擎
 from 模块.检测.模板匹配器 import 模板匹配引擎
 from 模块.检测.页面识别器 import 页面识别器
 
@@ -18,6 +19,38 @@ class 检测游戏登录状态任务(基础任务):
         self.第一次检测游戏登录=True
         self._断线弹窗恢复次数 = 0
         self._前台状态已记录 = False
+        self._启动时战斗OCR = None
+
+    def _识别启动时战斗阶段(self, 屏幕图像: np.ndarray) -> bool | None:
+        """识别启动时战斗顶部是“开始”倒计时还是“结束”倒计时。
+
+        CoC 在战斗预备阶段和已开始战斗阶段都会同时显示红色放弃按钮、
+        兵栏和顶部倒计时。页面识别器只能安全地判定“这是战斗页”，无法
+        仅靠几何特征区分两个阶段。这里只在启动接管这一帧使用顶部小区域
+        OCR：明确读到“开始/開始”返回 False，明确读到“结束/結束”返回
+        True；OCR 失败返回 None，由调用方保守地只等待回营。
+        """
+        if not isinstance(屏幕图像, np.ndarray) or 屏幕图像.size == 0:
+            return None
+        try:
+            高度, 宽度 = 屏幕图像.shape[:2]
+            顶部 = 屏幕图像[:max(100, int(高度 * 0.30)), :]
+            if 宽度 != 800 or 高度 != 600:
+                顶部 = cv2.resize(顶部, (800, 180), interpolation=cv2.INTER_AREA)
+            if self._启动时战斗OCR is None:
+                self._启动时战斗OCR = 安全OCR引擎()
+            结果, _ = self._启动时战斗OCR(顶部, use_cls=False)
+            文本 = "".join(
+                str(项[1]) for 项 in (结果 or [])
+                if isinstance(项, (list, tuple)) and len(项) > 1
+            )
+            if "開始" in 文本 or "开始" in 文本:
+                return False
+            if "結束" in 文本 or "结束" in 文本:
+                return True
+        except Exception:
+            return None
+        return None
 
     def _启动阶段处理结算页(
         self,
@@ -309,9 +342,20 @@ class 检测游戏登录状态任务(基础任务):
             if 当前页面.页面 == "战斗中":
                 上下文._启动时已有战斗 = True
                 上下文._启动时战斗页面 = "战斗中"
-                上下文.置脚本状态(
-                    "启动时已确认仍在战斗页；跳过首次拉远视距，交给战斗回营流程"
-                )
+                战斗已开始 = self._识别启动时战斗阶段(屏幕图像)
+                上下文._启动时战斗需要部署 = 战斗已开始 is False
+                if 战斗已开始 is False:
+                    上下文.置脚本状态(
+                        "启动时识别到战斗开始倒计时；跳过首次拉远视距，接管本场下兵流程"
+                    )
+                elif 战斗已开始 is True:
+                    上下文.置脚本状态(
+                        "启动时识别到战斗已开始；跳过首次拉远视距，交给战斗回营流程"
+                    )
+                else:
+                    上下文.置脚本状态(
+                        "启动时战斗阶段文字未确认；跳过首次拉远视距，保守等待战斗回营"
+                    )
                 break
 
             # 检查是否需重新载入

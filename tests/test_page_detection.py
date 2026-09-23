@@ -52,6 +52,28 @@ class 页面识别测试(unittest.TestCase):
         self.assertFalse(上下文.停止事件.is_set())
         self.assertTrue(any("军队配置页" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list))
 
+    def test_启动时战斗阶段明确为开始时要求接管下兵(self):
+        任务 = 检测游戏登录状态任务(
+            SimpleNamespace(数据库=Mock(), 机器人标志="robot_test")
+        )
+        任务._启动时战斗OCR = Mock(return_value=(
+            [([[350, 10], [430, 10], [430, 30], [350, 30]], "離戰鬥開始剩下", 0.95)],
+            None,
+        ))
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        self.assertFalse(任务._识别启动时战斗阶段(屏幕))
+
+    def test_启动时战斗阶段明确为结束时只等待回营(self):
+        任务 = 检测游戏登录状态任务(
+            SimpleNamespace(数据库=Mock(), 机器人标志="robot_test")
+        )
+        任务._启动时战斗OCR = Mock(return_value=(
+            [([[350, 10], [430, 10], [430, 30], [350, 30]], "離戰鬥結束剩下", 0.95)],
+            None,
+        ))
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        self.assertTrue(任务._识别启动时战斗阶段(屏幕))
+
     def test_实机战斗截图识别为战斗中(self):
         图像 = self._读取截图("runtime_world_after_fix.png")
         if 图像 is None:

@@ -91,6 +91,26 @@ class 任务计划测试(unittest.TestCase):
         self.assertTrue(any("允许继续执行任务计划" in 调用.args[0]
                             for 调用 in 上下文.置脚本状态.call_args_list))
 
+    def test_启动时战斗开始倒计时会先接管下兵再回营(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = threading.Event()
+        上下文 = SimpleNamespace(
+            _启动时已有战斗=True,
+            _启动时战斗需要部署=True,
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+        )
+        检测登录 = Mock()
+        检测登录.执行.return_value = True
+        with patch("任务流程.主世界打鱼.进攻.进攻任务") as 进攻, \
+                patch("任务流程.主世界打鱼.等待战斗结束并回营.等待战斗结束并回营任务") as 战斗任务:
+            进攻.return_value.执行.return_value = True
+            战斗任务.return_value.执行.return_value = True
+            self.assertTrue(机器人._接管启动时战斗(上下文, 检测登录))
+
+        进攻.return_value.执行.assert_called_once_with()
+        战斗任务.return_value.执行.assert_called_once_with()
+
     def test_计划状态来自机器人配置(self):
         设置 = 机器人设置(
             是否刷主世界=True,
