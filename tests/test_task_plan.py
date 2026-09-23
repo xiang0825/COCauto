@@ -615,6 +615,27 @@ class 任务计划测试(unittest.TestCase):
         键盘.按字符按压.assert_not_called()
         self.assertFalse(上下文.页面恢复失败)
 
+    def test_世界转场后页级主页确认会跳过ESC(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        键盘 = Mock()
+        页面结果 = [
+            SimpleNamespace(页面="未知", 世界="未知", 可信度=0.0),
+            SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.78),
+        ]
+        上下文 = SimpleNamespace(
+            键盘=键盘,
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=object())),
+            识别点击画面=Mock(side_effect=页面结果),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        with patch("线程.自动化机器人.模板匹配引擎") as 引擎工厂:
+            引擎工厂.return_value.执行匹配.return_value = (False, (0, 0), None)
+            self.assertTrue(机器人._确保主世界主页面(上下文))
+
+        键盘.按字符按压.assert_not_called()
+        self.assertFalse(上下文.页面恢复失败)
+
     def test_主世界主页确认失败时禁止继续(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
         键盘 = Mock()

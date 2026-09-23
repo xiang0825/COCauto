@@ -4,7 +4,8 @@ import os
 import sqlite3
 import sys
 import time
-from dataclasses import dataclass, field
+from contextlib import contextmanager
+from dataclasses import dataclass, field, fields
 from typing import List, Dict, Any, Optional
 
 @dataclass
@@ -422,6 +423,23 @@ class 任务数据库:
     """集成化数据库管理"""
 
     @staticmethod
+    def _规范化机器人设置JSON(设置JSON: dict) -> dict:
+        """把历史/临时配置清洗成当前 ``机器人设置`` 可接受的字段。
+
+        旧版本曾使用 ``是否刷墙``，当前字段已经统一为 ``开启刷墙``。
+        另外，UI 或维护脚本给 dataclass 实例动态挂载的临时属性不应被
+        序列化，否则下一次启动会在 dataclass 构造阶段抛出
+        ``unexpected keyword argument``，表现为“保存配置后机器人无法启动”。
+        """
+        if not isinstance(设置JSON, dict):
+            return {}
+        当前字段 = {项.name for 项 in fields(机器人设置)}
+        规范化 = {键: 值 for 键, 值 in 设置JSON.items() if 键 in 当前字段}
+        if "是否刷墙" in 设置JSON:
+            规范化["开启刷墙"] = bool(设置JSON["是否刷墙"])
+        return 规范化
+
+    @staticmethod
     def 默认数据库路径():
         # 维护和受控实测需要让源码入口、GUI 与已发布 EXE 共用同一份
         # 正式数据库。旧实现只在 frozen 模式读取环境变量，源码入口设置
@@ -446,20 +464,24 @@ class 任务数据库:
         self._初始化表结构()
         self._执行数据迁移()
 
+    @contextmanager
     def _获取连接(self):
-        """获取线程安全连接"""
+        """获取线程安全连接，并在每次数据库操作结束后关闭它。"""
         conn = sqlite3.connect(
             self.文件路径,
             check_same_thread=False,
             timeout=15
         )
-        conn.execute("PRAGMA journal_mode=WAL")
-        # 日志是高频读写路径；固定 checkpoint 和 NORMAL 同步模式，
-        # 避免 WAL 在长期运行/异常断线时无限膨胀，同时降低每条日志
-        # 都打开连接所产生的磁盘同步压力。
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA wal_autocheckpoint=1000")
-        return conn
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            # 日志是高频读写路径；固定 checkpoint 和 NORMAL 同步模式，
+            # 避免 WAL 在长期运行/异常断线时无限膨胀，同时降低每条日志
+            # 都打开连接所产生的磁盘同步压力。
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA wal_autocheckpoint=1000")
+            yield conn
+        finally:
+            conn.close()
 
     def _初始化表结构(self):
         """初始化所有数据库表"""
@@ -594,10 +616,11 @@ class 任务数据库:
     # ==== 设置管理 ====
     def 保存机器人设置(self, 机器人标志: str, 设置: 机器人设置):
         """保存用户配置"""
+        设置JSON = self._规范化机器人设置JSON(dict(getattr(设置, "__dict__", {})))
         with self._获取连接() as conn:
             conn.execute(
                 "INSERT INTO 机器人设置 VALUES (?, ?) ON CONFLICT DO UPDATE SET 设置JSON=excluded.设置JSON",
-                (机器人标志, json.dumps(设置.__dict__))
+                (机器人标志, json.dumps(设置JSON))
             )
             conn.commit()
 
@@ -608,7 +631,10 @@ class 任务数据库:
                 "SELECT 设置JSON FROM 机器人设置 WHERE 机器人标志 = ?",
                 (机器人标志,)
             ).fetchone()
-        return 机器人设置(**json.loads(结果[0])) if 结果 else 机器人设置()
+        if not 结果:
+            return 机器人设置()
+        原始设置 = json.loads(结果[0])
+        return 机器人设置(**self._规范化机器人设置JSON(原始设置))
 
     def 查询所有机器人设置(self) -> Dict[str, 机器人设置]:
         """获取数据库中所有机器人的设置"""
@@ -616,7 +642,9 @@ class 任务数据库:
         with self._获取连接() as conn:
             结果列表 = conn.execute("SELECT 机器人标志, 设置JSON FROM 机器人设置").fetchall()
             for 机器人标志, 设置JSON in 结果列表:
-                所有设置[机器人标志] = 机器人设置(**json.loads(设置JSON))
+                所有设置[机器人标志] = 机器人设置(
+                    **self._规范化机器人设置JSON(json.loads(设置JSON))
+                )
         return 所有设置
 
     def 删除机器人设置(self, 机器人标志: str):
