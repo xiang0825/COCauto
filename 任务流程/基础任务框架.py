@@ -406,7 +406,11 @@ class 任务上下文:
         # 升级完成弹窗会持续显示，不需要高频 OCR。5 秒一帧可以明显
         # 降低 RapidOCR native session 和 ADB screencap 的长期提交内存，
         # 同时保留两帧确认，避免误点。
-        if 当前时间 - 上次检查 < 5.0:
+        # 任务计划进入小时级冷却时，页面已经在本轮末尾确认过，
+        # 不需要每 5 秒启动一次 ADB screencap/OCR。仍保留低频检查，
+        # 这样升级完成弹窗不会被永久漏掉，同时显著降低长期运行压力。
+        检查间隔 = self._升级完成弹窗检查间隔()
+        if 当前时间 - 上次检查 < 检查间隔:
             return False
         self._升级完成弹窗检查时间 = 当前时间
         self._升级完成弹窗检查中 = True
@@ -459,6 +463,10 @@ class 任务上下文:
             return False
         finally:
             self._升级完成弹窗检查中 = False
+
+    def _升级完成弹窗检查间隔(self) -> float:
+        """返回升级完成弹窗的维护检查间隔（秒）。"""
+        return 30.0 if bool(getattr(self, "_任务计划长时间等待", False)) else 5.0
 
     def 处理战斗星级奖励弹窗(self, 强制=True) -> bool:
         """安全确认夜世界战斗后的“胜利之星奖励”弹窗。

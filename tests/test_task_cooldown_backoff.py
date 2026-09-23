@@ -3,9 +3,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from 任务流程.基础任务框架 import 任务上下文
 from 任务流程.兵种或法术升级 import 兵种或法术升级任务
 from 任务流程.战宠升级 import 战宠升级任务
+from 任务流程.基础任务框架 import 任务上下文
 
 
 class 任务计划冷却退避测试(unittest.TestCase):
@@ -65,6 +65,16 @@ class 任务计划冷却退避测试(unittest.TestCase):
 
         self.assertEqual(上下文.任务计划等待秒, 3600)
         self.assertEqual(上下文._任务计划等待原因, "错误配置")
+
+    def test_长时间任务计划等待降低升级弹窗维护频率(self):
+        任务 = 任务上下文.__new__(任务上下文)
+        任务._升级完成弹窗检查时间 = time.monotonic()
+        任务._任务计划长时间等待 = True
+
+        # 直接验证维护频率判定，不启动 OCR/ADB。
+        self.assertEqual(任务._升级完成弹窗检查间隔(), 30.0)
+        任务._任务计划长时间等待 = False
+        self.assertEqual(任务._升级完成弹窗检查间隔(), 5.0)
 
 
 if __name__ == "__main__":
