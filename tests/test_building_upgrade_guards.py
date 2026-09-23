@@ -104,6 +104,49 @@ class 建筑升级边界测试(unittest.TestCase):
             ],
         )
 
+    def test_英雄目标首次可见时先OCR不做回顶部滑动(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.上下文 = SimpleNamespace(
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务.执行OCR识别 = Mock(return_value=[
+            ([[10, 10], [80, 10], [80, 30], [10, 30]], "弓箭女皇", 0.99),
+        ])
+        任务._英雄殿堂已打开 = Mock(return_value=True)
+        任务._尝试选中指定英雄 = Mock(return_value=True)
+        任务._重置英雄殿堂滚动位置 = Mock()
+
+        self.assertTrue(任务._寻找指定英雄(["弓箭女皇"]))
+        任务._重置英雄殿堂滚动位置.assert_not_called()
+        任务._尝试选中指定英雄.assert_called_once()
+
+    def test_英雄入口未打开时精确重试且禁止地图滑动(self):
+        点击 = Mock(return_value=True)
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.上下文 = SimpleNamespace(
+            点击=点击,
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+        任务._英雄殿堂已打开 = Mock(side_effect=[False, False])
+        任务._重置英雄殿堂滚动位置 = Mock()
+        任务._滑动英雄殿堂 = Mock()
+
+        self.assertFalse(任务._寻找指定英雄(["弓箭女皇"]))
+        self.assertTrue(任务.上下文.页面恢复失败)
+        self.assertEqual(
+            点击.call_args_list,
+            [
+                unittest.mock.call(356, 33, 延时=1000),
+                unittest.mock.call(356, 33, 延时=700, 是否精确点击=True),
+            ],
+        )
+        任务._重置英雄殿堂滚动位置.assert_not_called()
+        任务._滑动英雄殿堂.assert_not_called()
+
     def test_关闭建筑页面被拒绝时标记页面恢复失败(self):
         任务 = 寻找建筑.__new__(寻找建筑)
         任务.上下文 = SimpleNamespace(

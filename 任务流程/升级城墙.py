@@ -754,17 +754,30 @@ class 城墙升级任务(基础任务):
         # 兼容常见灰黑墙体和金色墙顶；只用于排序，不直接判定墙。
         金色掩码 = cv2.inRange(
             hsv图像,
-            np.array([8, 75, 75], dtype=np.uint8),
-            np.array([40, 255, 255], dtype=np.uint8),
+            # 绿色草地在 HSV 中也接近 40°；收窄色相并提高饱和度，
+            # 避免整片地图被当作“金色墙顶”。
+            np.array([8, 90, 80], dtype=np.uint8),
+            np.array([35, 255, 255], dtype=np.uint8),
         )
         灰色掩码 = cv2.inRange(
             hsv图像,
             np.array([0, 0, 28], dtype=np.uint8),
             np.array([179, 145, 205], dtype=np.uint8),
         )
+        # 高等级城墙在国际服常见蓝紫色/青色外沿，不能只靠旧的
+        # 金色/灰色掩码，否则 Hough 会更偏向建筑和资源图标的边缘。
+        蓝紫色掩码 = cv2.inRange(
+            hsv图像,
+            np.array([88, 55, 42], dtype=np.uint8),
+            np.array([179, 255, 235], dtype=np.uint8),
+        )
         灰度 = cv2.cvtColor(裁剪, cv2.COLOR_BGR2GRAY)
         边缘 = cv2.Canny(灰度, 60, 170)
         线性掩码 = cv2.bitwise_or(边缘, 金色掩码)
+        线性掩码 = cv2.bitwise_or(
+            线性掩码,
+            cv2.Canny(蓝紫色掩码, 40, 120),
+        )
         线性掩码 = cv2.morphologyEx(
             线性掩码,
             cv2.MORPH_CLOSE,
@@ -778,6 +791,22 @@ class 城墙升级任务(基础任务):
             minLineLength=16,
             maxLineGap=5,
         )
+        # 蓝紫墙沿在建筑遮挡下通常只有短而断续的边缘；单独用较低
+        # 阈值再跑一次颜色边缘 Hough，随后仍统一按距离去重和 OCR
+        # 确认，避免把短墙段直接丢在综合线段阈值之外。
+        彩色线段列表 = cv2.HoughLinesP(
+            cv2.Canny(蓝紫色掩码, 40, 120),
+            1,
+            np.pi / 180,
+            threshold=8,
+            minLineLength=18,
+            maxLineGap=8,
+        )
+        if 彩色线段列表 is not None:
+            if 线段列表 is None:
+                线段列表 = 彩色线段列表
+            else:
+                线段列表 = np.concatenate((线段列表, 彩色线段列表), axis=0)
         候选评分 = []
         if 线段列表 is not None:
             for 线段 in 线段列表[:, 0]:
@@ -787,7 +816,10 @@ class 城墙升级任务(基础任务):
                 # 等距视角下的墙线通常是斜线；过滤水平文字和竖直 UI。
                 if 长度 < 16 or not (18 <= 角度 <= 72 or 108 <= 角度 <= 162):
                     continue
-                for 比例 in (0.30, 0.50, 0.70):
+                # 墙段经常被建筑或树木遮住，线段两端附近比中点更容易
+                # 落在可点击的墙块上；增加采样位置，但仍由后续 OCR
+                # 确认，不能直接把边缘当成墙。
+                for 比例 in (0.20, 0.35, 0.50, 0.65, 0.80):
                     x = round(x1 + (x2 - x1) * 比例) + 区域左
                     y = round(y1 + (y2 - y1) * 比例) + 区域上
                     半径 = 6
@@ -799,21 +831,67 @@ class 城墙升级任务(基础任务):
                         max(0, y - 区域上 - 半径):min(区域下 - 区域上, y - 区域上 + 半径 + 1),
                         max(0, x - 区域左 - 半径):min(区域右 - 区域左, x - 区域左 + 半径 + 1),
                     ]
+                    局部蓝紫色 = 蓝紫色掩码[
+                        max(0, y - 区域上 - 半径):min(区域下 - 区域上, y - 区域上 + 半径 + 1),
+                        max(0, x - 区域左 - 半径):min(区域右 - 区域左, x - 区域左 + 半径 + 1),
+                    ]
                     金色比例 = float(np.count_nonzero(局部金色)) / max(1, 局部金色.size)
                     灰色比例 = float(np.count_nonzero(局部灰色)) / max(1, 局部灰色.size)
-                    评分 = 长度 * 0.45 + 金色比例 * 80 + 灰色比例 * 22
+                    蓝紫色比例 = float(np.count_nonzero(局部蓝紫色)) / max(1, 局部蓝紫色.size)
+                    # 降低长度权重，避免长建筑边缘长期霸占前 12 个点；
+                    # 墙顶的颜色/纹理证据优先，同时保留足够长的线段。
+                    评分 = (
+                        长度 * 0.32
+                        + 金色比例 * 100
+                        + 灰色比例 * 30
+                        # 当前国际服高等级城墙的蓝紫外沿是最有区分度的
+                        # 证据，权重高于建筑长度和泛金色装饰。
+                        + 蓝紫色比例 * 180
+                    )
                     候选评分.append((评分, x, y))
 
         候选评分.sort(reverse=True)
         结果 = []
-        for _, x, y in 候选评分:
+        # 仅按分数取前 12 个点时，候选可能全部集中在一个建筑边缘，
+        # 导致真实墙段所在区域完全没有机会被点击。第一遍按 3×3
+        # 空间网格取每格最佳点，第二遍再按分数补齐，特意保留 3 个
+        # 名额给同一网格内相邻的墙段，既控制 OCR 次数，又避免真实墙
+        # 与建筑边缘落在同一格时被唯一候选遮掉；最终仍必须经过城墙
+        # OCR 安全确认。
+        网格列数, 网格行数 = 3, 3
+        已覆盖网格 = set()
+        区域宽度 = max(1, 区域右 - 区域左)
+        区域高度 = max(1, 区域下 - 区域上)
+
+        def 添加候选(x, y, 网格键=None):
             if not (区域左 <= x < 区域右 and 区域上 <= y < 区域下):
-                continue
+                return False
             if any((x - 旧x) ** 2 + (y - 旧y) ** 2 < 16 ** 2 for 旧x, 旧y in 结果):
-                continue
+                return False
             结果.append((x, y))
-            if len(结果) >= self.墙体搜索每轮最大候选数:
+            if 网格键 is not None:
+                已覆盖网格.add(网格键)
+            return True
+
+        for _, x, y in 候选评分:
+            网格x = min(
+                网格列数 - 1,
+                max(0, int((x - 区域左) * 网格列数 / 区域宽度)),
+            )
+            网格y = min(
+                网格行数 - 1,
+                max(0, int((y - 区域上) * 网格行数 / 区域高度)),
+            )
+            网格键 = (网格x, 网格y)
+            if 网格键 in 已覆盖网格:
+                continue
+            if 添加候选(x, y, 网格键) and len(结果) >= self.墙体搜索每轮最大候选数:
                 break
+
+        if len(结果) < self.墙体搜索每轮最大候选数:
+            for _, x, y in 候选评分:
+                if 添加候选(x, y) and len(结果) >= self.墙体搜索每轮最大候选数:
+                    break
 
         # 低画质/缩放状态下 Hough 可能没有稳定直线，改用角点作为保底；
         # 这些点仍然必须经过点击后的“城墙” OCR 确认，不会直接升级。

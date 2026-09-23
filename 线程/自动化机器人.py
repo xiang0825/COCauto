@@ -910,7 +910,12 @@ class 自动化机器人:
         运行鼠标._安全点击检查回调 = 上下文.输入前安全检查
         # 上下文.置脚本状态("开始执行",1000)
         上下文.继续事件.set()
-        print("本次运行时的设置为"+self.设置.__str__())
+        # 双击源码入口或从未配置 UTF-8 的控制台启动时，stdout 可能仍是
+        # cp1252。设置内容包含中文，不能让辅助日志的编码异常杀死任务线程。
+        try:
+            print("本次运行时的设置为" + self.设置.__str__())
+        except (UnicodeEncodeError, OSError, ValueError):
+            pass
 
         try:
 
