@@ -1003,6 +1003,17 @@ class 任务上下文:
         结果 = getattr(self, "_最近点击页面结果", None)
         if 结果 is None:
             结果 = self.识别点击画面()
+        # 官方 Google Play 评分提示会在战斗回营后覆盖主世界。它不是
+        # 宝石/商店页，旧护栏会把它当成未知主世界并把下一次任务点击
+        # 送到弹窗按钮。只有轻量页面识别结果为“未知”时才启动低频 OCR，
+        # 避免把每一次普通输入都变成一次完整 OCR 推理。只允许自动点击
+        # “稍后/稍後”，不点击“评论”或“不再显示”，且完成后阻断当前输入。
+        if (
+            结果 is not None
+            and 结果.页面 == "未知"
+            and self.清理官方评分弹窗()
+        ):
+            return True
         if self._系统维护页阻断输入(结果):
             return True
         if 结果 is not None and 结果.页面 == "战斗星级奖励":
@@ -1048,6 +1059,83 @@ class 任务上下文:
                 self._结算点击已拦截日志 = True
             return True
         return False
+
+    @staticmethod
+    def _定位官方评分弹窗稍后按钮(OCR结果) -> tuple[int, int] | None:
+        """从官方评分弹窗 OCR 中定位安全的“稍后/稍後”按钮。"""
+        项目 = [
+            项 for 项 in (OCR结果 or [])
+            if isinstance(项, (list, tuple)) and len(项) > 1
+        ]
+        全部文本 = "".join(
+            str(项[1]).replace(" ", "").replace("\n", "")
+            for 项 in 项目
+        )
+        # OCR 会把《部落冲突》中的“冲/衝”以及“评分/評分”截断或误读。
+        # 评分弹窗仍要求“部落 + GooglePlay + 稍后/稍後”三项组合证据，
+        # 不依赖完整标题，避免原图分辨率下因少一个“评”字而漏掉弹窗。
+        if "部落" not in 全部文本 or "GooglePlay" not in 全部文本:
+            return None
+        for 项 in 项目:
+            文本 = str(项[1]).replace(" ", "").replace("\n", "")
+            if "稍后" not in 文本 and "稍後" not in 文本:
+                continue
+            try:
+                框 = [
+                    (float(点[0]), float(点[1]))
+                    for 点 in 项[0]
+                ]
+                if len(框) < 2:
+                    continue
+                x = int(round(sum(点[0] for 点 in 框) / len(框)))
+                y = int(round(sum(点[1] for 点 in 框) / len(框)))
+                # 评分按钮位于弹窗下半部；这是安全范围校验，不是固定
+                # 点击坐标，实际输入使用 OCR 框中心并通过安全点击入口。
+                if y >= 300:
+                    return x, y
+            except (TypeError, ValueError, IndexError):
+                continue
+        return None
+
+    def 清理官方评分弹窗(self, 屏幕图像=None) -> bool:
+        """安全关闭官方评分提示，只允许点击“稍后/稍後”。"""
+        if bool(getattr(self, "_战斗中", False)):
+            return False
+        if getattr(self, "_内存保护已触发", False):
+            return False
+        try:
+            # 评分提示只会在回营/主页低频出现；限制 OCR 频率，避免把
+            # 资源/城墙任务的每一次普通点击变成一次完整 OCR 推理。
+            当前时间 = time.monotonic()
+            上次检查 = float(getattr(self, "_评分弹窗上次检查时间", 0.0))
+            if 当前时间 - 上次检查 < 2.0 and 屏幕图像 is None:
+                return False
+            self._评分弹窗上次检查时间 = 当前时间
+            if 屏幕图像 is None:
+                try:
+                    屏幕图像 = self.op.获取屏幕图像cv(
+                        0, 0, 800, 600, 强制刷新=True
+                    )
+                except TypeError:
+                    屏幕图像 = self.op.获取屏幕图像cv(0, 0, 800, 600)
+            OCR结果, _ = self.获取OCR引擎()(屏幕图像)
+            坐标 = self._定位官方评分弹窗稍后按钮(OCR结果)
+            if 坐标 is None:
+                return False
+            self.置脚本状态(
+                f"检测到官方评分提示，安全点击稍后/稍後：{坐标[0]},{坐标[1]}；"
+                "禁止点击评论和不再显示"
+            )
+            if not self.点击已确认安全按钮(坐标[0], 坐标[1], 延时=350):
+                self.置脚本状态("官方评分提示稍后按钮输入被拒绝，保持当前画面")
+                return False
+            self._点击识别截图 = None
+            self._点击识别截图时间 = 0.0
+            return True
+        except Exception as 异常:
+            if self.是否内存异常(异常):
+                self.触发内存保护("官方评分提示", 异常)
+            return False
 
     def 检查宝石商店危险页面(self, 强制: bool = False) -> bool:
         """识别宝石/商店弹窗，ESC 退出后恢复任务，不允许点宝石。

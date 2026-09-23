@@ -22,8 +22,37 @@ class 等待回营或第二次战斗(夜世界基础任务):
             开始时间 = time.time()
 
             while time.time() - 开始时间 < 超时时间:
+                页面结果, 有页面识别 = self._读取页面状态()
+                页面 = str(getattr(页面结果, "页面", "") or "")
 
-                if self.是否出现换兵种箭头():
+                # 结算后的星级奖励遮罩可能先于回营页渲染。它不是第二
+                # 场战斗证据，先安全确认并重新读取页面，避免旧兵种箭头
+                # 模板透过遮罩误触发第二次下兵。
+                if 页面 == "战斗星级奖励":
+                    self.上下文._战斗中 = False
+                    处理奖励 = getattr(
+                        self.上下文, "处理战斗星级奖励弹窗", None
+                    )
+                    if callable(处理奖励):
+                        处理奖励()
+                    self.上下文.置脚本状态(
+                        "夜世界回营阶段识别到星级奖励过渡，已阻止第二场下兵"
+                    )
+                    self.上下文.脚本延时(350)
+                    continue
+
+                if 页面 in {"断线弹窗", "系统维护"}:
+                    self.上下文.页面恢复失败 = True
+                    self.上下文.置脚本状态(
+                        f"夜世界回营阶段识别到{页面}，禁止开始第二场战斗"
+                    )
+                    return False
+
+                if (
+                    页面 == "战斗中" and self.是否出现换兵种箭头()
+                ) or (
+                    not 有页面识别 and self.是否出现换兵种箭头()
+                ):
 
                     if hasattr(self.上下文, '英雄技能标志'):
                         self.上下文.英雄技能标志.set()
@@ -53,6 +82,16 @@ class 等待回营或第二次战斗(夜世界基础任务):
                 self.上下文.英雄技能标志.set()
                 try: delattr(self.上下文, '英雄技能标志')
                 except: pass
+
+    def _读取页面状态(self):
+        """返回页面识别结果和“是否有真实页面识别器”标志。"""
+        识别 = getattr(self.上下文, "识别点击画面", None)
+        if not callable(识别):
+            return None, False
+        try:
+            return 识别(), True
+        except Exception:
+            return None, True
 
     def 是否出现换兵种箭头(self):
         """验证是否已开始战斗"""

@@ -11,6 +11,7 @@ from 线程.自动化机器人 import 自动化机器人
 from 工具包.工具函数 import 是否夜世界资源打满
 from 任务流程.夜世界.更新夜世界账号资源状态 import 更新夜世界资源状态任务
 from 任务流程.夜世界.夜世界打鱼.下兵 import 下兵
+from 任务流程.夜世界.夜世界打鱼.等待进入战斗 import 等待进入战斗
 from 任务流程.夜世界.夜世界打鱼.等待回营或第二场战斗 import 等待回营或第二次战斗
 from 任务流程.兵种或法术升级 import 兵种或法术升级任务
 from 任务流程.战宠升级 import 战宠升级任务
@@ -252,6 +253,55 @@ class 任务计划测试(unittest.TestCase):
         self.assertTrue(上下文.页面恢复失败)
         任务.执行下兵操作.assert_called_once()
 
+    def test_夜世界星级奖励过渡不会被当成战斗开始(self):
+        任务 = 等待进入战斗.__new__(等待进入战斗)
+        页面序列 = iter([
+            SimpleNamespace(页面="战斗星级奖励"),
+            SimpleNamespace(页面="战斗中"),
+        ])
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            _战斗中=False,
+            识别点击画面=Mock(side_effect=lambda: next(页面序列)),
+            处理战斗星级奖励弹窗=Mock(return_value=True),
+            点击=Mock(return_value=True),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            停止事件=threading.Event(),
+        )
+        任务.上下文 = 上下文
+
+        self.assertTrue(任务.执行())
+        上下文.处理战斗星级奖励弹窗.assert_called_once_with()
+        self.assertTrue(上下文._战斗中)
+        上下文.点击.assert_called_once_with(
+            150, 520, 是否精确点击=True
+        )
+        self.assertTrue(any(
+            "星级奖励过渡" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_夜世界未知过渡经专用倒计时复核后才允许下兵(self):
+        任务 = 等待进入战斗.__new__(等待进入战斗)
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            _战斗中=False,
+            识别点击画面=Mock(return_value=SimpleNamespace(页面="未知")),
+            点击=Mock(return_value=True),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            停止事件=threading.Event(),
+        )
+        任务.上下文 = 上下文
+        任务._页面已确认夜世界战斗 = Mock(return_value=True)
+
+        self.assertTrue(任务.执行())
+        任务._页面已确认夜世界战斗.assert_called_once()
+        上下文.点击.assert_called_once_with(
+            150, 520, 是否精确点击=True
+        )
+
     def test_夜世界第二场下兵失败不会继续等待回营点击(self):
         任务 = 等待回营或第二次战斗.__new__(等待回营或第二次战斗)
         上下文 = SimpleNamespace(
@@ -269,6 +319,77 @@ class 任务计划测试(unittest.TestCase):
 
         self.assertTrue(上下文.页面恢复失败)
         任务.尝试点击回营按钮.assert_not_called()
+
+    def test_夜世界回营星级奖励不会触发第二场下兵(self):
+        任务 = 等待回营或第二次战斗.__new__(等待回营或第二次战斗)
+        页面序列 = iter([
+            SimpleNamespace(页面="战斗星级奖励"),
+            SimpleNamespace(页面="战斗结算"),
+        ])
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            _战斗中=True,
+            识别点击画面=Mock(side_effect=lambda: next(页面序列)),
+            处理战斗星级奖励弹窗=Mock(return_value=True),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.是否出现换兵种箭头 = Mock(return_value=True)
+        任务.尝试点击回营按钮 = Mock(return_value=True)
+
+        with patch("任务流程.夜世界.夜世界打鱼.等待回营或第二场战斗.下兵") as 下兵任务:
+            self.assertTrue(任务.执行())
+
+        上下文.处理战斗星级奖励弹窗.assert_called_once_with()
+        下兵任务.assert_not_called()
+        任务.是否出现换兵种箭头.assert_not_called()
+        self.assertTrue(any(
+            "阻止第二场下兵" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_官方评分弹窗只定位稍后按钮(self):
+        OCR结果 = [
+            ([[250, 230], [550, 230], [550, 265], [250, 265]],
+             "為《部落衡突》分", 0.9),
+            ([[230, 290], [570, 290], [570, 325], [230, 325]],
+             "請在GooglePlay中為《部落衢突》分或發表", 0.9),
+            ([[190, 345], [280, 345], [280, 385], [190, 385]],
+             "稍後", 0.9),
+            ([[430, 345], [570, 345], [570, 385], [430, 385]],
+             "不再顯示", 0.9),
+        ]
+        坐标 = 任务上下文._定位官方评分弹窗稍后按钮(OCR结果)
+        self.assertEqual(坐标, (235, 365))
+
+    def test_官方评分弹窗只点击稍后并阻断当前输入(self):
+        OCR结果 = [
+            ([[250, 230], [550, 230], [550, 265], [250, 265]],
+             "為《部落衡突》分", 0.9),
+            ([[230, 290], [570, 290], [570, 325], [230, 325]],
+             "請在GooglePlay中為《部落衢突》分或發表", 0.9),
+            ([[190, 345], [280, 345], [280, 385], [190, 385]],
+             "稍後", 0.9),
+            ([[430, 345], [570, 345], [570, 385], [430, 385]],
+             "不再顯示", 0.9),
+        ]
+        上下文 = SimpleNamespace(
+            _战斗中=False,
+            _内存保护已触发=False,
+            _定位官方评分弹窗稍后按钮=任务上下文._定位官方评分弹窗稍后按钮,
+            是否内存异常=任务上下文.是否内存异常,
+            获取OCR引擎=Mock(return_value=Mock(return_value=(OCR结果, None))),
+            点击已确认安全按钮=Mock(return_value=True),
+            置脚本状态=Mock(),
+        )
+
+        self.assertTrue(任务上下文.清理官方评分弹窗(上下文, object()))
+        上下文.点击已确认安全按钮.assert_called_once_with(235, 365, 延时=350)
+        self.assertTrue(any(
+            "禁止点击评论和不再显示" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
 
     def test_夜世界结算页限制区域识别回营按钮(self):
         任务 = 等待回营或第二次战斗.__new__(等待回营或第二次战斗)
