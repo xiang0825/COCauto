@@ -857,6 +857,41 @@ class 任务计划测试(unittest.TestCase):
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
+    def test_固定建筑提交后先收尾面板再结束任务(self):
+        上下文 = SimpleNamespace(
+            设置=机器人设置(
+                欲升级的英雄或建筑=["兵营"],
+                是否升级建议升级的建筑=False,
+                建筑升级检查间隔=0,
+            ),
+            置脚本状态=Mock(),
+            机器人标志="测试机器人",
+            请求任务计划等待=Mock(),
+        )
+        数据库 = Mock(
+            获取最新完整状态=Mock(return_value=SimpleNamespace(状态数据={})),
+            更新状态=Mock(),
+        )
+        任务 = 建筑升级任务.__new__(建筑升级任务)
+        任务.上下文 = 上下文
+        任务.数据库 = 数据库
+        任务.机器人标志 = 上下文.机器人标志
+
+        with patch("任务流程.建筑升级.更新工人状态任务") as 工人状态, \
+             patch("任务流程.建筑升级.寻找建筑") as 寻找, \
+             patch("任务流程.建筑升级.升级普通建筑任务") as 升级建筑:
+            工人状态.return_value.执行.return_value = True
+            工人状态.return_value.是否有空闲工人.return_value = True
+            寻找.return_value.执行.return_value = True
+            寻找.return_value.当前建筑 = "兵营"
+            升级建筑.return_value.执行.return_value = True
+            任务._升级提交后确认主世界 = Mock(return_value=True)
+
+            self.assertTrue(任务.执行())
+
+        任务._升级提交后确认主世界.assert_called_once_with()
+        上下文.请求任务计划等待.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
