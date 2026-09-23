@@ -343,6 +343,51 @@ class 刷墙识别测试(unittest.TestCase):
             "金币",
         )
 
+    def test_建筑工人不可用时不允许点击资源升级卡片(self):
+        self.assertTrue(self.任务._建筑工人不可用([
+            ([[520, 540], [610, 540], [610, 558], [520, 558]], "升级时间 无", 0.92),
+        ]))
+        self.assertTrue(self.任务._建筑工人不可用([
+            ([[520, 540], [650, 540], [650, 558], [520, 558]], "所有建筑工人都在忙", 0.92),
+        ]))
+        self.assertTrue(self.任务._建筑工人不可用([
+            ([[320, 220], [650, 220], [650, 260], [320, 260]], "你的建築工人好像都在忙", 0.92),
+        ]))
+        self.assertFalse(self.任务._建筑工人不可用([
+            ([[520, 540], [650, 540], [650, 558], [520, 558]], "升级时间 1小时", 0.92),
+        ]))
+
+    def test_确认页建筑工人忙碌时不点击确认按钮(self):
+        上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            点击=Mock(),
+            脚本延时=Mock(),
+            关闭升级详情弹窗=Mock(return_value=True),
+        )
+        self.任务.执行OCR识别 = Mock(return_value=[
+            ([[320, 220], [650, 220], [650, 260], [320, 260]], "你的建築工人好像都在忙", 0.92),
+        ])
+
+        self.assertFalse(self.任务.确认城墙升级提交(上下文))
+        上下文.点击.assert_not_called()
+        上下文.关闭升级详情弹窗.assert_called_once_with()
+        self.assertTrue(上下文.刷墙安全中止)
+
+    def test_候选点击后误入夜世界时停止墙体扫描(self):
+        上下文 = SimpleNamespace(
+            识别点击画面=Mock(return_value=SimpleNamespace(
+                页面="夜世界主页", 世界="夜世界", 可信度=0.78
+            )),
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+        self.assertFalse(self.任务._候选点击后确认主世界(上下文))
+        self.assertTrue(上下文.页面恢复失败)
+        self.assertTrue(any(
+            "误入夜世界" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
     def test_缺少家乡资源状态时返回未知而不是零(self):
         状态 = SimpleNamespace(状态数据={})
         上下文 = SimpleNamespace(
