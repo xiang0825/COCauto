@@ -81,7 +81,7 @@ class 等待回营或第二次战斗(夜世界基础任务):
             if hasattr(self.上下文, '英雄技能标志'):
                 self.上下文.英雄技能标志.set()
                 try: delattr(self.上下文, '英雄技能标志')
-                except: pass
+                except Exception: pass
 
     def _读取页面状态(self):
         """返回页面识别结果和“是否有真实页面识别器”标志。"""
@@ -97,7 +97,11 @@ class 等待回营或第二次战斗(夜世界基础任务):
         """验证是否已开始战斗"""
         是否匹配, (x, y)=self.是否出现图片("更换兵种箭头[1].bmp|更换兵种箭头[2].bmp|更换兵种箭头[3].bmp|更换兵种箭头[4].bmp|更换兵种箭头[5].bmp",(163,495,800,600))
         if 是否匹配:
-            self.上下文.点击(x-18, y-28)#选中对应兵种
+            if self.上下文.点击(x-18, y-28) is False:
+                self.上下文.置脚本状态(
+                    "夜世界第二场换兵箭头点击被安全输入层拒绝，停止继续下兵"
+                )
+                return False
             return True
         else:
             return False

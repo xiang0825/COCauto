@@ -140,7 +140,10 @@ class 下兵(夜世界基础任务):
 
     def 下兵并检测是否完成下兵(self, 坐标: tuple) -> bool:
         """点击指定坐标，并判断是否出现下兵完成提示"""
-        self.上下文.点击(坐标[0], 坐标[1], random.randint(80, 180))
+        if self.上下文.点击(
+            坐标[0], 坐标[1], random.randint(80, 180)
+        ) is False:
+            return False
         是否匹配, _ = self.是否出现图片("夜世界_请选择其它兵种.bmp")
         #
         return 是否匹配
@@ -150,8 +153,7 @@ class 下兵(夜世界基础任务):
         """验证是否已开始战斗"""
         是否匹配, (x, y) = self.是否出现图片("夜世界_兵种技能色块.bmp")
         if 是否匹配:
-            self.上下文.点击(x-21, y+49)
-            return True
+            return self.上下文.点击(x-21, y+49) is not False
         else:
             return False
 

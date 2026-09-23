@@ -56,7 +56,12 @@ class 收集圣水车任务(夜世界基础任务):
                         self.上下文.置脚本状态(
                             f"尝试打开圣水车：第{序号}个候选点{点击x},{点击y}（{来源}）"
                         )
-                        self.上下文.点击(点击x, 点击y)
+                        if self.上下文.点击(点击x, 点击y) is False:
+                            self.上下文.置脚本状态(
+                                "圣水车候选点点击被安全输入层拒绝，停止剩余候选点击",
+                                级别="警告",
+                            )
+                            return False
                         if self.尝试收集圣水():
                             self.上下文.置脚本状态(
                                 f"已确认圣水车面板并完成收集：{点击x},{点击y}"
@@ -262,8 +267,9 @@ class 收集圣水车任务(夜世界基础任务):
             点击安全 = getattr(self.上下文, "点击已确认安全按钮", None)
             if callable(点击安全):
                 return bool(点击安全(*关闭点, 延时=180))
-            self.上下文.点击(*关闭点, 延时=180, 是否精确点击=True)
-            return True
+            return self.上下文.点击(
+                *关闭点, 延时=180, 是否精确点击=True
+            ) is not False
         except (AttributeError, TypeError, ValueError, cv2.error) as 异常:
             self.上下文.置脚本状态(f"详情面板关闭预检失败，停止候选尝试：{异常}")
             return False
@@ -331,7 +337,12 @@ class 收集圣水车任务(夜世界基础任务):
         收集点 = self._查找OCR文本中心(按钮OCR, ("收集",), 最小y=350)
         if 收集点 is None:
             收集点 = (588, 507)
-        self.上下文.点击(*收集点)
+        if self.上下文.点击(*收集点) is False:
+            self.上下文.置脚本状态(
+                "圣水车收集按钮点击被安全输入层拒绝，停止本次收集",
+                级别="警告",
+            )
+            return False
         self.上下文.脚本延时(1000)
 
         # 只识别并点击面板右上角红色 X；不使用旧固定关闭坐标，避免
@@ -346,7 +357,14 @@ class 收集圣水车任务(夜世界基础任务):
             if callable(点击安全):
                 点击安全(*关闭点, 延时=180)
             else:
-                self.上下文.点击(*关闭点, 延时=180, 是否精确点击=True)
+                if self.上下文.点击(
+                    *关闭点, 延时=180, 是否精确点击=True
+                ) is False:
+                    self.上下文.置脚本状态(
+                        "圣水车面板关闭点击被安全输入层拒绝，保留当前面板",
+                        级别="警告",
+                    )
+                    return False
         self.收集圣水连续出错次数 = 0
         return True
 

@@ -10,6 +10,7 @@ from 任务流程.主世界打鱼.搜索敌人 import 搜索目标敌人任务
 from 线程.自动化机器人 import 自动化机器人
 from 工具包.工具函数 import 是否夜世界资源打满
 from 任务流程.夜世界.更新夜世界账号资源状态 import 更新夜世界资源状态任务
+from 任务流程.夜世界.收集圣水车 import 收集圣水车任务
 from 任务流程.夜世界.夜世界打鱼.下兵 import 下兵
 from 任务流程.夜世界.夜世界打鱼.等待进入战斗 import 等待进入战斗
 from 任务流程.夜世界.夜世界打鱼.等待回营或第二场战斗 import 等待回营或第二次战斗
@@ -355,6 +356,25 @@ class 任务计划测试(unittest.TestCase):
         self.assertTrue(事件.已停止)
         self.assertTrue(any(
             "英雄技能点击被安全输入层拒绝" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_夜世界圣水车收集按钮被拒绝时不关闭面板并报告失败(self):
+        任务 = 收集圣水车任务.__new__(收集圣水车任务)
+        上下文 = SimpleNamespace(
+            点击=Mock(return_value=False),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.执行OCR识别 = Mock(return_value=[])
+        任务._是否圣水车标题 = Mock(return_value=True)
+        任务._查找OCR文本中心 = Mock(return_value=(588, 507))
+
+        self.assertFalse(任务.尝试收集圣水())
+        上下文.点击.assert_called_once_with(588, 507)
+        self.assertTrue(any(
+            "圣水车收集按钮点击被安全输入层拒绝" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
