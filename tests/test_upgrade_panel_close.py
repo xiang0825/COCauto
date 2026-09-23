@@ -6,6 +6,7 @@ import numpy as np
 
 from 任务流程.基础任务框架 import 任务上下文
 from 任务流程.建筑升级.升级英雄 import 升级英雄任务
+from 任务流程.建筑升级.升级普通建筑 import 升级普通建筑任务
 from 任务流程.兵种或法术升级.完成兵种或法术升级 import 完成兵种或法术升级任务
 from 任务流程.战宠升级.完成宠物升级 import 完成宠物升级任务
 from 任务流程.战宠升级.寻找战宠小屋 import 寻找战宠小屋任务
@@ -90,6 +91,37 @@ class 升级面板关闭安全测试(unittest.TestCase):
         返回.assert_called_once_with(
             "关闭战宠小屋页面", 已确认可关闭面板=True
         )
+
+    def test_缺少战宠关闭器时禁止原始ESC(self):
+        键盘 = SimpleNamespace(按字符按压=Mock())
+        状态 = Mock()
+        任务 = 打开要升级的宠物任务.__new__(打开要升级的宠物任务)
+        任务.上下文 = SimpleNamespace(键盘=键盘, 置脚本状态=状态)
+
+        self.assertFalse(任务.关闭战宠小屋页面())
+        键盘.按字符按压.assert_not_called()
+
+    def test_缺少研究关闭器时禁止原始ESC(self):
+        键盘 = SimpleNamespace(按字符按压=Mock())
+        任务 = 完成兵种或法术升级任务.__new__(完成兵种或法术升级任务)
+        任务.上下文 = SimpleNamespace(
+            键盘=键盘,
+            置脚本状态=Mock(),
+        )
+
+        任务._关闭升级面板()
+        键盘.按字符按压.assert_not_called()
+
+    def test_缺少英雄和建筑关闭器时禁止原始ESC(self):
+        for 任务类 in (升级英雄任务, 升级普通建筑任务):
+            键盘 = SimpleNamespace(按字符按压=Mock())
+            任务 = 任务类.__new__(任务类)
+            任务.上下文 = SimpleNamespace(
+                键盘=键盘,
+                置脚本状态=Mock(),
+            )
+            self.assertFalse(任务.关闭英雄升级页面() if 任务类 is 升级英雄任务 else 任务.关闭建筑升级页面())
+            键盘.按字符按压.assert_not_called()
 
     def test_战宠小屋回到主世界后清理底层选中卡片(self):
         返回 = Mock(return_value=True)

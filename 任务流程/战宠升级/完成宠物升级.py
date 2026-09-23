@@ -36,6 +36,7 @@ class 完成宠物升级任务(基础任务):
                 if not 安全返回键(说明, 已确认可关闭面板=True):
                     return False
             return True
-        for _ in 说明列表:
-            self.上下文.键盘.按字符按压("esc")
-        return True
+        self.上下文.置脚本状态(
+            "未提供战宠升级安全关闭器，禁止发送ESC；保留当前页面等待人工确认"
+        )
+        return False
