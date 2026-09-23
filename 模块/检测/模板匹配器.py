@@ -43,10 +43,12 @@ class 模板匹配引擎:
         # PyInstaller 运行时优先使用它提供的解包目录。
         加入(getattr(sys, "_MEIPASS", None))
 
-        # onedir 运行时如果 _MEIPASS 不可用，资源在 EXE 旁的 _internal。
+        # onedir 运行时如果 _MEIPASS 不可用，资源通常在 EXE 旁的
+        # _internal；同时兼容用户把完整 img 目录放在 EXE 同级的发布包。
         if getattr(sys, "frozen", False):
             程序目录 = Path(sys.executable).resolve().parent
             加入(程序目录 / "_internal")
+            加入(程序目录)
 
         # 源码运行时使用本模块所在项目根目录，不依赖 cwd。
         加入(Path(__file__).resolve().parents[2])
@@ -75,7 +77,8 @@ class 模板匹配引擎:
         if not self.图片库路径.is_dir():
             raise ValueError(
                 f"图片库路径不存在：{self.图片库路径}；"
-                "请确认发布包包含 _internal\\img，或使用完整源码目录运行。"
+                "请确认发布包包含 _internal\\img（或 EXE 同级 img），"
+                "或使用完整源码目录运行。"
             )
 
         # 初始化缓存系统

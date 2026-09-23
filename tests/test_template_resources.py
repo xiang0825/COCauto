@@ -24,6 +24,22 @@ class 模板资源路径测试(unittest.TestCase):
                     (程序目录 / "_internal").resolve(),
                 )
 
+    def test_打包包体也支持exe同级图片目录(self):
+        """兼容用户解压后保留 img 与 EXE 同级的完整 onedir 包。"""
+        with tempfile.TemporaryDirectory() as 临时目录:
+            根目录 = Path(临时目录)
+            程序目录 = 根目录 / "程序"
+            (程序目录 / "img").mkdir(parents=True)
+
+            with patch.object(sys, "frozen", True, create=True), \
+                 patch.object(sys, "_MEIPASS", str(根目录 / "旧解包目录"), create=True), \
+                 patch.object(sys, "executable", str(程序目录 / "部落冲突.exe")):
+                引擎 = object.__new__(模板匹配引擎)
+                self.assertEqual(
+                    引擎.获取资源目录(),
+                    程序目录.resolve(),
+                )
+
     def test_源码运行不依赖当前工作目录(self):
         引擎 = object.__new__(模板匹配引擎)
         资源目录 = 引擎.获取资源目录()
