@@ -308,7 +308,7 @@ class 页面识别器:
         return 0.0
 
     @staticmethod
-    def _断线弹窗分数(图像: np.ndarray) -> float:
+    def _断线弹窗分数(图像: np.ndarray, 多按钮: bool = False) -> float:
         """识别 CoC 中央的“连接中断/重新登入”遮罩。
 
         断线弹窗会保留主世界或战斗画面在底下，若只依赖主页/战斗
@@ -375,7 +375,13 @@ class 页面识别器:
                     or int(np.count_nonzero(亮像素(0.72, 0.95, 0.04, 0.58))) < 120
                 ):
                     continue
-                return 0.98
+                # 评分等多按钮弹窗也有标题、正文和左侧操作文字。
+                # 同一操作行右侧仍有独立按钮时，不能推断为“重新登入”。
+                右侧有按钮 = int(np.count_nonzero(
+                    亮像素(0.72, 0.95, 0.64, 0.96)
+                )) >= max(60, int(w * h * 0.0005))
+                if 右侧有按钮 == 多按钮:
+                    return 0.98
         except (AttributeError, TypeError, ValueError, cv2.error):
             return 0.0
         return 0.0
@@ -653,6 +659,12 @@ class 页面识别器:
                 世界=None,
                 可信度=维护分数,
                 依据=(f"顶部黄黑维护警示带{维护分数:.2f}",),
+            )
+        多按钮分数 = self._断线弹窗分数(屏幕图像, 多按钮=True)
+        if 多按钮分数 >= 0.90:
+            return 页面识别结果(
+                页面="多按钮弹窗", 世界=None, 可信度=多按钮分数,
+                依据=("中央面板操作行左右均有按钮，需文字确认",),
             )
         断线分数 = self._断线弹窗分数(屏幕图像)
         if 断线分数 >= 0.90:

@@ -265,6 +265,29 @@ class 页面识别测试(unittest.TestCase):
         self.assertEqual(结果.页面, "断线弹窗")
         self.assertTrue(any("中央断线弹窗" in 依据 for 依据 in 结果.依据))
 
+    def test_评分样式多按钮弹窗不能进入断线恢复(self):
+        图像 = np.full((600, 800, 3), (10, 18, 22), dtype=np.uint8)
+        cv2.rectangle(图像, (164, 180), (635, 423), (32, 26, 29), -1)
+        for 左, 上, 右, 下 in ((201, 218, 404, 244), (201, 270, 580, 294),
+                               (201, 306, 332, 328), (201, 368, 235, 389),
+                               (475, 368, 540, 389), (575, 368, 610, 389)):
+            cv2.rectangle(图像, (左, 上), (右, 下), (220, 220, 220), -1)
+        for 画面 in (图像, cv2.resize(图像, (1280, 720))):
+            with self.subTest(尺寸=画面.shape):
+                self.assertEqual(self.识别器.识别(画面).页面, "多按钮弹窗")
+                self.assertEqual(检测游戏登录状态任务._检测断线弹窗(画面),
+                                 (False, (0, 0)))
+
+    def test_多按钮弹窗文字未确认时禁止穿透输入(self):
+        for 已清理 in (False, True):
+            with self.subTest(已清理=已清理):
+                上下文 = 任务上下文.__new__(任务上下文)
+                上下文.检查宝石商店危险页面 = Mock(return_value=False)
+                上下文._最近点击页面结果 = SimpleNamespace(页面="多按钮弹窗")
+                上下文.清理官方评分弹窗 = Mock(return_value=已清理)
+                self.assertTrue(上下文.输入前安全检查())
+                上下文.清理官方评分弹窗.assert_called_once_with()
+
     def test_系统维护页优先于断线弹窗识别(self):
         """维护页的黄黑警示带优先于中央深色面板，避免重复点击重试。"""
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
