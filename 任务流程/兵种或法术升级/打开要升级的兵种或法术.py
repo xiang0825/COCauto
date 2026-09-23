@@ -83,7 +83,12 @@ class 打开要升级的兵种或法术任务(基础任务):
                 self.关闭研究面板()
                 return False
 
-            self._执行点击(点击区域)
+            if not self._执行点击(点击区域):
+                self.上下文.置脚本状态(
+                    f"升级：{self.欲升级的兵种或法术} 目标点击未被安全输入层接受"
+                )
+                self.关闭研究面板()
+                return False
             return True
 
         self.上下文.置脚本状态(f"未定位到 {self.欲升级的兵种或法术}")
@@ -110,13 +115,13 @@ class 打开要升级的兵种或法术任务(基础任务):
             **self.颜色检测阈值
         )
 
-    def _执行点击(self, 区域: tuple):
+    def _执行点击(self, 区域: tuple) -> bool:
         """点击区域中心"""
         x1, y1, x2, y2 = 区域
         中心x = int((x1 + x2) / 2)
         中心y = int((y1 + y2) / 2)
         self.上下文.置脚本状态(f"准备选中 {self.欲升级的兵种或法术}")
-        self.上下文.点击(中心x, 中心y, 是否精确点击=True)
+        return self.上下文.点击(中心x, 中心y, 是否精确点击=True) is not False
 
     def 关闭研究面板(self):
         """关闭当前研究面板"""

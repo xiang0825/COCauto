@@ -60,7 +60,12 @@ class 打开要升级的宠物任务(基础任务):
                 return False
 
             _, (x, y) = self.是否出现图片(self.宠物模板列表[self.欲打开的宠物])
-            self.上下文.点击(x,y)#打开要升级的宠物界面
+            if self.上下文.点击(x,y) is False:#打开要升级的宠物界面
+                self.上下文.置脚本状态(
+                    f"战宠升级：{self.欲打开的宠物} 入口点击未被安全输入层接受"
+                )
+                self.关闭战宠小屋页面()
+                return False
             return True
 
         except 无法定位目标宠物错误 as e:

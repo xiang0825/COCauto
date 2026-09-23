@@ -81,6 +81,18 @@ class 打开进攻页面测试(unittest.TestCase):
             ],
         )
 
+    def test_夜世界进攻入口点击被拒绝时不继续识别下一页(self):
+        任务 = 打开进攻页面.__new__(打开进攻页面)
+        上下文 = SimpleNamespace(
+            点击=Mock(return_value=False),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.是否出现开始进攻 = Mock(return_value=True)
+
+        self.assertFalse(任务.执行())
+        任务.是否出现开始进攻.assert_not_called()
+
     def test_点击后必须确认进入搜索页面(self):
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
         上下文 = SimpleNamespace(

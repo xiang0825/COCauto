@@ -14,7 +14,11 @@ class 打开研究面板任务(基础任务):
         try:
             if self._检查实验室是否空闲():
                 self.上下文.置脚本状态("正在打开研究面板")
-                self.上下文.点击(*self.研究面板点击坐标, 是否精确点击=True)
+                if self.上下文.点击(*self.研究面板点击坐标, 是否精确点击=True) is False:
+                    self.上下文.置脚本状态(
+                        "研究面板入口点击未被安全输入层接受，停止后续研究操作"
+                    )
+                    return False
                 return True
             return False
         except Exception as e:

@@ -68,6 +68,37 @@ class 研究面板OCR护栏测试(unittest.TestCase):
         self.assertFalse(任务.执行())
         任务.异常处理.assert_called_once()
 
+    def test_研究面板入口点击被拒绝时不报告已打开(self):
+        任务 = 打开研究面板任务.__new__(打开研究面板任务)
+        任务.上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            点击=Mock(return_value=False),
+        )
+        任务._检查实验室是否空闲 = Mock(return_value=True)
+
+        self.assertFalse(任务.执行())
+        任务.上下文.点击.assert_called_once_with(
+            *任务.研究面板点击坐标, 是否精确点击=True
+        )
+
+    def test_研究目标点击被拒绝时关闭研究面板(self):
+        任务 = 打开要升级的兵种或法术任务.__new__(打开要升级的兵种或法术任务)
+        任务.欲升级的兵种或法术 = "雷电法术"
+        任务.上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            点击=Mock(return_value=False),
+            安全返回键=Mock(return_value=True),
+        )
+        任务.执行OCR识别 = Mock(return_value=[
+            ([[120, 120], [220, 120], [220, 145], [120, 145]], "雷电法术", 0.99),
+        ])
+        任务._检测资源不足 = Mock(return_value=False)
+        任务._执行点击 = Mock(return_value=False)
+        任务.关闭研究面板 = Mock()
+
+        self.assertFalse(任务.尝试点击目标兵种或法术())
+        任务.关闭研究面板.assert_called_once_with()
+
     def test_战宠确认按钮漏识别时关闭升级面板(self):
         任务 = 完成宠物升级任务.__new__(完成宠物升级任务)
         任务.上下文 = SimpleNamespace(
