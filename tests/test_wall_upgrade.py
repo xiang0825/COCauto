@@ -118,6 +118,23 @@ class 刷墙识别测试(unittest.TestCase):
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
+    def test_断线重载按钮被输入层拒绝时停止扫描(self):
+        上下文 = SimpleNamespace(
+            点击已确认安全按钮=Mock(return_value=False),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+
+        self.assertFalse(self.任务._安全重载断线弹窗(上下文, 400, 380))
+        上下文.点击已确认安全按钮.assert_called_once_with(400, 380, 延时=180)
+        上下文.脚本延时.assert_not_called()
+        self.assertTrue(上下文.页面恢复失败)
+        self.assertTrue(any(
+            "输入被拒绝" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
     def test_进入城墙画面失败时不继续截图或资源操作(self):
         上下文 = SimpleNamespace(
             页面恢复失败=False,
