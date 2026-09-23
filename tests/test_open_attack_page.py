@@ -3,6 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 import unittest.mock
+import importlib
 
 import cv2
 import numpy as np
@@ -274,6 +275,56 @@ class 打开进攻页面测试(unittest.TestCase):
         self.assertIsNone(上下文.本场资源易窃取评分)
         self.assertEqual(上下文.本场资源评估, {})
         self.assertEqual(上下文.本场资源评分状态, "未确认")
+
+    def test_主世界打鱼任务出口未确认主世界时禁止下一轮(self):
+        """回营子任务误报成功时，外层任务仍不能放行下一轮。"""
+        主世界打鱼模块 = importlib.import_module("任务流程.主世界打鱼.__init__")
+        执行顺序 = []
+
+        class 假子任务:
+            def __init__(自身, 名称):
+                自身.名称 = 名称
+
+            def 执行(自身):
+                执行顺序.append(自身.名称)
+                return True
+
+        class 假回营任务(假子任务):
+            def 等待主界面就绪(自身, _上下文):
+                return False
+
+        上下文 = SimpleNamespace(
+            机器人标志="robot_1",
+            数据库=SimpleNamespace(),
+            置脚本状态=Mock(),
+            _入口已进入结算=True,
+        )
+        with patch.object(
+            主世界打鱼模块,
+            "打开进攻页面任务",
+            side_effect=lambda _上下文: 假子任务("入口"),
+        ), patch.object(
+            主世界打鱼模块,
+            "搜索目标敌人任务",
+            side_effect=lambda _上下文: 假子任务("搜索"),
+        ), patch.object(
+            主世界打鱼模块,
+            "进攻任务",
+            side_effect=lambda _上下文: 假子任务("进攻"),
+        ), patch.object(
+            主世界打鱼模块,
+            "等待战斗结束并回营任务",
+            side_effect=lambda _上下文: 假回营任务("回营"),
+        ):
+            任务 = 主世界打鱼模块.主世界打鱼任务(上下文)
+            self.assertFalse(任务.执行())
+
+        self.assertEqual(执行顺序, ["入口", "搜索", "进攻", "回营"])
+        self.assertTrue(上下文._入口已进入结算)
+        self.assertIn(
+            "主世界打鱼任务出口未连续确认主世界，禁止开始下一轮",
+            [调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list],
+        )
 
     def test_繁体下一個按钮通过颜色和位置识别(self):
         画面 = np.zeros((600, 800, 3), dtype=np.uint8)
