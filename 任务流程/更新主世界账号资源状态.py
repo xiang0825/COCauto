@@ -1,6 +1,8 @@
 import gc
 import unicodedata
 
+import cv2
+
 from 任务流程.基础任务框架 import 任务上下文, 基础任务
 from 模块.检测.OCR识别器 import 安全OCR引擎
 from 模块.检测.YOLO检测器 import 线程安全YOLO检测器
@@ -13,6 +15,33 @@ class 更新家乡资源状态任务(基础任务):
     """自动检测并升级城墙"""
 
     def _完整资源栏复核(self, 资源栏图像) -> tuple[int, int, int] | None:
+        """对可疑资源栏做彩色/灰度双路径复核。
+
+        当前 MuMu 实机的圣水数字在彩色整栏 OCR 中偶尔只返回尾段
+        ``819777``，而灰度整栏 OCR 能稳定读回 ``17819777``。只有当
+        灰度结果把某个资源从“明显过短”恢复到正常数量级时才采用它，
+        不用灰度结果无条件覆盖正常彩色读数。
+        """
+        彩色读数 = self._完整资源栏复核单次(资源栏图像)
+        if not hasattr(资源栏图像, "shape") or len(资源栏图像.shape) < 3:
+            return 彩色读数
+        try:
+            灰度图像 = cv2.cvtColor(资源栏图像, cv2.COLOR_BGR2GRAY)
+            灰度读数 = self._完整资源栏复核单次(灰度图像)
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            灰度读数 = None
+        if 彩色读数 is None:
+            return 灰度读数
+        if 灰度读数 is None:
+            return 彩色读数
+        # 金币/圣水正常通常至少为百万级；黑油达到十万级即可视为
+        # 已恢复。只在灰度结果跨过对应的可信门槛时替换单次结果。
+        for 索引, 门槛 in ((0, 2_000_000), (1, 2_000_000), (2, 100_000)):
+            if 彩色读数[索引] < 门槛 <= 灰度读数[索引]:
+                return 灰度读数
+        return 彩色读数
+
+    def _完整资源栏复核单次(self, 资源栏图像) -> tuple[int, int, int] | None:
         """对可疑的三行资源栏做一次整块 OCR，并按文字坐标归位。
 
         单行轻量 OCR 在主世界刚回营、资源动画或上下行间距变化时，
