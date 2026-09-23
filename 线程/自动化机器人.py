@@ -36,6 +36,14 @@ from 核心.核心异常们 import 图像获取失败
 from 模块.检测.模板匹配器 import 模板匹配引擎
 
 
+def _安全控制台打印(*参数, **关键字):
+    """控制台编码异常不能影响机器人线程或停止流程。"""
+    try:
+        print(*参数, **关键字)
+    except (UnicodeEncodeError, OSError, ValueError):
+        pass
+
+
 class 自动化机器人:
     """为单个用户提供游戏自动化服务的机器人实例"""
 
@@ -122,16 +130,16 @@ class 自动化机器人:
             self.主线程.start()
 
         else:
-            print("目前线程未停止,无需再次启动")
+            _安全控制台打印("目前线程未停止,无需再次启动")
 
     def 暂停(self):
         """标记暂停状态"""
-        print("已暂停")
+        _安全控制台打印("已暂停")
         self.继续事件.clear()
 
     def 继续(self):
         """清除暂停状态"""
-        print("已继续")
+        _安全控制台打印("已继续")
         self.继续事件.set()
 
     def 停止(self, 停止原因="", 等待=True):
@@ -885,7 +893,7 @@ class 自动化机器人:
                 from 工具包.企业微信通知 import 企业微信通知器
                 企业微信通知器实例 = 企业微信通知器(设置.企业微信webhook)
             except Exception as e:
-                print(f"初始化企业微信通知器失败: {e}")
+                _安全控制台打印(f"初始化企业微信通知器失败: {e}")
 
         运行鼠标 = 鼠标控制器(self.设备)
         上下文 = 任务上下文(
@@ -913,7 +921,7 @@ class 自动化机器人:
         # 双击源码入口或从未配置 UTF-8 的控制台启动时，stdout 可能仍是
         # cp1252。设置内容包含中文，不能让辅助日志的编码异常杀死任务线程。
         try:
-            print("本次运行时的设置为" + self.设置.__str__())
+            _安全控制台打印("本次运行时的设置为" + self.设置.__str__())
         except (UnicodeEncodeError, OSError, ValueError):
             pass
 
@@ -1017,24 +1025,24 @@ class 自动化机器人:
             # 寻找建筑(上下文,["亡灵王子","大守护者","复合机械塔"]).执行()
 
 
-            print("-"*10+F"{self.机器人标志} 线程自然消亡"+"-"*10)
+            _安全控制台打印("-"*10+F"{self.机器人标志} 线程自然消亡"+"-"*10)
             self.停止原因 = "任务自然完成"
             self.停止事件.set()  # 标志目前线程已经停止了,以免监控中心一直启动
 
         except 图像获取失败 as e:
             self.停止原因 = f"图像获取失败：{e}"
             上下文.发送死亡通知(f"异常: {str(e)}")
-            print("-"*10+F"{self.机器人标志} 线程因为异常而消亡"+"-"*10+f"异常: {str(e)}")
+            _安全控制台打印("-"*10+F"{self.机器人标志} 线程因为异常而消亡"+"-"*10+f"异常: {str(e)}")
         except SystemExit as e:
             if not self.停止原因:
                 self.停止原因 = "收到外部停止事件"
-            print("-"*10+F"{self.机器人标志} 线程因为捕获到退出而消亡"+"-"*10)
-            print(F"具体信息:{str(e)}")
+            _安全控制台打印("-"*10+F"{self.机器人标志} 线程因为捕获到退出而消亡"+"-"*10)
+            _安全控制台打印(F"具体信息:{str(e)}")
         except Exception as e:
             self.停止原因 = f"未处理异常：{e}"
             import traceback
             诊断信息 = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-            print(诊断信息)
+            _安全控制台打印(诊断信息)
             self.记录日志(f"[错误] 初始化或任务执行失败：{e}", 300, "错误")
             try:
                 with open("robot-error.log", "a", encoding="utf-8") as 日志文件:
@@ -1063,18 +1071,18 @@ class 自动化机器人:
                         截图=截图
                     )
             except Exception as e:
-                print(f"发送停止通知失败: {e}")
+                _安全控制台打印(f"发送停止通知失败: {e}")
 
             try:
                 上下文.释放识别模型()
             except Exception as e:
-                print(f"释放识别模型失败: {e}")
+                _安全控制台打印(f"释放识别模型失败: {e}")
             上下文.op.安全清理()
             try:
                 if 企业微信通知器实例:
                     企业微信通知器实例.关闭()
             except Exception as e:
-                print(f"关闭企业微信通知线程失败: {e}")
+                _安全控制台打印(f"关闭企业微信通知线程失败: {e}")
 
     def 检查超时(self) -> tuple[bool, str]:
         """检查是否超时，返回 (是否超时, 原因)。未超时返回 (False, '')"""

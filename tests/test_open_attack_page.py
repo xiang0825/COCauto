@@ -112,6 +112,38 @@ class 打开进攻页面测试(unittest.TestCase):
             705, 535, 延时=700, 是否精确点击=True
         )
 
+    def test_主世界入口无响应时只在主页证据下有限重试(self):
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        页面识别 = SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.78)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8))
+            ),
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            识别点击画面=Mock(return_value=页面识别),
+        )
+        任务.模板识别 = Mock()
+        任务.主世界入口重试间隔秒 = 0
+        任务._识别已存在的战斗页面 = Mock(
+            side_effect=[None, None, None, "战斗中"]
+        )
+        任务._是否出现下一个 = Mock(return_value=False)
+        任务._检测寻找目标按钮 = Mock(side_effect=[None, (137, 445)])
+        任务._检测攻击按钮 = Mock(side_effect=[None, (705, 535)])
+
+        self.assertTrue(任务._等待并点击攻击按钮(上下文, 主世界入口已点击=True))
+        self.assertEqual(
+            上下文.点击.call_args_list,
+            [
+                unittest.mock.call(62, 546, 700, 是否精确点击=True),
+                unittest.mock.call(137, 445, 延时=700, 是否精确点击=True),
+                unittest.mock.call(705, 535, 延时=700, 是否精确点击=True),
+            ],
+        )
+        self.assertTrue(any("安全重试" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
     def test_启动时已经在战斗页不再点击主世界入口(self):
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
         上下文 = SimpleNamespace(
