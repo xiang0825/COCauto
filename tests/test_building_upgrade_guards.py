@@ -76,6 +76,7 @@ class 建筑升级边界测试(unittest.TestCase):
         任务.上下文 = SimpleNamespace(
             停止事件=threading.Event(),
             置脚本状态=Mock(),
+            脚本延时=Mock(),
         )
         任务.上下文.停止事件.set()
         任务.打开建筑页面 = Mock(return_value=True)
@@ -86,6 +87,32 @@ class 建筑升级边界测试(unittest.TestCase):
         self.assertTrue(任务.安全跳过)
         任务.执行OCR识别.assert_not_called()
         任务.滑动屏幕.assert_not_called()
+
+    def test_建筑扫描超时安全跳过而不是杀死线程(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.建筑列表 = ["兵营"]
+        任务.安全跳过 = False
+        任务.上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+        任务.打开建筑页面 = Mock(return_value=True)
+        任务.执行OCR识别 = Mock(return_value=[])
+        任务.滑动屏幕 = Mock()
+        任务.关闭建筑页面 = Mock(return_value=True)
+
+        with unittest.mock.patch.object(
+            time, "time", side_effect=[0.0, 121.0]
+        ):
+            self.assertFalse(任务.找建筑循环())
+
+        self.assertTrue(任务.安全跳过)
+        任务.关闭建筑页面.assert_called_once_with()
+        self.assertTrue(any(
+            "本轮安全跳过" in 调用.args[0]
+            for 调用 in 任务.上下文.置脚本状态.call_args_list
+        ))
 
     def test_关闭刷资源时建筑入口仍使用主世界坐标(self):
         点击 = Mock()
