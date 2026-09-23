@@ -278,6 +278,23 @@ mViewports=[DisplayViewport{type=INTERNAL, valid=true, displayId=0, uniqueId='lo
         设备._runner = 假Runner(结果(窗口输出), 结果(显示输出))
         self.assertEqual(设备._获取MuMu截图显示ID(), "4619827203584079877")
 
+    def test_MuMu显示查询短暂空响应会有界重试(self):
+        设备 = ADB设备操作类(
+            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            "127.0.0.1:16416",
+        )
+        设备.设置目标包名("com.supercell.clashofclans")
+        窗口输出 = b"""
+  Display: mDisplayId=6
+    mCurrentFocus=null
+    mFocusedApp=ActivityRecord{game com.supercell.clashofclans/com.supercell.titan.GameApp}
+"""
+        显示输出 = b"""
+mViewports=[DisplayViewport{type=EXTERNAL, valid=true, displayId=6, uniqueId='local:4619827203584079877'}]
+"""
+        设备._runner = 假Runner(结果(b""), 结果(窗口输出), 结果(显示输出))
+        self.assertEqual(设备._获取MuMu截图显示ID(), "4619827203584079877")
+
     def test_MuMu输入显示层使用游戏逻辑display而不是启动器display(self):
         窗口输出 = b"""
   Display: mDisplayId=0

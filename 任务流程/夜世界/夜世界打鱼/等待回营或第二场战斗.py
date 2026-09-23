@@ -106,6 +106,26 @@ class 等待回营或第二次战斗(夜世界基础任务):
         else:
             return False
 
+    def _记录结算统计(self, 屏幕图像=None) -> bool:
+        """夜世界回营前复用统一结算统计，阻止未记录就开启下一场。"""
+        # 轻量单元测试上下文可能只验证回营坐标，没有完整数据库；真实
+        # 机器人上下文始终具备这两个字段，不能在真实路径跳过强制统计。
+        if not hasattr(self.上下文, "数据库") or not hasattr(self.上下文, "机器人标志"):
+            return True
+        try:
+            from 任务流程.主世界打鱼.等待战斗结束并回营 import 等待战斗结束并回营任务
+
+            统计任务 = 等待战斗结束并回营任务(self.上下文)
+            完整 = bool(统计任务.记录战斗结果(self.上下文, 屏幕图像))
+            if not 完整:
+                self.上下文.置脚本状态(
+                    "夜世界结算结果未完整确认，保留结算页并禁止进入下一场"
+                )
+            return 完整
+        except Exception as 异常:
+            self.上下文.置脚本状态(f"夜世界结算统计失败，保留当前画面：{异常}")
+            return False
+
 
     def 尝试点击回营按钮(self):
         """验证是否已开始战斗"""
@@ -124,6 +144,9 @@ class 等待回营或第二次战斗(夜世界基础任务):
                 if getattr(页面结果, "页面", "") == "战斗结算":
                     坐标 = 识别器.定位结算回营按钮(屏幕图像)
                     if 坐标 is not None:
+                        if not self._记录结算统计(屏幕图像):
+                            self.上下文._战斗中 = True
+                            return False
                         self.上下文._战斗中 = False
                         安全点击 = getattr(self.上下文, "点击已确认安全按钮", None)
                         if callable(安全点击):
@@ -148,6 +171,9 @@ class 等待回营或第二次战斗(夜世界基础任务):
             0.58,
         )
         if 是否匹配:
+            if not self._记录结算统计():
+                self.上下文._战斗中 = True
+                return False
             self.上下文._战斗中 = False
             安全点击 = getattr(self.上下文, "点击已确认安全按钮", None)
             点击成功 = 安全点击(x, y, 延时=300) if callable(安全点击) else self.上下文.点击(x, y)
@@ -176,6 +202,9 @@ class 等待回营或第二次战斗(夜世界基础任务):
             if getattr(页面结果, "页面", "") == "战斗结算":
                 坐标 = 识别器.定位结算回营按钮(屏幕图像)
                 if 坐标 is not None:
+                    if not self._记录结算统计(屏幕图像):
+                        self.上下文._战斗中 = True
+                        return False
                     self.上下文._战斗中 = False
                     安全点击 = getattr(self.上下文, "点击已确认安全按钮", None)
                     点击成功 = (

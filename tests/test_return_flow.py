@@ -348,6 +348,27 @@ class 回营状态机测试(unittest.TestCase):
         self.assertIsNotNone(图像)
         self.assertEqual(等待战斗结束并回营任务.识别星数(图像, "胜利"), 2)
 
+    def test_测试服夜世界三角星布局无胜负文字仍识别亮星(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+
+        def 画星(中心x, 中心y, 半径=52):
+            点 = []
+            for 索引 in range(10):
+                角度 = -np.pi / 2 + 索引 * np.pi / 5
+                当前半径 = 半径 if 索引 % 2 == 0 else 半径 * 0.42
+                点.append((
+                    round(中心x + 当前半径 * np.cos(角度)),
+                    round(中心y + 当前半径 * np.sin(角度)),
+                ))
+            cv2.fillPoly(图像, [np.asarray(点, dtype=np.int32)], (40, 180, 240))
+
+        # 夜世界测试服实际布局为左下、中央上、右下；这里只点亮左星。
+        画星(310, 180)
+        self.assertEqual(
+            等待战斗结束并回营任务.识别星数(图像, "推毁率54%"),
+            1,
+        )
+
     def test_结算横幅灰度OCR补足繁体战败(self):
         任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
         调用维度 = []

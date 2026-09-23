@@ -255,6 +255,58 @@ class ADB设备操作类:
         return [adb路径, "-s", 序列号.strip(), *map(str, 参数)]
 
     @staticmethod
+    def _终止ADB进程树(进程ID: int) -> None:
+        """超时后清理 adb 客户端及其可能残留的子进程。"""
+        if not 进程ID:
+            return
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(int(进程ID)), "/T", "/F"],
+                    capture_output=True,
+                    timeout=3,
+                    check=False,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            else:
+                os.kill(int(进程ID), 9)
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            pass
+
+    def _运行ADB命令(self, 命令: list[str], timeout: float, *, binary: bool,
+                   startupinfo, creationflags):
+        """运行默认 ADB 时显式回收超时进程；测试 runner 保持原有注入行为。"""
+        if self._runner is not subprocess.run:
+            return self._runner(
+                命令,
+                capture_output=True,
+                timeout=timeout,
+                check=False,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
+            )
+        进程 = subprocess.Popen(
+            命令,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            startupinfo=startupinfo,
+            creationflags=creationflags,
+        )
+        try:
+            标准输出, 标准错误 = 进程.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self._终止ADB进程树(进程.pid)
+            try:
+                标准输出, 标准错误 = 进程.communicate(timeout=3)
+            except subprocess.TimeoutExpired:
+                进程.kill()
+                标准输出, 标准错误 = 进程.communicate()
+            raise
+        return subprocess.CompletedProcess(
+            命令, 进程.returncode, 标准输出, 标准错误
+        )
+
+    @staticmethod
     def 解析屏幕尺寸(文本: str) -> tuple[int, int] | None:
         # 兼容 wm size 输出中的 Physical size 与 Override size。
         匹配项 = re.findall(r"(?:Physical|Override) size:\s*(\d+)x(\d+)", 文本)
@@ -290,11 +342,10 @@ class ADB设备操作类:
                     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
                 try:
-                    结果 = self._runner(
+                    结果 = self._运行ADB命令(
                         命令,
-                        capture_output=True,
-                        timeout=timeout,
-                        check=False,
+                        timeout,
+                        binary=binary,
                         startupinfo=startupinfo,
                         creationflags=creationflags,
                     )
@@ -845,22 +896,40 @@ class ADB设备操作类:
     def _获取MuMu截图显示ID(self) -> str | None:
         """返回当前前台应用所在 MuMu 虚拟显示的 SurfaceFlinger ID。"""
         当前时间 = time.monotonic()
-        if 当前时间 - self._截图显示ID更新时间 < 3.0:
+        # 失败结果不能在3秒缓存；MuMu 战斗过渡时 dumpsys window/display
+        # 可能短暂返回空内容，缓存 None 会让这一帧之后的所有截图都失败。
+        if self._截图显示ID and 当前时间 - self._截图显示ID更新时间 < 3.0:
             return self._截图显示ID
-        self._截图显示ID更新时间 = 当前时间
-        try:
-            选中逻辑ID = self._获取MuMu输入显示ID()
-            if 选中逻辑ID is None:
-                return None
+        上次有效显示ID = self._截图显示ID
+        上次有效时间 = self._截图显示ID更新时间
+        for 尝试次数 in range(3):
+            self._截图显示ID更新时间 = time.monotonic()
+            try:
+                选中逻辑ID = self._获取MuMu输入显示ID()
+                if 选中逻辑ID is None:
+                    self._输入显示ID更新时间 = 0.0
+                    raise ADB错误("暂未确认 CoC 的 MuMu 逻辑显示层")
 
-            显示输出 = self.执行(["shell", "dumpsys", "display"], timeout=8)
-            if isinstance(显示输出, bytes):
-                显示输出 = 显示输出.decode("utf-8", errors="replace")
-            self._截图显示ID = self._解析MuMu物理显示ID(str(显示输出), 选中逻辑ID)
-            return self._截图显示ID
-        except (ADB错误, ValueError, TypeError, re.error):
-            self._截图显示ID = None
-            return None
+                显示输出 = self.执行(["shell", "dumpsys", "display"], timeout=8)
+                if isinstance(显示输出, bytes):
+                    显示输出 = 显示输出.decode("utf-8", errors="replace")
+                物理ID = self._解析MuMu物理显示ID(str(显示输出), 选中逻辑ID)
+                if 物理ID:
+                    self._截图显示ID = 物理ID
+                    return 物理ID
+                raise ADB错误(f"MuMu display {选中逻辑ID} 暂无可用物理显示层")
+            except (ADB错误, ValueError, TypeError, re.error):
+                # 仅截图允许短暂沿用上一次已确认的物理 display；它不参与
+                # input 坐标。这样窗口 dumpsys 抖动不会把战斗流程直接打死，
+                # 但新建连接/长期失效时仍然 fail-closed，不回退到 display 0。
+                self._截图显示ID = 上次有效显示ID
+                self._输入显示ID更新时间 = 0.0
+                if 尝试次数 < 2:
+                    time.sleep(0.12 * (尝试次数 + 1))
+        if 上次有效显示ID and time.monotonic() - 上次有效时间 <= 10.0:
+            return 上次有效显示ID
+        self._截图显示ID = None
+        return None
 
     @staticmethod
     def _解析MuMu逻辑显示ID(窗口输出: str, 目标包名: str = "") -> str | None:
@@ -887,7 +956,7 @@ class ADB设备操作类:
     def _获取MuMu输入显示ID(self) -> str | None:
         """返回 ``input -d`` 使用的逻辑 display ID。"""
         当前时间 = time.monotonic()
-        if 当前时间 - self._输入显示ID更新时间 < 3.0:
+        if self._输入显示ID and 当前时间 - self._输入显示ID更新时间 < 3.0:
             return self._输入显示ID
         self._输入显示ID更新时间 = 当前时间
         try:
@@ -911,7 +980,11 @@ class ADB设备操作类:
         if not self._是MuMu连接():
             return []
         显示ID = self._获取MuMu输入显示ID()
-        return ["-d", 显示ID] if 显示ID else []
+        if not 显示ID:
+            raise ADB错误(
+                "未确认 CoC 所在的 MuMu 输入显示层，已拒绝发送无 display 输入。"
+            )
+        return ["-d", 显示ID]
 
     @staticmethod
     def _解析MuMu触摸事件设备(输入状态: str, 逻辑显示ID: str) -> str | None:
