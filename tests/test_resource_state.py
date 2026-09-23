@@ -49,6 +49,18 @@ class 资源状态测试(unittest.TestCase):
         self.assertEqual(结果, 27937922)
         self.assertEqual(引擎.call_count, 2)
 
+    def test_完整资源识别会用备用图修复七位截断(self):
+        引擎 = Mock(side_effect=[
+            ([("1455202", 0.70)], None),
+            ([([[0, 0], [1, 0], [1, 1], [0, 1]], "14 552 022", 0.98)], None),
+        ])
+        图像 = np.zeros((53, 120, 3), dtype=np.uint8)
+
+        结果 = 单行资源识别(引擎, 图像, 允许完整识别=True)
+
+        self.assertEqual(结果, 14552022)
+        self.assertEqual(引擎.call_count, 2)
+
     def test_OCR连续失败时不覆盖数据库(self):
         任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
         上下文 = SimpleNamespace(
@@ -141,6 +153,31 @@ class 资源状态测试(unittest.TestCase):
         self.assertEqual(结果["金币"], 1511700)
         self.assertEqual(结果["圣水"], 2417561)
         self.assertEqual(结果["黑油"], 409724)
+
+    def test_七位主资源轻量OCR漏首位时使用完整OCR(self):
+        任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((160, 210, 3), dtype=np.uint8)),
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.ocr引擎 = Mock()
+
+        # 当前 MuMu 实机复现：14,552,022 偶发被轻量路径读成 1,455,202；
+        # 低于新的 2,000,000 复核阈值后，完整 OCR 应恢复真实八位读数。
+        with patch(
+            "任务流程.更新主世界账号资源状态.单行资源识别",
+            side_effect=[13_396_779, 1_455_202, 316_548, 13_395_079, 14_552_022],
+        ):
+            结果 = 任务.识别当前资源(上下文)
+
+        self.assertTrue(结果["识别成功"])
+        self.assertEqual(结果["金币"], 13_395_079)
+        self.assertEqual(结果["圣水"], 14_552_022)
+        self.assertEqual(结果["黑油"], 316_548)
 
     def test_黑油轻量读数明显过短时使用完整OCR(self):
         任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
