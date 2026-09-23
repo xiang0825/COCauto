@@ -129,10 +129,31 @@ class 世界识别器:
             )
             红覆盖率 = float(红色.mean())
             蓝覆盖率 = float(蓝色.mean())
-            # 实机 800x600 逻辑画布中，夜世界红徽章约 16% 覆盖，
-            # 主世界蓝徽章约 27% 覆盖；保守下限用于兼容动画和压缩。
-            红证据 = 1.0 if 红覆盖率 >= 0.08 else 0.0
-            蓝证据 = 1.0 if 蓝覆盖率 >= 0.08 else 0.0
+
+            def 是局部徽章(掩码, 覆盖率: float) -> bool:
+                """拒绝铺满左上区域的面板背景，只保留局部徽章形状。"""
+                if 覆盖率 < 0.08:
+                    return False
+                数量, _, 统计, _ = cv2.connectedComponentsWithStats(
+                    掩码.astype("uint8"), 8
+                )
+                if 数量 <= 1:
+                    return False
+                最大 = max(统计[1:], key=lambda 行: int(行[4]))
+                x, y, 宽, 高, 面积 = [int(值) for 值 in 最大]
+                # 真实等级徽章位于左上角、宽度约半个区域；军队/详情
+                # 面板则从较低位置铺开并接近整个区域宽度。
+                return (
+                    面积 >= 80
+                    and x <= int(区域.shape[1] * 0.30)
+                    and y <= int(区域.shape[0] * 0.30)
+                    and 宽 <= int(区域.shape[1] * 0.78)
+                )
+
+            # 实机 800x600 逻辑画布中，夜世界红徽章和主世界蓝徽章
+            # 都是局部 HUD；几何约束比单纯覆盖率更能排除军队面板。
+            红证据 = 1.0 if 是局部徽章(红色, 红覆盖率) else 0.0
+            蓝证据 = 1.0 if 是局部徽章(蓝色, 蓝覆盖率) else 0.0
             return 蓝证据, 红证据
         except (AttributeError, TypeError, ValueError, cv2.error):
             return 0.0, 0.0

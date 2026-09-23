@@ -49,6 +49,19 @@ class 世界识别测试(unittest.TestCase):
         self.assertIsNone(结果.当前世界)
         self.assertFalse(结果.可靠)
 
+    def test_军队配置棕红色面板不冒充夜世界徽章(self):
+        """配置页的整块棕红面板不能授权夜世界入口操作。"""
+        识别器 = 世界识别器(
+            _评分识图替身({"主资源": 0.70, "夜资源": 0.84, "主入口": 0.65})
+        )
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        # 模拟实机军队配置页左上 HUD 被棕红色面板覆盖的情况，
+        # 覆盖率约 40%，不是局部夜世界等级徽章。
+        图像[:105, :90] = (30, 30, 180)
+        结果 = 识别器.识别(图像)
+        self.assertIsNone(结果.当前世界)
+        self.assertNotIn("夜世界红色等级徽章", 结果.依据)
+
     def test_实机主世界截图命中主世界且不命中夜世界(self):
         根目录 = pathlib.Path(__file__).resolve().parents[1]
         数据 = np.fromfile(
