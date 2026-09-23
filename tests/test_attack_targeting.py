@@ -1,4 +1,7 @@
 import unittest
+from unittest.mock import Mock
+
+import numpy as np
 
 from 任务流程.主世界打鱼.进攻 import 进攻任务
 from 任务流程.主世界打鱼.进攻坐标逻辑计算 import 坐标, 取进攻方向
@@ -121,6 +124,38 @@ class 进攻目标选择测试(unittest.TestCase):
 
         self.assertEqual([项目["槽位"] for 项目 in 结果], [3, 1, 4, 2])
         self.assertIn("自动配兵实际下兵顺序", self.上下文.状态[-1])
+
+    def test_兵栏选择被安全层拒绝时不继续下兵(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.模板识别 = Mock()
+        任务.模板识别.执行匹配.return_value = (True, (10, 10), None)
+        任务.检测白色矩形框 = Mock(return_value=(False, [], None))
+        任务.是否为灰色图片 = Mock(return_value=False)
+        上下文 = _上下文()
+        上下文.op = type("屏幕", (), {
+            "获取屏幕图像cv": lambda _自身, *_区域: np.zeros((88, 88, 3), dtype=np.uint8)
+        })()
+        上下文.点击 = Mock(return_value=False)
+
+        self.assertFalse(任务.选中兵种(上下文, "兵种_超级哥布林"))
+        上下文.点击.assert_called_once()
+
+    def test_法术选中被安全层拒绝时不点击落点(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.模板识别 = Mock()
+        任务.模板识别.执行匹配.return_value = (True, (10, 10), None)
+        任务.是否为灰色图片 = Mock(return_value=False)
+        任务.检测白色矩形框 = Mock(return_value=(False, [], None))
+        上下文 = _上下文()
+        上下文.op = type("屏幕", (), {
+            "获取屏幕图像cv": lambda _自身, *_区域: np.zeros((90, 90, 3), dtype=np.uint8)
+        })()
+        上下文.点击 = Mock(return_value=False)
+
+        self.assertFalse(
+            任务.下法术(上下文, "法术_镜像法术.bmp", (400, 300), 是否输出日志=True)
+        )
+        上下文.点击.assert_called_once()
 
     def test_资源模式低表现后按方向交错但仍覆盖全部目标(self):
         self.上下文.设置 = type(
