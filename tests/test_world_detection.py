@@ -24,6 +24,15 @@ class _评分识图替身:
         return 分数, (10, 10), 模板路径.split("|")[0]
 
 
+class _夜世界备用模板替身(_评分识图替身):
+    def 执行最佳匹配(self, _图像, 模板路径):
+        if 模板路径 == "夜世界圣水图标.bmp":
+            return 0.897, (10, 10), 模板路径
+        if "夜世界圣水图标1.bmp" in 模板路径:
+            return 0.955, (10, 10), "夜世界圣水图标1.bmp"
+        return super().执行最佳匹配(_图像, 模板路径)
+
+
 class 世界识别测试(unittest.TestCase):
     def test_主世界需要资源栏和入口特征共同确认(self):
         识别器 = 世界识别器(
@@ -40,6 +49,14 @@ class 世界识别测试(unittest.TestCase):
         )
         结果 = 识别器.识别(np.zeros((600, 800, 3), dtype=np.uint8))
         self.assertEqual(结果.当前世界, "夜世界")
+
+    def test_夜世界首模板中等命中时仍扫描新版备用模板(self):
+        识别器 = 世界识别器(_夜世界备用模板替身({
+            "主资源": 0.88, "夜资源": 0.00, "主入口": 0.20,
+        }))
+        结果 = 识别器.识别(np.zeros((600, 800, 3), dtype=np.uint8))
+        self.assertEqual(结果.当前世界, "夜世界")
+        self.assertGreaterEqual(结果.夜世界资源图标分数, 0.955)
 
     def test_两套特征接近时返回未知不继续误点击(self):
         识别器 = 世界识别器(
