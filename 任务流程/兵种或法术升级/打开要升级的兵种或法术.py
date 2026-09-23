@@ -125,7 +125,18 @@ class 打开要升级的兵种或法术任务(基础任务):
 
     def 关闭研究面板(self):
         """关闭当前研究面板"""
-        self.上下文.点击(*self.关闭按钮坐标, 是否精确点击=True)
+        try:
+            if self.上下文.点击(*self.关闭按钮坐标, 是否精确点击=True) is False:
+                self.上下文.页面恢复失败 = True
+                self.上下文.置脚本状态(
+                    "关闭研究面板点击被安全层拒绝，停止后续研究操作"
+                )
+                return False
+            return True
+        except Exception as 异常:
+            self.上下文.页面恢复失败 = True
+            self.上下文.置脚本状态(f"关闭研究面板失败：{异常}，停止后续研究操作")
+            return False
 
     @打印运行耗时
     def 当前界面是否存在目标兵种或法术(self) -> bool:

@@ -406,7 +406,18 @@ class 寻找建筑(夜世界基础任务):
 
     def 关闭建筑页面(self):
         """关闭建筑界面"""
-        self.上下文.点击(*self.建筑入口参考坐标, 延时=1000)
+        try:
+            if self.上下文.点击(*self.建筑入口参考坐标, 延时=1000) is False:
+                self.上下文.页面恢复失败 = True
+                self.上下文.置脚本状态(
+                    "关闭建筑升级页面点击被安全层拒绝，停止后续建筑操作"
+                )
+                return False
+            return True
+        except Exception as 异常:
+            self.上下文.页面恢复失败 = True
+            self.上下文.置脚本状态(f"关闭建筑升级页面失败：{异常}，停止后续建筑操作")
+            return False
 
     def 滑动到建筑栏底部(self):
         """模拟进入建筑界面的滑动动作"""

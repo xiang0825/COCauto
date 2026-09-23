@@ -99,6 +99,21 @@ class 研究面板OCR护栏测试(unittest.TestCase):
         self.assertFalse(任务.尝试点击目标兵种或法术())
         任务.关闭研究面板.assert_called_once_with()
 
+    def test_关闭研究面板被拒绝时标记页面恢复失败(self):
+        任务 = 打开要升级的兵种或法术任务.__new__(打开要升级的兵种或法术任务)
+        任务.上下文 = SimpleNamespace(
+            点击=Mock(return_value=False),
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+
+        self.assertFalse(任务.关闭研究面板())
+        self.assertTrue(任务.上下文.页面恢复失败)
+        self.assertTrue(any(
+            "关闭研究面板" in 调用.args[0]
+            for 调用 in 任务.上下文.置脚本状态.call_args_list
+        ))
+
     def test_战宠确认按钮漏识别时关闭升级面板(self):
         任务 = 完成宠物升级任务.__new__(完成宠物升级任务)
         任务.上下文 = SimpleNamespace(

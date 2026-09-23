@@ -104,6 +104,29 @@ class 建筑升级边界测试(unittest.TestCase):
             ],
         )
 
+    def test_关闭建筑页面被拒绝时标记页面恢复失败(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.上下文 = SimpleNamespace(
+            点击=Mock(return_value=False),
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+
+        self.assertFalse(任务.关闭建筑页面())
+        self.assertTrue(任务.上下文.页面恢复失败)
+
+    def test_英雄升级详情关闭被拒绝时不继续清除浮层(self):
+        任务 = 升级英雄任务.__new__(升级英雄任务)
+        任务.上下文 = SimpleNamespace(
+            关闭升级详情弹窗=Mock(return_value=False),
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+
+        self.assertFalse(任务.关闭英雄升级页面())
+        任务.上下文.关闭升级详情弹窗.assert_called_once_with()
+        self.assertTrue(任务.上下文.页面恢复失败)
+
     def test_建议列表跳过本轮已提交的项目(self):
         任务 = 寻找建筑.__new__(寻找建筑)
         任务.建筑列表 = ["头号杀手", "攻城车"]

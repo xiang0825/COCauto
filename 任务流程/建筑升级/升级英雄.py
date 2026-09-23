@@ -241,9 +241,16 @@ class 升级英雄任务(夜世界基础任务):
         关闭升级面板 = getattr(self.上下文, "关闭升级详情弹窗", None)
         if callable(关闭升级面板):
             try:
-                关闭升级面板()
+                if 关闭升级面板() is False:
+                    self.上下文.页面恢复失败 = True
+                    self.上下文.置脚本状态(
+                        "英雄升级详情面板关闭未被安全层接受，停止后续操作"
+                    )
+                    return False
             except Exception as 异常:
+                self.上下文.页面恢复失败 = True
                 self.上下文.置脚本状态(f"英雄升级详情面板关闭失败：{异常}")
+                return False
             if getattr(self.上下文, "页面恢复失败", False):
                 return False
 
@@ -267,9 +274,15 @@ class 升级英雄任务(夜世界基础任务):
                         点击安全 = getattr(self.上下文, "点击已确认安全按钮", None)
                         if callable(点击安全):
                             if not 点击安全(关闭点[0], 关闭点[1], 延时=350):
+                                self.上下文.页面恢复失败 = True
                                 return False
                         else:
-                            点击(关闭点[0], 关闭点[1], 延时=350, 是否精确点击=True)
+                            if 点击(关闭点[0], 关闭点[1], 延时=350, 是否精确点击=True) is False:
+                                self.上下文.页面恢复失败 = True
+                                self.上下文.置脚本状态(
+                                    "英雄殿堂关闭按钮点击被安全层拒绝，停止后续操作"
+                                )
+                                return False
                         self.上下文.脚本延时(350)
                         # 关闭英雄殿堂后测试服可能先露出“升级中/建议升级”
                         # 的主世界浮层；只有确认英雄殿堂 X 已消失，才用
@@ -283,7 +296,12 @@ class 升级英雄任务(夜世界基础任务):
                                 continue
                         except Exception:
                             continue
-                        点击(700, 300, 延时=700, 是否精确点击=True)
+                        if 点击(700, 300, 延时=700, 是否精确点击=True) is False:
+                            self.上下文.页面恢复失败 = True
+                            self.上下文.置脚本状态(
+                                "清除英雄升级浮层点击被安全层拒绝，停止后续操作"
+                            )
+                            return False
                         return True
 
                     self.上下文.置脚本状态(
@@ -295,9 +313,15 @@ class 升级英雄任务(夜世界基础任务):
                     return False
         if callable(点击):
             try:
-                点击(700, 300, 延时=700, 是否精确点击=True)
+                if 点击(700, 300, 延时=700, 是否精确点击=True) is False:
+                    self.上下文.页面恢复失败 = True
+                    self.上下文.置脚本状态(
+                        "英雄升级详情空白区域点击被安全层拒绝，停止后续操作"
+                    )
+                    return False
                 return True
             except Exception as 异常:
+                self.上下文.页面恢复失败 = True
                 self.上下文.置脚本状态(f"英雄升级详情空白区域关闭失败：{异常}")
 
         # 缺少安全关闭器时不能用原始 ESC 兜底；CoC 根页面会把 ESC/BACK
