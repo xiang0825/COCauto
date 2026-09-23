@@ -232,6 +232,28 @@ class 刷墙识别测试(unittest.TestCase):
         self.assertIn("将城墙升至", self.任务._规范城墙升级确认标题("将城瘤开至17级？"))
         self.assertEqual(self.任务.定位城墙升级确认资源按钮(OCR结果), (549, 505))
 
+    def test_测试服漏识别墙字和繁体确认仍识别确认框(self):
+        标题 = self.任务._规范城墙升级确认标题("將城升至17级？")
+        self.assertIn("将城墙升至", 标题)
+        # “確認”经常只剩单字“確”，应由费用回退定位按钮，不能走未知成功分支。
+        OCR结果 = [
+            ([[336, 40], [458, 40], [458, 58], [336, 58]], "將城升至17级？", 0.87),
+            ([[570, 465], [598, 465], [598, 483], [570, 483]], "確", 0.95),
+            ([[508, 523], [590, 523], [590, 544], [508, 544]], "5000 000", 0.91),
+        ]
+        self.assertEqual(self.任务.定位城墙升级确认资源按钮(OCR结果), (549, 505))
+
+    def test_确认证据不足绝不报告城墙已提交(self):
+        上下文 = SimpleNamespace(置脚本状态=Mock())
+        self.任务.执行OCR识别 = Mock(return_value=[
+            ([[100, 100], [180, 100], [180, 120], [100, 120]], "普通页面", 0.95),
+        ])
+        self.assertFalse(self.任务.确认城墙升级提交(上下文))
+        self.assertTrue(any(
+            "证据不足" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
     def test_确认框定位不到标题时不应把资源栏当确认按钮(self):
         OCR结果 = [
             ([[700, 80], [760, 80], [760, 100], [700, 100]], "5000000", 0.99),
@@ -416,7 +438,8 @@ class 刷墙识别测试(unittest.TestCase):
             点击=Mock(),
             脚本延时=Mock(),
         )
-        self.任务.执行OCR识别 = Mock(side_effect=[确认OCR, []])
+        # 点击后需要连续两帧都没有确认页证据，才允许报告提交成功。
+        self.任务.执行OCR识别 = Mock(side_effect=[确认OCR, [], []])
         self.assertTrue(self.任务.确认城墙升级提交(上下文))
         上下文.点击.assert_called_once_with(584, 474, 延时=650, 是否精确点击=True)
 
@@ -435,8 +458,35 @@ class 刷墙识别测试(unittest.TestCase):
 
         self.assertFalse(self.任务.确认城墙升级提交(上下文))
         上下文.点击.assert_called_once_with(549, 505, 延时=650, 是否精确点击=True)
+        # 确认页仍然存在时，不能把确认页里的资源图标交给通用宝石模板；
+        # 否则实机会误判并发送 ESC，留下未提交的确认框。
+        上下文.检查宝石商店危险页面.assert_not_called()
+        self.assertEqual(self.任务.执行OCR识别.call_count, 4)
+
+    def test_确认后出现宝石提示先安全退出不被底层标题遮蔽(self):
+        确认OCR = [
+            ([[328, 68], [468, 68], [468, 90], [328, 90]], "将城墙升至17级？", 0.95),
+            ([[508, 523], [590, 523], [590, 544], [508, 544]], "5000 000", 0.91),
+        ]
+        宝石提示OCR = [
+            ([[328, 68], [468, 68], [468, 90], [328, 90]], "将城墙升至17级？", 0.95),
+            ([[620, 230], [760, 230], [760, 260], [620, 260]], "使用寶石立即完成", 0.95),
+        ]
+        上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            点击=Mock(),
+            脚本延时=Mock(),
+            检查宝石商店危险页面=Mock(return_value=True),
+        )
+        self.任务.执行OCR识别 = Mock(side_effect=[确认OCR, 宝石提示OCR])
+
+        self.assertFalse(self.任务.确认城墙升级提交(上下文))
+        上下文.点击.assert_called_once_with(549, 505, 延时=650, 是否精确点击=True)
         上下文.检查宝石商店危险页面.assert_called_once_with(强制=True)
-        self.assertEqual(self.任务.执行OCR识别.call_count, 2)
+        self.assertTrue(any(
+            "禁止使用宝石" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
 
 
 if __name__ == "__main__":
