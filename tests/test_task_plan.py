@@ -302,6 +302,62 @@ class 任务计划测试(unittest.TestCase):
             150, 520, 是否精确点击=True
         )
 
+    def test_夜世界换兵箭头点击被拒绝时不确认进入战斗(self):
+        任务 = 等待进入战斗.__new__(等待进入战斗)
+        上下文 = SimpleNamespace(
+            点击=Mock(return_value=False),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.是否出现图片 = Mock(return_value=(True, (200, 520)))
+
+        self.assertFalse(任务.是否出现换兵种箭头())
+        上下文.点击.assert_called_once_with(182, 492)
+        self.assertTrue(any(
+            "换兵种箭头点击被安全输入层拒绝" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_夜世界后台英雄技能点击被拒绝时停止线程(self):
+        class 假事件:
+            def __init__(self):
+                self.等待次数 = 0
+                self.已停止 = False
+
+            def wait(self, _超时):
+                self.等待次数 += 1
+                return self.等待次数 > 1
+
+            def set(self):
+                self.已停止 = True
+
+        任务 = 下兵.__new__(下兵)
+        上下文 = SimpleNamespace(
+            点击=Mock(return_value=False),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        线程 = Mock()
+
+        with patch(
+            "任务流程.夜世界.夜世界打鱼.下兵.threading.Event",
+            return_value=假事件(),
+        ), patch(
+            "任务流程.夜世界.夜世界打鱼.下兵.threading.Thread",
+            return_value=线程,
+        ) as 创建线程:
+            任务.启动后台放英雄技能()
+            工作函数 = 创建线程.call_args.kwargs["target"]
+            事件 = 上下文.英雄技能标志
+            工作函数()
+
+        上下文.点击.assert_called_once_with(42, 554)
+        self.assertTrue(事件.已停止)
+        self.assertTrue(any(
+            "英雄技能点击被安全输入层拒绝" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
     def test_夜世界第二场下兵失败不会继续等待回营点击(self):
         任务 = 等待回营或第二次战斗.__new__(等待回营或第二次战斗)
         上下文 = SimpleNamespace(

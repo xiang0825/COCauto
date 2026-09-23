@@ -112,7 +112,11 @@ class 等待进入战斗(夜世界基础任务):
             相似度阈值=0.50,
         )
         if 是否匹配:
-            self.上下文.点击(x-18, y-28)#选中对应兵种
+            if self.上下文.点击(x-18, y-28) is False:
+                self.上下文.置脚本状态(
+                    "夜世界换兵种箭头点击被安全输入层拒绝，禁止继续下兵"
+                )
+                return False
             return True
         else:
             return False

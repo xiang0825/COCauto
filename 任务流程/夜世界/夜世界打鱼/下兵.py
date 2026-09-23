@@ -183,9 +183,17 @@ class 下兵(夜世界基础任务):
         def _工作线程():
             while not 标志.wait(random.randint(8, 15)):
                 try:
-                    self.上下文.点击(42, 554)
-                except: pass
+                    if self.上下文.点击(42, 554) is False:
+                        self.上下文.置脚本状态(
+                            "夜世界英雄技能点击被安全输入层拒绝，停止后台技能线程"
+                        )
+                        标志.set()
+                except Exception as e:
+                    self.上下文.置脚本状态(
+                        f"夜世界英雄技能后台点击异常，停止后台技能线程：{e}"
+                    )
+                    标志.set()
             try: delattr(self.上下文, '英雄技能标志')
-            except: pass
+            except Exception: pass
 
         threading.Thread(target=_工作线程, daemon=True).start()
