@@ -28,6 +28,35 @@ class 页面识别测试(unittest.TestCase):
     def test_顶号等待按毫秒单位为200秒(self):
         self.assertEqual(检测游戏登录状态任务.顶号等待毫秒, 200_000)
 
+    def test_登录图标命中但结算页未确认主页(self):
+        """回营后的底层主页图标不能提前结束登录检测。"""
+        上下文 = SimpleNamespace(置脚本状态=Mock())
+        任务 = 检测游戏登录状态任务.__new__(检测游戏登录状态任务)
+        任务.上下文 = 上下文
+        页面识别 = Mock()
+        页面识别.识别.return_value = SimpleNamespace(
+            页面="战斗结算", 世界=None, 可信度=0.94
+        )
+
+        self.assertFalse(
+            任务._登录主页已确认(np.zeros((600, 800, 3), dtype=np.uint8), 页面识别)
+        )
+        self.assertTrue(any("未确认游戏主页" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list))
+
+    def test_登录图标命中且页级确认主世界才算登录(self):
+        上下文 = SimpleNamespace(置脚本状态=Mock())
+        任务 = 检测游戏登录状态任务.__new__(检测游戏登录状态任务)
+        任务.上下文 = 上下文
+        页面识别 = Mock()
+        页面识别.识别.return_value = SimpleNamespace(
+            页面="主世界主页", 世界="主世界", 可信度=0.78
+        )
+
+        self.assertTrue(
+            任务._登录主页已确认(np.zeros((600, 800, 3), dtype=np.uint8), 页面识别)
+        )
+        上下文.置脚本状态.assert_not_called()
+
     def test_启动时军队配置页先安全关闭再继续主页识别(self):
         """已打开军队页不能等待登录超时，也不能用ESC退出游戏。"""
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
