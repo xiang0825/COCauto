@@ -1073,6 +1073,11 @@ class 城墙升级任务(基础任务):
         OCR圣水点击点 = None
         OCR金币费用框 = None
         OCR圣水费用框 = None
+        # 当前 MuMu 画面中左侧费用框可能横跨旧的 x=485 分界线
+        # （例如 457..515），不能用“右边界 <= 485”判断卡片归属。
+        # 两张升级卡片的实际中线约为 528；按文字框中心分栏，兼容
+        # 1280x720 映射到 800x600 后的轻微横向偏移。
+        卡片分栏中线 = 528
         for 识别项 in OCR结果 or []:
             if len(识别项) < 2:
                 continue
@@ -1085,18 +1090,18 @@ class 城墙升级任务(基础任务):
             if y1 >= 470 and "升" in 文本 and (
                 "级" in 文本 or "級" in 文本
             ):
-                if 390 <= 中心x < 485 and OCR金币点击点 is None:
+                if 390 <= 中心x < 卡片分栏中线 and OCR金币点击点 is None:
                     OCR金币点击点 = (中心x, min(520, max(460, (y1 + y2) // 2)))
-                elif 485 <= 中心x <= 610 and OCR圣水点击点 is None:
+                elif 卡片分栏中线 <= 中心x <= 650 and OCR圣水点击点 is None:
                     OCR圣水点击点 = (中心x, min(520, max(460, (y1 + y2) // 2)))
                 continue
 
             数值 = self.OCR文本数字(识别项[1])
             if 数值 is None or not (400 <= y1 <= 470):
                 continue
-            if x2 <= 485 and OCR金币费用框 is None:
+            if 中心x < 卡片分栏中线 and OCR金币费用框 is None:
                 OCR金币费用框 = (x1, y1, x2, y2)
-            elif x1 >= 485 and OCR圣水费用框 is None:
+            elif 卡片分栏中线 <= 中心x and OCR圣水费用框 is None:
                 OCR圣水费用框 = (x1, y1, x2, y2)
 
         if OCR金币点击点 is None and OCR金币费用框 is not None:
