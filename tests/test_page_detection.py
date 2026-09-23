@@ -52,6 +52,29 @@ class 页面识别测试(unittest.TestCase):
         self.assertFalse(上下文.停止事件.is_set())
         self.assertTrue(any("军队配置页" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list))
 
+    def test_启动时活动面板在主页匹配前安全关闭(self):
+        上下文 = SimpleNamespace(
+            数据库=Mock(),
+            机器人标志="robot_test",
+            清理主世界活动弹窗=Mock(return_value=True),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            页面恢复失败=False,
+            停止事件=threading.Event(),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        with patch.object(
+            任务上下文,
+            "_检测主世界活动弹窗关闭点",
+            return_value=(710, 38),
+        ):
+            self.assertTrue(任务._启动阶段处理主世界活动弹窗(屏幕))
+        上下文.清理主世界活动弹窗.assert_called_once_with(屏幕)
+        self.assertFalse(上下文.页面恢复失败)
+        self.assertFalse(上下文.停止事件.is_set())
+        self.assertTrue(any("活动/奖励面板" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list))
+
     def test_启动时战斗阶段明确为开始时要求接管下兵(self):
         任务 = 检测游戏登录状态任务(
             SimpleNamespace(数据库=Mock(), 机器人标志="robot_test")
