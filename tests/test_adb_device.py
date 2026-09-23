@@ -306,8 +306,22 @@ mViewports=[DisplayViewport{type=INTERNAL, valid=true, displayId=0, uniqueId='lo
         runner = 假Runner(
             结果(b"List of devices attached\n127.0.0.1:16416 device product:a55x model:SM_A5560\n"),
             结果(b"topResumedActivity=ActivityRecord{1 u0 com.supercell.clashofclans/com.supercell.titan.GameApp t15}\n"),
-            结果(b"Physical size: 800x600"),
             结果(窗口输出),
+            结果(b"""Event Hub State:
+    27: Xiaomi Touchscreen
+      Path: /dev/input/event16
+Input Reader State:
+  Device 28: Xiaomi Touchscreen
+    EventHub Devices: [ 27 ]
+      Viewport INTERNAL: displayId=7, uniqueId=local:test
+"""),
+            结果(b"""ABS_MT_POSITION_X : value 0, min 0, max 720
+ABS_MT_POSITION_Y : value 0, min 0, max 1280
+"""),
+            结果(b"""Display: mDisplayId=7 (organized)
+  cur=1280x720 app=1280x720 rng=720x720-1280x1280
+"""),
+            结果(b"Physical size: 1280x720"),
             结果(),
         )
         设备 = ADB设备操作类(
@@ -318,10 +332,11 @@ mViewports=[DisplayViewport{type=INTERNAL, valid=true, displayId=0, uniqueId='lo
         )
         设备.设置目标包名("com.supercell.clashofclans")
         self.assertTrue(设备.触控(12, 34))
-        self.assertEqual(
-            runner.命令[-1][1:],
-            ["-s", "127.0.0.1:16416", "shell", "input", "-d", "7", "tap", "12", "34"],
-        )
+        self.assertEqual(runner.命令[-1][1:4], ["-s", "127.0.0.1:16416", "shell"])
+        self.assertEqual(runner.命令[-1][4:6], ["sh", "-c"])
+        self.assertIn("sendevent /dev/input/event16", runner.命令[-1][-1])
+        self.assertIn("sendevent /dev/input/event16 3 53 679", runner.命令[-1][-1])
+        self.assertIn("sendevent /dev/input/event16 3 54 19", runner.命令[-1][-1])
 
     def test_MuMu拉伸手势明确发送到游戏display(self):
         窗口输出 = b"""

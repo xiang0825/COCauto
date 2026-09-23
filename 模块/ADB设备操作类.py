@@ -1086,6 +1086,139 @@ class ADB设备操作类:
                 命令列表.append("sleep 0.08")
         return "; ".join(命令列表)
 
+    @staticmethod
+    def _MuMu原始触摸坐标(
+            x: float,
+            y: float,
+            屏幕宽度: int,
+            屏幕高度: int,
+            原始宽度: int,
+            原始高度: int,
+    ) -> tuple[int, int]:
+        """把 CoC 画布坐标转换为 MuMu 触摸 event 的原始坐标。
+
+        MuMu 当前多显示实例的截图是横向 1280×720，但 Xiaomi
+        Touchscreen event 仍报告为旋转后的 720×1280。直接执行
+        ``input -d`` 在这类 organized display 上不会把触摸送进游戏；
+        这里沿用拉远视距已经验证过的 protocol-B 坐标变换。
+        """
+        if 原始宽度 == 屏幕高度 and 原始高度 == 屏幕宽度:
+            原始x = 原始宽度 - round(float(y) * 原始宽度 / max(1, 屏幕高度))
+            原始y = round(float(x) * 原始高度 / max(1, 屏幕宽度))
+        else:
+            原始x = round(float(x) * 原始宽度 / max(1, 屏幕宽度))
+            原始y = round(float(y) * 原始高度 / max(1, 屏幕高度))
+        return (
+            max(0, min(原始宽度, 原始x)),
+            max(0, min(原始高度, 原始y)),
+        )
+
+    @staticmethod
+    def _生成MuMu单指触控脚本(
+            事件设备: str,
+            原始宽度: int,
+            原始高度: int,
+            屏幕宽度: int,
+            屏幕高度: int,
+            点位: Iterable[tuple[int, int]],
+            间隔毫秒: int = 0,
+            长按毫秒: int = 0,
+    ) -> str:
+        """生成 MuMu display 专属的单指点击/长按脚本。"""
+        坐标列表 = [
+            ADB设备操作类._MuMu原始触摸坐标(
+                x, y, 屏幕宽度, 屏幕高度, 原始宽度, 原始高度
+            )
+            for x, y in 点位
+        ]
+        命令列表: list[str] = []
+        间隔毫秒 = max(0, min(80, int(间隔毫秒)))
+        if len(坐标列表) > 1:
+            间隔毫秒 = max(40, 间隔毫秒)
+        长按毫秒 = max(0, min(1500, int(长按毫秒)))
+
+        for 序号, (x, y) in enumerate(坐标列表):
+            追踪ID = 100 + 序号
+            命令列表.extend([
+                f"sendevent {事件设备} 1 330 1",
+                f"sendevent {事件设备} 1 325 1",
+                f"sendevent {事件设备} 3 47 0",
+                f"sendevent {事件设备} 3 57 {追踪ID}",
+                f"sendevent {事件设备} 3 53 {x}",
+                f"sendevent {事件设备} 3 54 {y}",
+                f"sendevent {事件设备} 0 0 0",
+            ])
+            if 长按毫秒:
+                命令列表.append(f"sleep {长按毫秒 / 1000:.3f}")
+            命令列表.extend([
+                f"sendevent {事件设备} 3 57 -1",
+                f"sendevent {事件设备} 1 325 0",
+                f"sendevent {事件设备} 1 330 0",
+                f"sendevent {事件设备} 0 0 0",
+            ])
+            if 序号 + 1 < len(坐标列表) and 间隔毫秒:
+                命令列表.append(f"sleep {间隔毫秒 / 1000:.3f}")
+        return "; ".join(命令列表)
+
+    @staticmethod
+    def _生成MuMu滑动脚本(
+            事件设备: str,
+            原始宽度: int,
+            原始高度: int,
+            屏幕宽度: int,
+            屏幕高度: int,
+            起点: tuple[int, int],
+            终点: tuple[int, int],
+            时长毫秒: int,
+    ) -> str:
+        """生成 MuMu display 专属的一指滑动脚本。"""
+        步数 = max(4, min(16, round(max(1, int(时长毫秒)) / 35)))
+        点位 = []
+        for 序号 in range(步数 + 1):
+            比例 = 序号 / 步数
+            点位.append((
+                round(起点[0] + (终点[0] - 起点[0]) * 比例),
+                round(起点[1] + (终点[1] - 起点[1]) * 比例),
+            ))
+        命令列表: list[str] = []
+        原始点位 = [
+            ADB设备操作类._MuMu原始触摸坐标(
+                x, y, 屏幕宽度, 屏幕高度, 原始宽度, 原始高度
+            )
+            for x, y in 点位
+        ]
+        起始x, 起始y = 原始点位[0]
+        命令列表.extend([
+            f"sendevent {事件设备} 1 330 1",
+            f"sendevent {事件设备} 1 325 1",
+            f"sendevent {事件设备} 3 47 0",
+            f"sendevent {事件设备} 3 57 100",
+            f"sendevent {事件设备} 3 53 {起始x}",
+            f"sendevent {事件设备} 3 54 {起始y}",
+            f"sendevent {事件设备} 0 0 0",
+        ])
+        每步毫秒 = max(8, min(80, int(max(1, int(时长毫秒)) / 步数)))
+        for x, y in 原始点位[1:]:
+            命令列表.extend([
+                f"sendevent {事件设备} 3 53 {x}",
+                f"sendevent {事件设备} 3 54 {y}",
+                f"sendevent {事件设备} 0 0 0",
+                f"sleep {每步毫秒 / 1000:.3f}",
+            ])
+        命令列表.extend([
+            f"sendevent {事件设备} 3 57 -1",
+            f"sendevent {事件设备} 1 325 0",
+            f"sendevent {事件设备} 1 330 0",
+            f"sendevent {事件设备} 0 0 0",
+        ])
+        return "; ".join(命令列表)
+
+    def _执行MuMu触控脚本(self, 脚本: str, timeout: float = 8) -> None:
+        """执行已通过前台校验的 MuMu display 专属触摸脚本。"""
+        if not 脚本:
+            return
+        self.执行(["shell", "sh", "-c", 脚本], timeout=timeout)
+
     def _验证输入前台(self) -> None:
         """拒绝把触控/按键发给启动器或其他 Android 应用。"""
         目标包名 = str(getattr(self, "_目标包名", "") or "")
@@ -1251,6 +1384,21 @@ class ADB设备操作类:
     def 触控(self, x: int, y: int) -> bool:
         self._验证目标()
         self._验证输入前台()
+        if self._是MuMu连接():
+            事件设备, 原始宽度, 原始高度 = self._获取MuMu触摸事件设备() or (None, 0, 0)
+            if not 事件设备:
+                raise ADB错误(
+                    "无法定位 CoC display 对应的 MuMu 触摸设备；"
+                    "已拒绝发送无 display 目标的点击输入。"
+                )
+            屏幕宽度, 屏幕高度 = self.取屏幕尺寸()
+            设备x, 设备y = self.参考坐标转设备坐标(x, y)
+            脚本 = self._生成MuMu单指触控脚本(
+                事件设备, 原始宽度, 原始高度, 屏幕宽度, 屏幕高度,
+                [(设备x, 设备y)]
+            )
+            self._执行MuMu触控脚本(脚本)
+            return True
         x, y = self.参考坐标转设备坐标(x, y)
         self.执行(["shell", "input", *self._输入显示参数(), "tap", str(x), str(y)], timeout=8)
         return True
@@ -1274,6 +1422,24 @@ class ADB设备操作类:
         间隔毫秒 = max(0, min(80, int(间隔毫秒)))
         if len(点位) > 1:
             间隔毫秒 = max(40, 间隔毫秒)
+        if self._是MuMu连接():
+            事件信息 = self._获取MuMu触摸事件设备()
+            if not 事件信息:
+                raise ADB错误(
+                    "无法定位 CoC display 对应的 MuMu 触摸设备；"
+                    "已拒绝发送无 display 目标的连续点击输入。"
+                )
+            事件设备, 原始宽度, 原始高度 = 事件信息
+            屏幕宽度, 屏幕高度 = self.取屏幕尺寸()
+            设备点位 = [self.参考坐标转设备坐标(x, y) for x, y in 点位]
+            脚本 = self._生成MuMu单指触控脚本(
+                事件设备, 原始宽度, 原始高度, 屏幕宽度, 屏幕高度,
+                设备点位, 间隔毫秒=间隔毫秒,
+            )
+            self._执行MuMu触控脚本(
+                脚本, timeout=max(8, len(点位) * 2)
+            )
+            return True
         点位 = [self.参考坐标转设备坐标(x, y) for x, y in 点位]
         间隔命令 = f"; sleep {间隔毫秒 / 1000:.3f}" if 间隔毫秒 else ""
         显示参数 = " ".join(self._输入显示参数())
@@ -1290,6 +1456,22 @@ class ADB设备操作类:
         self._验证目标()
         self._验证输入前台()
         时长毫秒 = max(120, min(1500, int(时长毫秒)))
+        if self._是MuMu连接():
+            事件信息 = self._获取MuMu触摸事件设备()
+            if not 事件信息:
+                raise ADB错误(
+                    "无法定位 CoC display 对应的 MuMu 触摸设备；"
+                    "已拒绝发送无 display 目标的长按输入。"
+                )
+            事件设备, 原始宽度, 原始高度 = 事件信息
+            屏幕宽度, 屏幕高度 = self.取屏幕尺寸()
+            设备x, 设备y = self.参考坐标转设备坐标(x, y)
+            脚本 = self._生成MuMu单指触控脚本(
+                事件设备, 原始宽度, 原始高度, 屏幕宽度, 屏幕高度,
+                [(设备x, 设备y)], 长按毫秒=时长毫秒,
+            )
+            self._执行MuMu触控脚本(脚本, timeout=max(8, 时长毫秒 / 1000 + 5))
+            return True
         x, y = self.参考坐标转设备坐标(x, y)
         self.执行([
             "shell", "input", *self._输入显示参数(), "swipe", str(int(x)), str(int(y)),
@@ -1300,6 +1482,23 @@ class ADB设备操作类:
     def 滑动(self, 起点: tuple[int, int], 终点: tuple[int, int], 时长毫秒: int = 350) -> bool:
         self._验证目标()
         self._验证输入前台()
+        if self._是MuMu连接():
+            事件信息 = self._获取MuMu触摸事件设备()
+            if not 事件信息:
+                raise ADB错误(
+                    "无法定位 CoC display 对应的 MuMu 触摸设备；"
+                    "已拒绝发送无 display 目标的滑动输入。"
+                )
+            事件设备, 原始宽度, 原始高度 = 事件信息
+            屏幕宽度, 屏幕高度 = self.取屏幕尺寸()
+            设备起点 = self.参考坐标转设备坐标(*起点)
+            设备终点 = self.参考坐标转设备坐标(*终点)
+            脚本 = self._生成MuMu滑动脚本(
+                事件设备, 原始宽度, 原始高度, 屏幕宽度, 屏幕高度,
+                设备起点, 设备终点, 时长毫秒,
+            )
+            self._执行MuMu触控脚本(脚本, timeout=max(10, int(时长毫秒 / 1000) + 8))
+            return True
         起点 = self.参考坐标转设备坐标(*起点)
         终点 = self.参考坐标转设备坐标(*终点)
         self.执行(["shell", "input", *self._输入显示参数(), "swipe", str(起点[0]), str(起点[1]),
@@ -1325,6 +1524,28 @@ class ADB设备操作类:
         return 输出.decode("utf-8", errors="replace").strip() if isinstance(输出, bytes) else str(输出).strip()
 
     def 查询屏幕尺寸(self) -> tuple[int, int] | None:
+        if self._是MuMu连接():
+            # MuMu organized display 的 ``wm size`` 可能只返回竖向物理
+            # 尺寸 720×1280，而 CoC 实际所在 display 的窗口已经是
+            # 横向 1280×720。输入坐标必须跟当前逻辑 display 一致，优先
+            # 读取 dumpsys window displays 的 ``cur=`` 尺寸。
+            try:
+                逻辑显示ID = self._获取MuMu输入显示ID()
+                if 逻辑显示ID:
+                    输出 = self.执行(["shell", "dumpsys", "window", "displays"], timeout=8)
+                    if isinstance(输出, bytes):
+                        输出 = 输出.decode("utf-8", errors="replace")
+                    分块 = re.split(r"\n\s*Display:\s*mDisplayId=", "\n" + str(输出))
+                    for 块 in 分块[1:]:
+                        if not re.match(rf"{re.escape(逻辑显示ID)}\b", 块):
+                            continue
+                        匹配 = re.search(r"\bcur=(\d+)x(\d+)\b", 块)
+                        if 匹配:
+                            宽, 高 = map(int, 匹配.groups())
+                            if 宽 > 0 and 高 > 0:
+                                return 宽, 高
+            except (ADB错误, ValueError, TypeError, re.error):
+                pass
         输出 = self.执行(["shell", "wm", "size"], timeout=8)
         if isinstance(输出, bytes):
             输出 = 输出.decode("utf-8", errors="replace")

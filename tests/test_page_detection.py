@@ -247,6 +247,18 @@ class 页面识别测试(unittest.TestCase):
         self.assertEqual(结果.页面, "战斗星级奖励")
         self.assertEqual(识别器.定位战斗星级奖励确定按钮(图像), (400, 460))
 
+    def test_战斗中的蓝紫结构不能抢先误判星级奖励(self):
+        """战斗倒计时和放弃按钮存在时必须继续下兵。"""
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        识别器 = 页面识别器(Mock())
+        识别器._最佳分数 = Mock(return_value=0.0)
+        识别器._红色放弃按钮分数 = Mock(return_value=0.93)
+        识别器._战斗倒计时分数 = Mock(return_value=0.96)
+        识别器._战斗星级奖励视觉分数 = Mock(return_value=0.96)
+        结果 = 识别器.识别(图像, 战斗中=True)
+        self.assertEqual(结果.页面, "战斗中")
+        self.assertNotEqual(结果.页面, "战斗星级奖励")
+
     def test_夜世界结算页底部回营按钮不误判星级奖励(self):
         """结算页按钮在更低位置，不能被当成中央确定按钮。"""
         图像 = np.full((600, 800, 3), (18, 25, 42), dtype=np.uint8)
