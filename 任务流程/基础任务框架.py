@@ -657,6 +657,77 @@ class 任务上下文:
         except (AttributeError, TypeError, ValueError, cv2.error):
             return None
 
+    def _检测主世界建筑详情关闭点(self, 屏幕图像) -> tuple[int, int] | None:
+        """识别主世界选中建筑详情面板的安全关闭点。
+
+        实机测试服会在主世界中央保留“取消/立即完成/加速建筑”等建筑
+        详情面板。主页攻击按钮仍然可见，但点击会被面板吞掉；这个面板
+        不能用 ESC 关闭，因为根页面误发 ESC 可能回到模拟器桌面。只有
+        OCR 同时确认详情按钮结构，并在右上角找到红色关闭控件时，才返
+        回关闭点；绝不使用底部“立即完成”或宝石坐标。
+        """
+        if 屏幕图像 is None or not hasattr(屏幕图像, "shape"):
+            return None
+        try:
+            高, 宽 = 屏幕图像.shape[:2]
+            if 高 < 300 or 宽 < 500 or len(屏幕图像.shape) < 3:
+                return None
+            OCR返回 = self.获取OCR引擎()(屏幕图像)
+            OCR结果 = OCR返回[0] if isinstance(OCR返回, tuple) else OCR返回
+            文本 = "".join(
+                self._规范升级弹窗OCR文本(项[1])
+                for 项 in (OCR结果 or [])
+                if isinstance(项, (list, tuple)) and len(项) > 1
+            )
+            有取消 = "取消" in 文本
+            有立即完成 = any(词 in 文本 for 词 in (
+                "立即完成", "立即完成", "加速建筑", "加速建筑工人",
+            ))
+            if not (有取消 and 有立即完成):
+                return None
+
+            hsv = cv2.cvtColor(屏幕图像, cv2.COLOR_BGR2HSV)
+            色相 = hsv[:, :, 0]
+            红色遮罩 = (
+                ((色相 <= 15) | (色相 >= 165))
+                & (hsv[:, :, 1] >= 70)
+                & (hsv[:, :, 2] >= 60)
+            ).astype("uint8")
+            x起点, x终点 = int(宽 * 0.90), int(宽 * 0.995)
+            y终点 = int(高 * 0.20)
+            区域 = 红色遮罩[:y终点, x起点:x终点]
+            if 区域.size == 0:
+                return None
+            区域 = cv2.morphologyEx(
+                区域,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
+            )
+            _, _, 统计, 重心 = cv2.connectedComponentsWithStats(区域, 8)
+            候选 = []
+            for 序号 in range(1, len(统计)):
+                x, y, 方宽, 方高, 面积 = [int(值) for 值 in 统计[序号]]
+                中心x, 中心y = [float(值) for 值 in 重心[序号]]
+                中心x += x起点
+                if not (
+                    宽 * 0.90 <= 中心x <= 宽 * 0.995
+                    and 高 * 0.025 <= 中心y <= 高 * 0.20
+                    and 4 <= 方宽 <= 宽 * 0.10
+                    and 4 <= 方高 <= 高 * 0.12
+                    and 面积 >= 8
+                ):
+                    continue
+                候选.append((面积, 中心x, 中心y))
+            if not 候选:
+                return None
+            _, 中心x, 中心y = max(候选, key=lambda 项: 项[0])
+            return (
+                int(round(中心x * 800 / 宽)),
+                int(round(中心y * 600 / 高)),
+            )
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return None
+
     def 清理主世界活动弹窗(self, 屏幕图像=None) -> bool:
         """关闭已确认的主世界活动弹窗；识别不清时绝不点击。"""
         if bool(getattr(self, "_战斗中", False)):
@@ -670,10 +741,14 @@ class 任务上下文:
                 except TypeError:
                     屏幕图像 = self.op.获取屏幕图像cv(0, 0, 800, 600)
             关闭点 = self._检测主世界活动弹窗关闭点(屏幕图像)
+            关闭说明 = "主世界活动/奖励弹窗"
+            if 关闭点 is None:
+                关闭点 = self._检测主世界建筑详情关闭点(屏幕图像)
+                关闭说明 = "主世界建筑详情面板"
             if 关闭点 is None:
                 return False
             self.置脚本状态(
-                f"检测到主世界活动/奖励弹窗，安全关闭右上角X：{关闭点[0]},{关闭点[1]}"
+                f"检测到{关闭说明}，安全关闭右上角X：{关闭点[0]},{关闭点[1]}"
             )
             if not self.点击已确认安全按钮(
                 关闭点[0], 关闭点[1], 延时=260

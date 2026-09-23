@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
+import cv2
 
 from 任务流程.基础任务框架 import 任务上下文
 from 任务流程.建筑升级.升级英雄 import 升级英雄任务
@@ -14,6 +15,32 @@ from 任务流程.战宠升级.打开要升级的宠物 import 打开要升级�
 
 
 class 升级面板关闭安全测试(unittest.TestCase):
+    def test_实机建筑详情面板只定位右上关闭而不定位立即完成(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        # 右上角红色 X 的实机缩小候选；底部文字由 OCR 结构授权。
+        cv2.rectangle(图像, (765, 28), (775, 38), (0, 0, 220), -1)
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.获取OCR引擎 = Mock(return_value=Mock(return_value=(
+            [
+                ([[410, 588], [451, 588], [451, 614], [410, 614]], "取消", 0.99),
+                ([[538, 588], [608, 588], [608, 611], [538, 611]], "立即完成", 0.99),
+                ([[660, 590], [748, 590], [748, 608], [660, 608]], "加速建筑工人", 0.99),
+            ],
+            None,
+        )))
+
+        self.assertEqual(
+            上下文._检测主世界建筑详情关闭点(图像),
+            (770, 33),
+        )
+
+    def test_没有建筑详情文字时不定位右上红色控件(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (765, 28), (775, 38), (0, 0, 220), -1)
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.获取OCR引擎 = Mock(return_value=Mock(return_value=([], None)))
+
+        self.assertIsNone(上下文._检测主世界建筑详情关闭点(图像))
     def test_OCR识别升级中标题正在将英雄升至等级(self):
         OCR结果 = [
             (None, "正在将野璧人之王升至84级", 0.91),

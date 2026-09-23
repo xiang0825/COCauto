@@ -266,6 +266,57 @@ class 资源状态测试(unittest.TestCase):
         self.assertEqual(结果["圣水"], 20_042_036)
         self.assertEqual(结果["黑油"], 362_905)
 
+    def test_整栏OCR按实机动态纵坐标归位(self):
+        任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((160, 210, 3), dtype=np.uint8)),
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.ocr引擎 = Mock(return_value=(
+            [
+                ([[82, 24], [160, 24], [160, 43], [82, 43]], "20017009", 0.99),
+                ([[81, 81], [162, 81], [162, 99], [81, 99]], "20048658", 0.99),
+                ([[107, 137], [165, 137], [165, 153], [107, 153]], "362905", 0.99),
+            ],
+            None,
+        ))
+
+        with patch(
+            "任务流程.更新主世界账号资源状态.单行资源识别",
+            side_effect=[20_017_009, 0, 0],
+        ):
+            结果 = 任务.识别当前资源(上下文)
+
+        self.assertTrue(结果["识别成功"])
+        self.assertEqual(结果["金币"], 20_017_009)
+        self.assertEqual(结果["圣水"], 20_048_658)
+        self.assertEqual(结果["黑油"], 362_905)
+
+    def test_一项主资源高而另一项漏读时不算可信(self):
+        任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((160, 210, 3), dtype=np.uint8)),
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.ocr引擎 = Mock(return_value=([], None))
+
+        with patch(
+            "任务流程.更新主世界账号资源状态.单行资源识别",
+            side_effect=[20_017_009, 0, 0, 20_017_009, 0, 0],
+        ):
+            结果 = 任务.识别当前资源(上下文)
+
+        self.assertFalse(结果["识别成功"])
+        self.assertIn("漏读", 结果["识别错误"])
+
 
 if __name__ == "__main__":
     unittest.main()
