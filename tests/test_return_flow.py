@@ -123,6 +123,40 @@ class 回营状态机测试(unittest.TestCase):
         self.assertTrue(任务.执行())
         self.assertIn("放弃操作后战斗已进入结算页", " ".join(上下文.状态))
 
+    def test_速刷放弃后直接回主世界但无结算时禁止下一场(self):
+        class 设置:
+            是否快速刷资源 = True
+
+        class 数据库:
+            def 获取机器人设置(self, _机器人标志):
+                return 设置()
+
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        上下文 = type(
+            "上下文",
+            (),
+            {
+                "数据库": 数据库(),
+                "机器人标志": "测试机器人",
+                "状态": [],
+                "脚本延时": lambda _自身, _毫秒: None,
+                "置脚本状态": lambda _自身, 文本, *_参数, **_关键字: _自身.状态.append(文本),
+            },
+        )()
+        任务._当前已确认结算页 = lambda _上下文: False
+        任务.点击放弃战斗按钮 = lambda _上下文: True
+        任务.点击确定 = lambda _上下文: False
+        任务.等待主界面就绪 = lambda _上下文: True
+        任务.等待回营地按钮出现 = unittest.mock.Mock(
+            side_effect=AssertionError("无结算时不应继续回营")
+        )
+        任务.上下文 = 上下文
+
+        self.assertFalse(任务.执行())
+        self.assertIn("直接回到主世界", " ".join(上下文.状态))
+        self.assertIn("禁止开始下一场", " ".join(上下文.状态))
+        任务.等待回营地按钮出现.assert_not_called()
+
     def test_速刷按钮模板低分时用战斗页红色几何定位(self):
         class 页面识别:
             def 识别(self, _图像, **_参数):
