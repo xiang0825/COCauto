@@ -262,6 +262,30 @@ class 打开进攻页面测试(unittest.TestCase):
             705, 535, 延时=700, 是否精确点击=True
         )
 
+    def test_搜索页下一個按钮优先于结束战斗特征(self):
+        """搜索页也有结束战斗按钮，必须先走资源评分而不是直接下兵。"""
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=self.军队配置画面())
+            ),
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务._是否出现下一个 = Mock(side_effect=[True, True])
+        任务._识别已存在的战斗页面 = Mock(return_value="战斗中")
+        任务._最近搜索页识别依据 = "按钮区域"
+        任务._最近搜索页识别分数 = 0.91
+        任务._标记本场资源评分不可用 = Mock()
+
+        self.assertTrue(任务._等待并点击攻击按钮(上下文))
+        self.assertEqual(上下文.本场资源评分状态, "待评分")
+        self.assertIn("已确认敌方搜索页", 上下文.本场资源评分说明)
+        任务._识别已存在的战斗页面.assert_not_called()
+        任务._标记本场资源评分不可用.assert_not_called()
+        上下文.点击.assert_not_called()
+
     def test_攻击后结算过渡单帧不会跳过下兵(self):
         """攻击点击后的结算视觉过渡帧必须等下一帧，不能误判为已结算。"""
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
