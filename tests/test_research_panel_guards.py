@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from 任务流程.兵种或法术升级.打开研究面板 import 打开研究面板任务
 from 任务流程.兵种或法术升级.打开要升级的兵种或法术 import 打开要升级的兵种或法术任务
+from 任务流程.兵种或法术升级.完成兵种或法术升级 import 完成兵种或法术升级任务
 from 任务流程.战宠升级.完成宠物升级 import 完成宠物升级任务
 
 
@@ -85,6 +86,50 @@ class 研究面板OCR护栏测试(unittest.TestCase):
         self.assertEqual(任务.上下文.安全返回键.call_count, 2)
         self.assertTrue(any(
             "未找到确认按钮" in 调用.args[0]
+            for 调用 in 任务.上下文.置脚本状态.call_args_list
+        ))
+
+    def test_研究升级确认按钮点击被拒绝时不能报告成功(self):
+        任务 = 完成兵种或法术升级任务.__new__(完成兵种或法术升级任务)
+        任务.上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=object())),
+            置脚本状态=Mock(),
+            点击=Mock(return_value=False),
+            安全返回键=Mock(return_value=True),
+        )
+        任务.执行OCR识别 = Mock(return_value=[([], "确认", 0.99)])
+
+        with patch(
+            "任务流程.兵种或法术升级.完成兵种或法术升级.是否包含指定颜色_HSV",
+            return_value=False,
+        ):
+            self.assertFalse(任务.执行())
+
+        任务.上下文.点击.assert_called_once_with(*任务.确认按钮点击坐标)
+        self.assertTrue(any(
+            "未能安全点击" in 调用.args[0]
+            for 调用 in 任务.上下文.置脚本状态.call_args_list
+        ))
+
+    def test_战宠升级确认按钮点击被拒绝时不能报告成功(self):
+        任务 = 完成宠物升级任务.__new__(完成宠物升级任务)
+        任务.上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=object())),
+            置脚本状态=Mock(),
+            点击=Mock(return_value=False),
+            安全返回键=Mock(return_value=True),
+        )
+        任务.执行OCR识别 = Mock(return_value=[([], "确认", 0.99)])
+
+        with patch(
+            "任务流程.战宠升级.完成宠物升级.是否包含指定颜色_HSV",
+            return_value=False,
+        ):
+            self.assertFalse(任务.执行())
+
+        任务.上下文.点击.assert_called_once_with(577, 492)
+        self.assertTrue(any(
+            "未能安全点击" in 调用.args[0]
             for 调用 in 任务.上下文.置脚本状态.call_args_list
         ))
 

@@ -69,6 +69,16 @@ class 升级面板关闭安全测试(unittest.TestCase):
                 unittest.mock.call(说明, 已确认可关闭面板=True),
             )
 
+    def test_研究面板第二次关闭失败会向上返回失败(self):
+        返回 = Mock(side_effect=[True, False])
+        任务 = 完成兵种或法术升级任务.__new__(完成兵种或法术升级任务)
+        任务.上下文 = SimpleNamespace(
+            安全返回键=返回,
+            置脚本状态=Mock(),
+        )
+
+        self.assertFalse(任务._关闭升级面板())
+
     def test_战宠升级面板关闭授权已确认面板(self):
         返回 = Mock(return_value=True)
         任务 = 完成宠物升级任务.__new__(完成宠物升级任务)
