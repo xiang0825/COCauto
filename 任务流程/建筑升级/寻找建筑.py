@@ -365,7 +365,24 @@ class 寻找建筑(夜世界基础任务):
         随机半径 = random.randint(0, 5)
 
         while True:
+            停止事件 = getattr(self.上下文, "停止事件", None)
+            if 停止事件 is not None and 停止事件.is_set():
+                # 外部停止时不能再做 OCR 或地图滑动；否则关闭窗口/停止
+                # 期间仍会继续向当前游戏页发送手势，表现为任务卡住或
+                # 停止后画面继续移动。标记为安全跳过，避免调度器把
+                # 正常的外部停止写成建筑升级失败。
+                self.安全跳过 = True
+                self.上下文.置脚本状态(
+                    "收到停止请求，停止建筑扫描；禁止继续OCR、滑动或点击"
+                )
+                return False
             self.上下文.脚本延时(1500)
+            if 停止事件 is not None and 停止事件.is_set():
+                self.安全跳过 = True
+                self.上下文.置脚本状态(
+                    "建筑扫描延时结束时收到停止请求，禁止继续读取当前页面"
+                )
+                return False
             ocr结果 = self.执行OCR识别((219, 57, 595, 398))
 
             建筑列表 = []
@@ -390,6 +407,12 @@ class 寻找建筑(夜世界基础任务):
             if time.time() - self.开始时间 > 120:
                 raise RuntimeError(f"找建筑超时: {', '.join(self.建筑列表)}")
 
+            if 停止事件 is not None and 停止事件.is_set():
+                self.安全跳过 = True
+                self.上下文.置脚本状态(
+                    "建筑扫描OCR后收到停止请求，禁止继续滑动当前页面"
+                )
+                return False
             self.滑动屏幕(随机半径)
             self.上下文.置脚本状态(f"滑动屏幕，继续查找")
 

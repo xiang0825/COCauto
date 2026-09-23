@@ -2,6 +2,7 @@ import time
 import unittest
 import cv2
 import numpy as np
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -16,6 +17,24 @@ from 任务流程.建筑升级.升级英雄 import 升级英雄任务
 
 
 class 建筑升级边界测试(unittest.TestCase):
+    def test_建筑扫描收到停止请求后不再OCR或滑动(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.建筑列表 = ["兵营"]
+        任务.安全跳过 = False
+        任务.上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            置脚本状态=Mock(),
+        )
+        任务.上下文.停止事件.set()
+        任务.打开建筑页面 = Mock(return_value=True)
+        任务.执行OCR识别 = Mock()
+        任务.滑动屏幕 = Mock()
+
+        self.assertFalse(任务.找建筑循环())
+        self.assertTrue(任务.安全跳过)
+        任务.执行OCR识别.assert_not_called()
+        任务.滑动屏幕.assert_not_called()
+
     def test_关闭刷资源时建筑入口仍使用主世界坐标(self):
         点击 = Mock()
         任务 = 寻找建筑.__new__(寻找建筑)
