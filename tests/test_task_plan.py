@@ -687,6 +687,47 @@ class 任务计划测试(unittest.TestCase):
                 for 调用 in 上下文.置脚本状态.call_args_list)
         )
 
+    def test_英雄当前不可升级安全跳过且不记录建筑任务失败(self):
+        上下文 = SimpleNamespace(
+            设置=机器人设置(
+                欲升级的英雄或建筑=["野蛮人之王"],
+                是否升级建议升级的建筑=False,
+                建筑升级检查间隔=0,
+            ),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            机器人标志="测试机器人",
+        )
+        数据库 = Mock(
+            获取最新完整状态=Mock(return_value=SimpleNamespace(状态数据={})),
+            更新状态=Mock(),
+        )
+        任务 = 建筑升级任务.__new__(建筑升级任务)
+        任务.上下文 = 上下文
+        任务.数据库 = 数据库
+        任务.机器人标志 = 上下文.机器人标志
+
+        with patch("任务流程.建筑升级.更新工人状态任务") as 工人状态, \
+             patch("任务流程.建筑升级.寻找建筑") as 寻找, \
+             patch("任务流程.建筑升级.升级英雄任务") as 升级英雄:
+            工人状态.return_value.执行.return_value = True
+            工人状态.return_value.是否有空闲工人.return_value = True
+            寻找.return_value.执行.return_value = True
+            寻找.return_value.当前建筑 = "野蛮人之王"
+            升级英雄.return_value.执行.return_value = False
+            升级英雄.return_value.安全跳过 = True
+
+            self.assertTrue(任务.执行())
+
+        self.assertFalse(any(
+            "建筑升级失败记录已写入数据库" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+        self.assertTrue(any(
+            "不阻断后续任务" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
 
 if __name__ == "__main__":
     unittest.main()

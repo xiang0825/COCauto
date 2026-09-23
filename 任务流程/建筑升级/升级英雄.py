@@ -22,6 +22,9 @@ class 升级英雄任务(夜世界基础任务):
     def __init__(self, 上下文: '任务上下文', 要升级的英雄: str):
         super().__init__(上下文)
         self.要升级的英雄 = 要升级的英雄
+        # “当前不可升级”是可恢复的正常状态；真正的 OCR/ADB/页面
+        # 异常仍返回 False 并由上层记录失败。
+        self.安全跳过 = False
 
         # # 英雄及其所在区域映射
         # self.英雄区域映射 = {
@@ -217,8 +220,9 @@ class 升级英雄任务(夜世界基础任务):
 
         except 英雄不可升级错误 as e:
             # 统一处理不可升级情况：关闭页面 + 状态记录
+            self.安全跳过 = True
             self.关闭英雄升级页面()
-            self.上下文.置脚本状态(str(e))
+            self.上下文.置脚本状态(f"{e}，已安全跳过当前目标")
             return False
 
         except Exception as e:
