@@ -690,6 +690,38 @@ class 任务上下文:
             self.置脚本状态(f"活动弹窗关闭失败，禁止继续点击：{异常}")
             return False
 
+    @staticmethod
+    def _OCR确认升级详情页(OCR结果) -> bool:
+        """确认升级详情页标题，兼容升级中和待确认两种文案。
+
+        国际服测试版本的升级中面板常显示“正在将…升至84级”，而不是
+        “正在进行升级”。这两类页面都只允许关闭右上角 X，绝不能把底部
+        的“立即完成”或宝石数量当成恢复按钮。把文字判断独立出来，便于
+        用固定 OCR 回归样本覆盖简体、繁体和进行中页面。
+        """
+        OCR文本 = "".join(
+            str(项[1]) for 项 in OCR结果 or []
+            if isinstance(项, (list, tuple)) and len(项) > 1
+        ).replace(" ", "").replace("\n", "")
+        if not OCR文本:
+            return False
+        有升级中标题 = any(标题 in OCR文本 for 标题 in (
+            "正在进行升级", "正在進行升級", "正在进行升級", "正在進行升级",
+            "正在将", "正在將",
+        ))
+        # “正在将…升至…级”是当前实机测试服的升级中标题；标题中同时
+        # 出现“立即完成/剩余时间”时，即使英雄名称 OCR 有误也仍可安全
+        # 认定为升级详情页，因为后续只会点击几何确认过的右上角 X。
+        有升级中结构 = (
+            "升至" in OCR文本
+            and any(词 in OCR文本 for 词 in ("立即完成", "剩余时间", "剩餘時間", "级", "級"))
+        )
+        有升级确认标题 = (
+            "升至" in OCR文本
+            and ("?" in OCR文本 or "？" in OCR文本)
+        )
+        return 有升级中标题 or 有升级中结构 or 有升级确认标题
+
     def 关闭升级详情弹窗(self, 屏幕图像=None) -> bool:
         """安全关闭升级详情弹窗；绝不点击宝石或立即完成。
 
@@ -719,20 +751,10 @@ class 任务上下文:
         def 有升级详情标题(图像) -> bool:
             try:
                 OCR结果, _ = self.获取OCR引擎()(图像)
-                OCR文本 = " ".join(
-                    str(项[1]) for 项 in OCR结果 or []
-                    if isinstance(项, (list, tuple)) and len(项) > 1
-                ).replace(" ", "").replace("\n", "")
             except Exception as 异常:
                 self.置脚本状态(f"升级详情标题复核失败，未发送关闭点击：{异常}")
                 return False
-            有升级中标题 = any(标题 in OCR文本 for 标题 in (
-                "正在进行升级", "正在進行升級", "正在进行升級", "正在進行升级",
-            ))
-            有升级确认标题 = (
-                "升至" in OCR文本 or "升至" in OCR文本
-            ) and ("?" in OCR文本 or "？" in OCR文本)
-            return 有升级中标题 or 有升级确认标题
+            return self._OCR确认升级详情页(OCR结果)
 
         # 几何红色 X 只能作为候选，不能单独授权点击：主世界活动/奖励
         # 弹窗也可能有相似的灰色标题栏。确认页只允许点右上角 X 取消，

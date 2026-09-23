@@ -4,6 +4,7 @@ from unittest.mock import Mock
 
 import numpy as np
 
+from 任务流程.基础任务框架 import 任务上下文
 from 任务流程.建筑升级.升级英雄 import 升级英雄任务
 from 任务流程.兵种或法术升级.完成兵种或法术升级 import 完成兵种或法术升级任务
 from 任务流程.战宠升级.完成宠物升级 import 完成宠物升级任务
@@ -12,6 +13,24 @@ from 任务流程.战宠升级.打开要升级的宠物 import 打开要升级�
 
 
 class 升级面板关闭安全测试(unittest.TestCase):
+    def test_OCR识别升级中标题正在将英雄升至等级(self):
+        OCR结果 = [
+            (None, "正在将野璧人之王升至84级", 0.91),
+            (None, "立即完成", 0.99),
+            (None, "剩余时间：4天22小时", 0.90),
+        ]
+
+        self.assertTrue(任务上下文._OCR确认升级详情页(OCR结果))
+
+    def test_OCR没有升级标题不授权关闭(self):
+        OCR结果 = [
+            (None, "英雄", 0.99),
+            (None, "立即完成", 0.99),
+            (None, "商店", 0.99),
+        ]
+
+        self.assertFalse(任务上下文._OCR确认升级详情页(OCR结果))
+
     def test_英雄面板关闭授权已确认面板(self):
         返回 = Mock(return_value=True)
         任务 = 升级英雄任务.__new__(升级英雄任务)
@@ -30,7 +49,7 @@ class 升级面板关闭安全测试(unittest.TestCase):
         任务.上下文 = SimpleNamespace(点击=点击, 安全返回键=返回)
 
         self.assertTrue(任务.关闭英雄升级页面())
-        点击.assert_called_once_with(680, 300, 延时=700, 是否精确点击=True)
+        点击.assert_called_once_with(700, 300, 延时=700, 是否精确点击=True)
         返回.assert_not_called()
 
     def test_研究面板关闭两次都授权已确认面板(self):

@@ -1,5 +1,6 @@
 import time
 import unittest
+import cv2
 import numpy as np
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -64,6 +65,21 @@ class 建筑升级边界测试(unittest.TestCase):
 
         点击.assert_not_called()
         任务.上下文.置脚本状态.assert_called_once()
+
+    def test_关闭英雄殿堂后清除主世界升级浮层(self):
+        点击 = Mock(return_value=True)
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.上下文 = SimpleNamespace(点击=点击, 脚本延时=Mock())
+
+        任务._关闭英雄殿堂()
+
+        self.assertEqual(
+            点击.call_args_list,
+            [
+                unittest.mock.call(356, 33, 延时=700),
+                unittest.mock.call(700, 300, 延时=500, 是否精确点击=True),
+            ],
+        )
 
     def test_建议列表跳过本轮已提交的项目(self):
         任务 = 寻找建筑.__new__(寻找建筑)
@@ -371,6 +387,22 @@ class 工人状态容错测试(unittest.TestCase):
 
 
 class 英雄升级确认页测试(unittest.TestCase):
+    def test_英雄殿堂右上角关闭按钮自适应识别(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(屏幕, (720, 40), (780, 100), (0, 0, 220), -1)
+        cv2.line(屏幕, (735, 55), (765, 85), (255, 255, 255), 5)
+        cv2.line(屏幕, (765, 55), (735, 85), (255, 255, 255), 5)
+
+        结果 = 升级英雄任务._检测英雄殿堂关闭点(屏幕)
+
+        self.assertIsNotNone(结果)
+        self.assertAlmostEqual(结果[0], 750, delta=5)
+        self.assertAlmostEqual(结果[1], 70, delta=5)
+
+    def test_普通主世界没有英雄殿堂关闭按钮(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        self.assertIsNone(升级英雄任务._检测英雄殿堂关闭点(屏幕))
+
     def test_繁体标题和绿色资源按钮可以确认升级页(self):
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
         屏幕[465:570, 465:640] = (40, 190, 100)
