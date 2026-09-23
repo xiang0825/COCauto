@@ -103,6 +103,32 @@ class 刷墙识别测试(unittest.TestCase):
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
+    def test_安全取消点击被输入层拒绝时停止扫描(self):
+        上下文 = SimpleNamespace(
+            点击=Mock(return_value=False),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+
+        self.assertFalse(self.任务._安全关闭非城墙选中面板(上下文))
+        self.assertTrue(上下文.页面恢复失败)
+        self.assertFalse(any(
+            "安全取消选中面板" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_进入城墙画面失败时不继续截图或资源操作(self):
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+        )
+        self.任务.上下文 = 上下文
+        self.任务.进入城墙界面 = Mock(return_value=False)
+
+        self.assertFalse(self.任务.刷一次墙())
+        self.assertTrue(上下文.页面恢复失败)
+
     def test_刷墙任务读取上下文停止事件(self):
         上下文 = SimpleNamespace(
             停止事件=threading.Event(),

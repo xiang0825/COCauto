@@ -806,8 +806,14 @@ class 自动化机器人:
     def _执行刷墙计划(self, 上下文, 检测登录) -> bool:
         """执行刷墙；墙体判断资源不足时自动补做一次主世界刷资源。"""
         上下文.刷墙需要资源 = False
-        self._执行升级计划("wall", 上下文, 检测登录)
+        墙体阶段成功 = self._执行升级计划("wall", 上下文, 检测登录)
         if getattr(上下文, "页面恢复失败", False):
+            return False
+        if not 墙体阶段成功 and not getattr(上下文, "刷墙需要资源", False):
+            上下文.置脚本状态(
+                "城墙任务异常结束且未确认资源不足，禁止继续其他任务和点击"
+            )
+            上下文.页面恢复失败 = True
             return False
         if not getattr(上下文, "刷墙需要资源", False) or self.停止事件.is_set():
             # “没有可升级墙段/资源未确认”可以是本轮正常无操作；只有页面

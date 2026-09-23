@@ -666,6 +666,26 @@ class 任务计划测试(unittest.TestCase):
             any("禁止开始下一轮" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
         )
 
+    def test_刷墙任务异常结束且非资源不足时禁止继续任务计划(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = threading.Event()
+        机器人._执行升级计划 = Mock(return_value=False)
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            刷墙需要资源=False,
+            置脚本状态=Mock(),
+        )
+
+        结果 = 机器人._执行刷墙计划(上下文, Mock())
+
+        self.assertFalse(结果)
+        self.assertTrue(上下文.页面恢复失败)
+        机器人._执行升级计划.assert_called_once_with("wall", 上下文, unittest.mock.ANY)
+        self.assertTrue(any(
+            "禁止继续其他任务和点击" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
     def test_夜世界资源缺失或识别失败不会被当成零资源(self):
         self.assertIsNone(
             自动化机器人._取已确认夜世界资源(
