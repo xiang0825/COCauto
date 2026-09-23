@@ -46,6 +46,88 @@ class _上下文:
 
 
 class 回营状态机测试(unittest.TestCase):
+    def test_速刷等待后已自然结算时跳过放弃确认(self):
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        上下文 = type("上下文", (), {"_战斗结束已确认": True})()
+
+        self.assertTrue(任务._当前已确认结算页(上下文))
+
+    def test_速刷按钮模板低分时用战斗页红色几何定位(self):
+        class 页面识别:
+            def 识别(self, _图像, **_参数):
+                return type("结果", (), {"页面": "战斗中"})()
+
+        上下文 = type(
+            "上下文",
+            (),
+            {"_获取点击页面识别器": lambda _自身: 页面识别()},
+        )()
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (10, 430), (103, 467), (0, 0, 210), -1)
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+
+        坐标 = 任务._定位红色放弃按钮(上下文, 图像)
+
+        self.assertIsNotNone(坐标)
+        self.assertTrue(0 <= 坐标[0] <= 800)
+        self.assertTrue(0 <= 坐标[1] <= 600)
+
+    def test_投降确认框模板低分时用双按钮几何定位(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (237, 347), (386, 428), (0, 130, 240), -1)
+        cv2.rectangle(图像, (412, 347), (561, 429), (90, 210, 70), -1)
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+
+        坐标 = 任务._定位放弃确认按钮(图像)
+
+        self.assertIsNotNone(坐标)
+        self.assertGreaterEqual(坐标[0], 400)
+        self.assertGreaterEqual(坐标[1], 300)
+
+    def test_投降确认框使用专用安全点击通道避免被断线护栏拦截(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (237, 347), (386, 428), (0, 130, 240), -1)
+        cv2.rectangle(图像, (412, 347), (561, 429), (90, 210, 70), -1)
+
+        class 低分匹配器:
+            def 执行匹配(self, *_参数, **_关键字参数):
+                return False, (0, 0), None
+
+        class 屏幕:
+            def 获取屏幕图像cv(self, *_区域):
+                return 图像
+
+        class 上下文:
+            op = 屏幕()
+            模板识别 = 低分匹配器()
+
+            def __init__(自身):
+                自身.专用点击 = []
+
+            def 置脚本状态(自身, _文本, *_参数, **_关键字参数):
+                pass
+
+            def 脚本延时(自身, _毫秒):
+                pass
+
+            def 点击已确认安全按钮(自身, x, y, 延时=100):
+                自身.专用点击.append((x, y, 延时))
+                return True
+
+            def 点击(自身, *_参数, **_关键字参数):
+                raise AssertionError("投降确认框不应走普通点击护栏")
+
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        上下文实例 = 上下文()
+        任务.模板识别 = 上下文实例.模板识别
+        with unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.time.time",
+            side_effect=[0, 1],
+        ):
+            self.assertTrue(任务.点击确定(上下文实例))
+        self.assertEqual(len(上下文实例.专用点击), 1)
+        self.assertEqual(上下文实例.专用点击[0][2], 100)
+
     def test_OCR胜负结果不能把未知当胜利(self):
         self.assertEqual(等待战斗结束并回营任务.从OCR文本判断战斗结果("胜利！"), "胜利")
         self.assertEqual(等待战斗结束并回营任务.从OCR文本判断战斗结果("战斗失败"), "失败")

@@ -71,12 +71,18 @@ class 等待战斗结束并回营任务(基础任务):
             # 速刷模式：等待4-7秒后主动放弃战斗，直接回营
             上下文.置脚本状态("速刷模式：等待4-7秒后放弃战斗", 3*60)
             上下文.脚本延时(random.randint(4*1000, 7*1000))
-            if not self.点击放弃战斗按钮(上下文):
-                上下文.置脚本状态("未找到放弃战斗按钮，回营失败")
-                return False
-            if not self.点击确定(上下文):
-                上下文.置脚本状态("未找到放弃战斗确认按钮，回营失败")
-                return False
+            # 速刷等待期间战斗可能已经自然结束。此时画面已经是结算
+            # 页，不能再把“找不到放弃按钮”当作失败，也不能盲点结算
+            # 页上的其它按钮；直接交给统一回营状态机确认结果和回营。
+            if self._当前已确认结算页(上下文):
+                上下文.置脚本状态("速刷等待期间战斗已结束，跳过放弃确认并直接回营")
+            else:
+                if not self.点击放弃战斗按钮(上下文):
+                    上下文.置脚本状态("未找到放弃战斗按钮，回营失败")
+                    return False
+                if not self.点击确定(上下文):
+                    上下文.置脚本状态("未找到放弃战斗确认按钮，回营失败")
+                    return False
             if not self.等待回营地按钮出现(上下文):
                 return False
         else:
@@ -87,6 +93,22 @@ class 等待战斗结束并回营任务(基础任务):
 
         上下文.置脚本状态("回营完成")
         return True
+
+    def _当前已确认结算页(self, 上下文) -> bool:
+        """判断速刷等待结束时是否已经自然进入结算页。"""
+        if bool(getattr(上下文, "_战斗结束已确认", False)):
+            return True
+        识别 = getattr(上下文, "识别点击画面", None)
+        if not callable(识别):
+            return False
+        try:
+            try:
+                结果 = 识别(强制=True)
+            except TypeError:
+                结果 = 识别()
+            return getattr(结果, "页面", "") in {"战斗结算", "结算"}
+        except Exception:
+            return False
 
     def 点击放弃战斗按钮(self, 上下文) -> bool:
         """点击放弃战斗按钮"""
@@ -102,6 +124,20 @@ class 等待战斗结束并回营任务(基础任务):
             是否匹配, (x, y), _ = self.模板识别.执行匹配(屏幕图像, 模板路径, 相似度阈值=0.9)
             if 是否匹配:
                 上下文.点击(x, y)
+                return True
+
+            # 国际服/测试服的按钮字体和缩放会变化，旧小模板在实机上
+            # 只有约 0.71~0.78 分，不能继续把“等待按钮”拖满30秒。
+            # 这里要求页面识别已经确认仍在战斗，再用左下角红色横向
+            # 按钮的几何特征定位，避免把地图或兵栏上的红色物体当作
+            # 输入目标。坐标仍是 800x600 逻辑画布，和上下文点击一致。
+            红色按钮 = self._定位红色放弃按钮(上下文, 屏幕图像)
+            if 红色按钮 is not None:
+                上下文.置脚本状态(
+                    f"模板未命中，已通过战斗页红色按钮几何定位放弃："
+                    f"{红色按钮[0]},{红色按钮[1]}"
+                )
+                上下文.点击(*红色按钮)
                 return True
 
             # 间隔检测
@@ -124,11 +160,80 @@ class 等待战斗结束并回营任务(基础任务):
             if 是否匹配:
                 上下文.点击(x, y)
                 return True
+            # “要投降吗？”确认框的繁体按钮在测试服上与旧模板差异
+            # 较大。这里同时要求中央下方存在绿色“确定”和左侧橙色
+            # “取消”，只返回绿色按钮中心，不会把普通主世界绿色控件
+            # 当成确认输入。
+            确认按钮 = self._定位放弃确认按钮(屏幕图像)
+            if 确认按钮 is not None:
+                上下文.置脚本状态(
+                    f"模板未命中，已通过投降确认框几何定位确定："
+                    f"{确认按钮[0]},{确认按钮[1]}"
+                )
+                # 这里已经由同一帧同时确认了绿色“确定”和橙色“取消”。
+                # 测试服的该确认框会被通用页面识别归类为“断线弹窗”，
+                # 普通点击因此会被战斗/断线护栏拒绝，导致速刷卡在确认框。
+                # 只对这个经过双按钮几何确认的非购买按钮使用专用通道，
+                # 不放宽普通点击，也不允许它触碰商店或宝石入口。
+                专用点击 = getattr(上下文, "点击已确认安全按钮", None)
+                if callable(专用点击):
+                    return bool(专用点击(*确认按钮, 延时=100))
+                上下文.点击(*确认按钮)
+                return True
 
             # 间隔检测
             上下文.脚本延时(1000)
 
         return False
+
+    def _定位放弃确认按钮(self, 屏幕图像) -> tuple[int, int] | None:
+        """定位投降确认框的绿色确定按钮，要求同时存在橙色取消按钮。"""
+        if not isinstance(屏幕图像, np.ndarray) or 屏幕图像.ndim < 2:
+            return None
+        try:
+            高, 宽 = 屏幕图像.shape[:2]
+            hsv = cv2.cvtColor(屏幕图像, cv2.COLOR_BGR2HSV)
+
+            def 最大按钮(下限, 上限, 左范围, 右范围):
+                掩码 = cv2.inRange(
+                    hsv,
+                    np.array(下限, dtype=np.uint8),
+                    np.array(上限, dtype=np.uint8),
+                )
+                掩码 = cv2.morphologyEx(
+                    掩码,
+                    cv2.MORPH_CLOSE,
+                    cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)),
+                )
+                _, _, 统计, _ = cv2.connectedComponentsWithStats(掩码, 8)
+                候选 = []
+                for x, y, 方框宽, 方框高, 面积 in 统计[1:]:
+                    if not (
+                        面积 >= int(宽 * 高 * 0.012)
+                        and 方框宽 >= int(宽 * 0.12)
+                        and 方框高 >= int(高 * 0.07)
+                        and 左范围 <= x <= 右范围
+                        and int(高 * 0.48) <= y <= int(高 * 0.72)
+                    ):
+                        continue
+                    候选.append((int(x), int(y), int(方框宽), int(方框高), int(面积)))
+                return max(候选, key=lambda 项: 项[-1], default=None)
+
+            绿色 = 最大按钮((25, 60, 80), (100, 255, 255), 宽 * 0.42, 宽 * 0.80)
+            橙色 = 最大按钮((5, 80, 80), (28, 255, 255), 宽 * 0.18, 宽 * 0.42)
+            if 绿色 is None or 橙色 is None:
+                return None
+            if abs(绿色[1] - 橙色[1]) > max(20, int(高 * 0.06)):
+                return None
+            scale_x = 800 / max(1, 宽)
+            scale_y = 600 / max(1, 高)
+            return (
+                int((绿色[0] + 绿色[2] / 2) * scale_x),
+                int((绿色[1] + 绿色[3] / 2) * scale_y),
+            )
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return None
+        return None
 
     def 等待回营地按钮出现(self, 上下文) -> bool:
         """使用模板匹配检测下一个按钮"""
@@ -197,6 +302,57 @@ class 等待战斗结束并回营任务(基础任务):
             上下文.脚本延时(500)
 
         return False
+
+    def _定位红色放弃按钮(self, 上下文, 屏幕图像) -> tuple[int, int] | None:
+        """仅在页面确认战斗时定位左下角红色放弃按钮。"""
+        if not isinstance(屏幕图像, np.ndarray) or 屏幕图像.ndim < 2:
+            return None
+        try:
+            获取识别器 = getattr(上下文, "_获取点击页面识别器", None)
+            if not callable(获取识别器):
+                return None
+            页面结果 = 获取识别器().识别(屏幕图像, 战斗中=True)
+            if getattr(页面结果, "页面", "") != "战斗中":
+                return None
+            高, 宽 = 屏幕图像.shape[:2]
+            左 = 0
+            右 = max(1, int(宽 * 0.22))
+            上 = int(高 * 0.67)
+            区域 = 屏幕图像[上:, 左:右]
+            if 区域.size == 0:
+                return None
+            hsv = cv2.cvtColor(区域, cv2.COLOR_BGR2HSV)
+            色相 = hsv[:, :, 0]
+            掩码 = (
+                ((色相 <= 12) | (色相 >= 170))
+                & (hsv[:, :, 1] >= 90)
+                & (hsv[:, :, 2] >= 80)
+            ).astype(np.uint8)
+            掩码 = cv2.morphologyEx(
+                掩码,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
+            )
+            _, _, 统计, _ = cv2.connectedComponentsWithStats(掩码, 8)
+            for x, y, 方框宽, 方框高, 面积 in 统计[1:]:
+                if not (
+                    面积 >= max(600, int(宽 * 高 * 0.005))
+                    and 方框宽 >= max(55, int(区域.shape[1] * 0.28))
+                    and 方框高 >= max(20, int(高 * 0.03))
+                    and 方框宽 / max(1, 方框高) >= 1.5
+                    and x <= max(40, int(区域.shape[1] * 0.25))
+                    and y <= int(区域.shape[0] * 0.75)
+                ):
+                    continue
+                scale_x = 800 / max(1, 宽)
+                scale_y = 600 / max(1, 高)
+                return (
+                    int((x + 方框宽 / 2) * scale_x),
+                    int((上 + y + 方框高 / 2) * scale_y),
+                )
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return None
+        return None
 
     def 等待主界面就绪(self, 上下文) -> bool:
         """点击回营后确认主界面的进攻入口已出现，防止下一轮误点卡住。"""
