@@ -54,6 +54,19 @@ class 研究面板OCR护栏测试(unittest.TestCase):
             243, 13, 是否精确点击=True
         )
 
+    def test_研究目标页面异常交给统一异常处理器(self):
+        任务 = 打开要升级的兵种或法术任务.__new__(打开要升级的兵种或法术任务)
+        任务.欲升级的兵种或法术 = "雷电法术"
+        任务.上下文 = SimpleNamespace()
+        任务.执行OCR识别 = Mock(return_value=[])
+        任务.当前界面是否存在目标兵种或法术 = Mock(
+            side_effect=RuntimeError("测试页面异常")
+        )
+        任务.异常处理 = Mock()
+
+        self.assertFalse(任务.执行())
+        任务.异常处理.assert_called_once()
+
     def test_战宠确认按钮漏识别时关闭升级面板(self):
         任务 = 完成宠物升级任务.__new__(完成宠物升级任务)
         任务.上下文 = SimpleNamespace(

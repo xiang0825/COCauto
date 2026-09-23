@@ -61,8 +61,12 @@ class 打开要升级的兵种或法术任务(基础任务):
             self.上下文.置脚本状态(str(e))
             self.关闭研究面板()
             return False
-        # except Exception:
-        #     return False
+        except Exception as e:
+            # 点击、滑动或页面复核阶段的异常不能直接冒泡到机器人主线程；
+            # 统一交给安全异常处理器，由它决定是否停止任务和保留当前页。
+            # 不在未知异常分支追加关闭点击，避免 ADB/页面失真时误触其它入口。
+            self.异常处理(e)
+            return False
 
     def 尝试点击目标兵种或法术(self) -> bool:
         """在当前界面查找并点击目标兵种或法术"""
