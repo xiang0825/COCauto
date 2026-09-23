@@ -239,6 +239,5 @@ class 进攻目标选择测试(unittest.TestCase):
             {"圣水瓶", "金库"},
         )
 
-
 if __name__ == "__main__":
     unittest.main()

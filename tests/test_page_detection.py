@@ -28,6 +28,30 @@ class 页面识别测试(unittest.TestCase):
     def test_顶号等待按毫秒单位为200秒(self):
         self.assertEqual(检测游戏登录状态任务.顶号等待毫秒, 200_000)
 
+    def test_启动时军队配置页先安全关闭再继续主页识别(self):
+        """已打开军队页不能等待登录超时，也不能用ESC退出游戏。"""
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        # 中央配置面板 + 右下绿色攻击按钮，复现进攻入口识别所需的
+        # 两个独立证据；不依赖本机当前模拟器截图。
+        屏幕[80:530, 96:704] = (180, 180, 180)
+        屏幕[490:570, 560:760] = (0, 200, 100)
+        上下文 = SimpleNamespace(
+            数据库=Mock(),
+            机器人标志="robot_test",
+            清理主世界活动弹窗=Mock(return_value=True),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            页面恢复失败=False,
+            停止事件=threading.Event(),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
+
+        self.assertTrue(任务._启动阶段处理军队配置页(屏幕))
+        self.assertTrue(getattr(上下文, "_启动时已有游戏页面", False))
+        上下文.清理主世界活动弹窗.assert_called_once_with(屏幕)
+        self.assertFalse(上下文.停止事件.is_set())
+        self.assertTrue(any("军队配置页" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list))
+
     def test_实机战斗截图识别为战斗中(self):
         图像 = self._读取截图("runtime_world_after_fix.png")
         if 图像 is None:
