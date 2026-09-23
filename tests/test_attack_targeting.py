@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
@@ -197,6 +198,52 @@ class 进攻目标选择测试(unittest.TestCase):
             ["左上", "右上"],
         )
         self.assertIn("分散探索", self.上下文.状态[-2])
+
+    def test_提高可达评分会按兵力聚焦高价值目标(self):
+        self.上下文.设置 = SimpleNamespace(
+            是否自动配兵=False,
+            自动配兵玩法="资源优先",
+            战利品优先级="均衡",
+        )
+        self.上下文.当前兵栏清单 = [
+            {"类别": "兵种", "数量": 57},
+            {"类别": "兵种", "数量": 11},
+            {"类别": "英雄", "数量": 1},
+        ]
+        self.任务.读取自适应进攻策略 = lambda _上下文: "提高目标可达评分"
+        目标列表 = [
+            {
+                "类别名称": "金库" if 索引 < 4 else "金矿",
+                "置信度": 1.0,
+                "中心坐标": 坐标(80 + 索引 * 50, 100 + 索引 * 15),
+                "靠近边缘": True,
+            }
+            for 索引 in range(10)
+        ]
+
+        结果 = self.任务.选择集中进攻目标(self.上下文, 目标列表)
+
+        # 69 个可部署单位按每约12个单位一个入口，收敛到7个目标，
+        # 不再把兵力摊到整张19目标地图。
+        self.assertEqual(len(结果), 7)
+        self.assertTrue(any("聚焦7/10个高价值目标" in 状态 for 状态 in self.上下文.状态))
+        self.assertIn("资源聚焦+分散探索", self.上下文.本场进攻策略)
+
+    def test_战利品优先级会影响资源建筑排序(self):
+        self.上下文.设置 = SimpleNamespace(
+            是否自动配兵=False,
+            自动配兵玩法="资源优先",
+            战利品优先级="金币",
+        )
+        结果 = self.任务.选择集中进攻目标(
+            self.上下文,
+            [
+                {"类别名称": "圣水瓶", "置信度": 1.0, "中心坐标": 坐标(400, 300), "靠近边缘": True},
+                {"类别名称": "金库", "置信度": 1.0, "中心坐标": 坐标(450, 300), "靠近边缘": True},
+            ],
+        )
+
+        self.assertEqual(结果[0]["类别名称"], "金库")
 
     def test_分散探索也必须先交错储存建筑再处理采集器(self):
         self.上下文.设置 = type(

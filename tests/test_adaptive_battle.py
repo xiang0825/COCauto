@@ -215,6 +215,29 @@ class 自适应战斗测试(unittest.TestCase):
         后图[10:25, 5:25] = 255
         self.assertTrue(任务.判断下兵反馈(前图, 后图, {"类别": "兵种"}))
 
+    def test_未知非灰色x0槽位启用一次安全探测(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.兵栏槽位 = [("第2格", (0, 0, 10, 10))]
+        任务.取本次兵种模板列表 = lambda _上下文: []
+        任务._识别槽位文本 = lambda _图像: "|"
+        任务._识别槽位数量 = lambda _图像, _文本: None
+        任务._槽位最佳模板 = lambda *_参数: ("", 0.0)
+        任务.是否为灰色图片 = lambda *_参数, **_关键字: False
+        状态 = []
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=lambda *_区域: np.zeros((10, 10, 3), dtype=np.uint8),
+            ),
+            置脚本状态=状态.append,
+        )
+
+        结果 = 任务.检查当前配兵(上下文)
+
+        self.assertEqual(结果[0]["数量"], 1)
+        self.assertFalse(结果[0]["数量已确认"])
+        self.assertEqual(结果[0]["名称"], "未匹配模板(待探测)")
+        self.assertTrue(any("启用一次安全探测" in 文本 for 文本 in 状态))
+
     def test_英雄技能无专用模板时按英雄槽位识别高亮(self):
         任务 = 进攻任务.__new__(进攻任务)
         任务.模板识别 = Mock()
@@ -293,6 +316,43 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertEqual(使用坐标, 候选点[1])
         self.assertEqual(点击记录, 候选点[:2])
         self.assertTrue(any("换下一个候选点" in 文本 for 文本 in 日志))
+
+    def test_局部候选全部失败时使用本场已验证全局落点(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        点击记录 = []
+        日志 = []
+        全局落点 = (500, 100)
+        上下文 = SimpleNamespace(
+            _部署区域已初始化=True,
+            _部署红色掩码=None,
+            本场可下兵区域={
+                "边界顶点": [(394, 20), (745, 293), (405, 549), (68, 278)],
+                "边界带宽": 58.0,
+            },
+            _本场全局已确认下兵点={"1:兵种": 全局落点},
+            点击=lambda x, y, **_参数: 点击记录.append((x, y)),
+            脚本延时=lambda _毫秒: None,
+            置脚本状态=日志.append,
+        )
+        任务.战斗是否仍在进行 = Mock(return_value=True)
+        任务.下兵点是否位于可下兵区域 = Mock(return_value=True)
+        任务.读取兵栏槽位图像 = lambda *_参数: object()
+        with patch.object(
+            任务,
+            "判断下兵反馈",
+            side_effect=[False] * 4 + [True],
+        ):
+            成功, 使用坐标 = 任务.尝试下兵至可用位置(
+                上下文,
+                {"槽位": 1, "名称": "测试兵", "类别": "兵种", "区域": (0, 0, 1, 1)},
+                坐标(430, 360),
+                [(100, 100), (110, 110)],
+                5,
+            )
+        self.assertTrue(成功)
+        self.assertEqual(使用坐标, 全局落点)
+        self.assertEqual(点击记录, [(100, 100), (110, 110), 全局落点])
+        self.assertTrue(any("使用本场已验证落点" in 文本 for 文本 in 日志))
 
     def test_同方向不同目标不共享同一个缓存落点(self):
         任务 = 进攻任务.__new__(进攻任务)
