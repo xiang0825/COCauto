@@ -91,6 +91,21 @@ class 升级面板关闭安全测试(unittest.TestCase):
             "关闭战宠小屋页面", 已确认可关闭面板=True
         )
 
+    def test_战宠小屋回到主世界后清理底层选中卡片(self):
+        返回 = Mock(return_value=True)
+        点击 = Mock(return_value=True)
+        识别 = Mock(return_value=SimpleNamespace(页面="主世界主页", 世界="主世界"))
+        任务 = 打开要升级的宠物任务.__new__(打开要升级的宠物任务)
+        任务.上下文 = SimpleNamespace(
+            安全返回键=返回,
+            识别点击画面=识别,
+            点击=点击,
+            置脚本状态=Mock(),
+        )
+
+        self.assertTrue(任务.关闭战宠小屋页面())
+        点击.assert_called_once_with(700, 300, 延时=700, 是否精确点击=True)
+
     def test_战宠小屋按钮使用面板区域和自适应阈值(self):
         任务 = 寻找战宠小屋任务.__new__(寻找战宠小屋任务)
         上下文 = SimpleNamespace(
@@ -140,6 +155,18 @@ class 升级面板关闭安全测试(unittest.TestCase):
         self.assertEqual(调用次数, 4)
         self.assertEqual(结果[0]["裁剪坐标"], [320, 280, 360, 320])
         self.assertEqual(结果[0]["置信度"], 0.80)
+
+    def test_战宠候选未打开小屋时安全清理误选中卡片(self):
+        点击 = Mock(return_value=True)
+        任务 = 寻找战宠小屋任务.__new__(寻找战宠小屋任务)
+        任务.上下文 = SimpleNamespace(
+            识别点击画面=Mock(return_value=SimpleNamespace(页面="主世界主页")),
+            点击=点击,
+            置脚本状态=Mock(),
+        )
+
+        self.assertTrue(任务._安全取消误候选面板())
+        点击.assert_called_once_with(700, 300, 延时=500, 是否精确点击=True)
 
 
 if __name__ == "__main__":
