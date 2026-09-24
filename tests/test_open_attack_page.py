@@ -16,6 +16,24 @@ from 任务流程.夜世界.夜世界打鱼.打开进攻页面任务 import 打�
 
 
 class 打开进攻页面测试(unittest.TestCase):
+    def test_入口收到停止请求时不发送任何点击(self):
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        停止事件 = threading.Event()
+        停止事件.set()
+        上下文 = SimpleNamespace(
+            停止事件=停止事件,
+            置脚本状态=Mock(),
+            点击=Mock(),
+        )
+        任务.上下文 = 上下文
+
+        self.assertFalse(任务.执行())
+        上下文.点击.assert_not_called()
+        self.assertTrue(
+            any("禁止发送入口点击" in 调用.args[0]
+                for 调用 in 上下文.置脚本状态.call_args_list)
+        )
+
     @staticmethod
     def 军队配置画面():
         画面 = np.zeros((600, 800, 3), dtype=np.uint8)
