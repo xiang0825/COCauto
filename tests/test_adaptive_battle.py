@@ -299,6 +299,14 @@ class 自适应战斗测试(unittest.TestCase):
         状态 = 任务.识别英雄技能状态(上下文)
         self.assertEqual(状态["第4格/英雄_野蛮人之王"], "可用")
 
+    def test_夜世界结果页只有摧毁率和熄灭星时记录零星(self):
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        self.assertEqual(
+            任务.识别星数(画面, "摧毁率：43%"),
+            0,
+        )
+
     def test_英雄技能灰色主体优先于残留高亮(self):
         任务 = 进攻任务.__new__(进攻任务)
         任务.模板识别 = Mock()

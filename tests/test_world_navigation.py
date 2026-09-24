@@ -67,6 +67,43 @@ class 世界跳转测试(unittest.TestCase):
             any("禁止点击、滑动、ESC或返回键" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
         )
 
+    def test_夜世界入口暂时漏检时请求退避而不抛线程异常(self):
+        模块 = importlib.import_module("任务流程.世界跳转.进入世界基类")
+        时钟 = SimpleNamespace(当前时间=0.0)
+
+        def 脚本延时(毫秒数):
+            时钟.当前时间 += 毫秒数 / 1000
+
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8))),
+            脚本延时=脚本延时,
+            置脚本状态=Mock(),
+            请求任务计划等待=Mock(),
+            页面恢复失败=False,
+        )
+        任务 = object.__new__(进入世界任务基类)
+        任务.上下文 = 上下文
+        任务.状态文本 = "夜世界"
+        任务.船模板路径 = "船.bmp"
+        任务.滑动配置 = SimpleNamespace(起点=(1, 1), 终点=(2, 2))
+        任务.模板识别 = Mock()
+        任务.模板识别.执行最佳匹配.return_value = (0.0, (0, 0), None)
+        任务.滑动屏幕 = Mock()
+        任务.是否在目标世界 = Mock(return_value=False)
+        任务.识别当前世界 = Mock(return_value=SimpleNamespace(当前世界="主世界"))
+        任务._页面级确认目标世界 = Mock(return_value=False)
+
+        原时间函数 = 模块.time.time
+        模块.time.time = lambda: 时钟.当前时间
+        try:
+            self.assertFalse(任务.执行())
+        finally:
+            模块.time.time = 原时间函数
+
+        self.assertTrue(getattr(上下文, "_夜世界入口暂不可用", False))
+        上下文.请求任务计划等待.assert_called_once_with(60, "夜世界入口暂不可用")
+        self.assertFalse(上下文.页面恢复失败)
+
     def test_页级主页识别可以补充转场资源过渡帧(self):
         任务 = object.__new__(进入世界任务基类)
         任务.状态文本 = "夜世界"
