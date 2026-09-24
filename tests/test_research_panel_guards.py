@@ -52,7 +52,7 @@ class 研究面板OCR护栏测试(unittest.TestCase):
 
         self.assertFalse(任务.尝试点击目标兵种或法术())
         任务.上下文.点击.assert_called_once_with(
-            243, 13, 是否精确点击=True
+            668, 32, 是否精确点击=True
         )
 
     def test_研究目标页面异常交给统一异常处理器(self):
@@ -68,17 +68,35 @@ class 研究面板OCR护栏测试(unittest.TestCase):
         self.assertFalse(任务.执行())
         任务.异常处理.assert_called_once()
 
-    def test_研究面板入口点击被拒绝时不报告已打开(self):
+    def test_未识别实验室研究标签时不发送错误入口点击(self):
         任务 = 打开研究面板任务.__new__(打开研究面板任务)
         任务.上下文 = SimpleNamespace(
             置脚本状态=Mock(),
             点击=Mock(return_value=False),
         )
         任务._检查实验室是否空闲 = Mock(return_value=True)
+        任务._读取研究文字 = Mock(return_value=None)
 
         self.assertFalse(任务.执行())
-        任务.上下文.点击.assert_called_once_with(
-            *任务.研究面板点击坐标, 是否精确点击=True
+        任务.上下文.点击.assert_not_called()
+
+    def test_通过实验室标签和研究按钮打开面板(self):
+        任务 = 打开研究面板任务.__new__(打开研究面板任务)
+        任务.上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            点击=Mock(return_value=True),
+        )
+        任务._检查实验室是否空闲 = Mock(return_value=True)
+        任务._读取研究文字 = Mock(side_effect=[(450, 375), (490, 470)])
+        任务.最大入口等待秒 = 0.1
+
+        self.assertTrue(任务.执行())
+        self.assertEqual(
+            任务.上下文.点击.call_args_list,
+            [
+                unittest.mock.call(450, 375, 是否精确点击=True),
+                unittest.mock.call(490, 470, 是否精确点击=True),
+            ],
         )
 
     def test_研究目标点击被拒绝时关闭研究面板(self):
