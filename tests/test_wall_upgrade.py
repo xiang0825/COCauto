@@ -1,7 +1,7 @@
 import unittest
 import threading
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import cv2
 import numpy as np
@@ -188,6 +188,30 @@ class 刷墙识别测试(unittest.TestCase):
 
         self.assertFalse(self.任务.刷一次墙())
         self.assertTrue(上下文.页面恢复失败)
+
+    def test_刷墙前资源OCR失败时禁止使用旧快照点击入口(self):
+        """旧余额可能仍在数据库中，但本轮 OCR 失败必须完全停止刷墙。"""
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            停止事件=threading.Event(),
+            机器人标志="robot_1",
+            置脚本状态=Mock(),
+            数据库=Mock(),
+        )
+        self.任务.上下文 = 上下文
+        self.任务.进入城墙界面 = Mock(return_value=True)
+
+        with patch(
+            "任务流程.升级城墙.更新家乡资源状态任务"
+        ) as 更新资源:
+            更新资源.return_value.执行.return_value = False
+            self.assertFalse(self.任务.刷一次墙())
+
+        self.assertFalse(hasattr(上下文, "刷墙需要资源") and 上下文.刷墙需要资源)
+        self.assertTrue(any(
+            "禁止读取旧余额" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
 
     def test_刷墙任务读取上下文停止事件(self):
         上下文 = SimpleNamespace(
