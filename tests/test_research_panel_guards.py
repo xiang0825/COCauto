@@ -110,6 +110,88 @@ class 研究面板OCR护栏测试(unittest.TestCase):
         self.assertAlmostEqual(候选[0][0], 453.75, delta=1.0)
         self.assertAlmostEqual(候选[0][1], 459.0, delta=1.0)
 
+    def test_窄区域漏检时使用下半区回退OCR(self):
+        任务 = 打开研究面板任务.__new__(打开研究面板任务)
+        任务.上下文 = SimpleNamespace(置脚本状态=Mock())
+        任务._执行局部放大OCR = Mock(side_effect=[
+            [],
+            [
+                ([[1027, 977], [1092, 982], [1089, 1030], [1023, 1025]],
+                 "研究", 0.95),
+            ],
+        ])
+
+        候选 = 任务._查找实验室标签候选()
+
+        self.assertEqual(
+            任务._执行局部放大OCR.call_args_list[0].args[0],
+            任务.建筑标签搜索区域,
+        )
+        self.assertEqual(
+            任务._执行局部放大OCR.call_args_list[1].args[0],
+            任务.建筑标签搜索回退区域,
+        )
+        self.assertEqual(
+            任务._执行局部放大OCR.call_args_list[1].kwargs["颜色通道"],
+            "蓝色",
+        )
+        self.assertEqual(len(候选), 1)
+        self.assertAlmostEqual(候选[0][0], 424.625, delta=1.0)
+        self.assertAlmostEqual(候选[0][1], 490.875, delta=1.0)
+        任务.上下文.置脚本状态.assert_called_once()
+
+    def test_研究标签常见OCR别名被规范化(self):
+        任务 = 打开研究面板任务.__new__(打开研究面板任务)
+        结果 = 任务._查找放大文字(
+            [
+                ([[0, 0], [80, 0], [80, 30], [0, 30]], "环究", 0.51),
+            ],
+            (160, 240, 760, 570),
+            ("研究",),
+            最低置信度=0.45,
+        )
+        self.assertEqual(len(结果), 1)
+
+    def test_普通升级按钮会拒绝背景研究字(self):
+        任务 = 打开研究面板任务.__new__(打开研究面板任务)
+        结果 = [
+            ([[466, 500], [530, 500], [530, 546], [466, 546]],
+             "研究", 0.86),
+            ([[533, 526], [629, 526], [629, 600], [533, 600]],
+             "升级", 0.94),
+        ]
+        self.assertTrue(
+            任务._结果存在普通升级按钮(
+                结果,
+                任务.研究按钮搜索区域,
+            )
+        )
+        任务.上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock()),
+        )
+        任务._执行局部放大OCR = Mock(return_value=结果)
+        self.assertIsNone(任务._查找选中实验室研究按钮())
+
+    def test_研究入口先关闭残留普通建筑详情(self):
+        任务 = 打开研究面板任务.__new__(打开研究面板任务)
+        任务.上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+            页面恢复失败=False,
+        )
+        任务._执行局部放大OCR = Mock(return_value=[
+            ([[533, 526], [629, 526], [629, 600], [533, 600]],
+             "升级", 0.94),
+            ([[183, 523], [276, 523], [276, 596], [183, 596]],
+             "資訊", 0.75),
+        ])
+
+        self.assertTrue(任务._清理普通建筑详情())
+        任务.上下文.点击.assert_called_once_with(
+            700, 300, 是否精确点击=True
+        )
+
     def test_研究目标页兼容OCR重复选择字(self):
         任务 = 打开研究面板任务.__new__(打开研究面板任务)
         任务._执行局部放大OCR = Mock(return_value=[

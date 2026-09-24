@@ -23,6 +23,11 @@ class 打开研究面板任务(基础任务):
     # 拉远视距后实验室标签会落到地图下半区；不同宽高比和镜头位置
     # 可能把它推到 y=450 左右，旧区域下边界 430 会稳定漏检。
     建筑标签搜索区域 = (200, 300, 700, 520)
+    # MuMu 800×600 拉远画面中，实验室底部的“研究”标签有时会落在
+    # x≈417、y≈485；窄裁剪在该位置可能被地图纹理吞掉。只有首轮
+    # 没有任何候选时才使用这块更大的下半区回退，避免每次正常运行
+    # 都增加一次 4 倍 OCR；候选仍必须经过选中卡片的“研究”按钮复核。
+    建筑标签搜索回退区域 = (160, 240, 760, 570)
     研究按钮搜索区域 = (300, 360, 700, 580)
     局部OCR放大倍数 = 4
     实验室标题关键词 = ("实验室", "實驗室")
@@ -43,6 +48,11 @@ class 打开研究面板任务(基础任务):
             if not self._清理残留研究面板():
                 self.上下文.置脚本状态(
                     "研究任务开始前未能清理残留研究面板，禁止扫描实验室"
+                )
+                return False
+            if not self._清理普通建筑详情():
+                self.上下文.置脚本状态(
+                    "研究任务开始前未能安全关闭普通建筑详情，禁止扫描实验室"
                 )
                 return False
             if self._检查实验室是否空闲():
@@ -117,7 +127,18 @@ class 打开研究面板任务(基础任务):
 
     @staticmethod
     def _规范化文本(文本) -> str:
-        return str(文本 or "").replace(" ", "").replace("\n", "")
+        文本 = str(文本 or "").replace(" ", "").replace("\n", "")
+        # 拉远后的浅色“研究”标签会被 RapidOCR 偶尔读成“环究/妍究”；
+        # 这些别名只用于产生候选，后面仍必须选中实验室并确认研究按钮，
+        # 因此不会单独授权任何点击。
+        for 错误, 正确 in (
+            ("环究", "研究"),
+            ("妍究", "研究"),
+            ("研宄", "研究"),
+            ("研充", "研究"),
+        ):
+            文本 = 文本.replace(错误, 正确)
+        return 文本
 
     @classmethod
     def _查找研究文字(cls, 识别结果, 区域: tuple[int, int, int, int]):
@@ -161,7 +182,7 @@ class 打开研究面板任务(基础任务):
             return None
         return self._查找研究文字(识别结果, 区域)
 
-    def _执行局部放大OCR(self, 区域):
+    def _执行局部放大OCR(self, 区域, 颜色通道=None):
         """对小型建筑标签做一次放大 OCR，并保留参考画布坐标。"""
         try:
             获取图像 = self.上下文.op.获取屏幕图像cv
@@ -181,6 +202,11 @@ class 打开研究面板任务(基础任务):
                 fy=self.局部OCR放大倍数,
                 interpolation=cv2.INTER_CUBIC,
             )
+            if 颜色通道 == "蓝色":
+                # 实机标签的白字在地图绿色纹理上容易被彩色 OCR
+                # 合并；蓝色通道能把“研究”字形从背景中分离出来。
+                # 这只作为候选召回，不改变后面的实验室按钮复核。
+                放大图像 = 放大图像[:, :, 0]
             结果, _ = self.ocr引擎(放大图像)
             return 结果 or []
         except Exception as 异常:
@@ -224,7 +250,7 @@ class 打开研究面板任务(基础任务):
 
     def _查找实验室标签候选(self):
         识别结果 = self._执行局部放大OCR(self.建筑标签搜索区域)
-        return self._查找放大文字(
+        候选 = self._查找放大文字(
             识别结果,
             self.建筑标签搜索区域,
             ("研究",),
@@ -233,12 +259,109 @@ class 打开研究面板任务(基础任务):
             # 因此这里扩大召回但不放宽后续安全点击条件。
             最低置信度=0.60,
         )
+        if 候选:
+            return 候选
+
+        回退区域 = self.建筑标签搜索回退区域
+        # 实机窄裁剪的彩色 OCR 会漏掉底部标签；直接对扩大后的下半区
+        # 做一次蓝色通道 OCR，可以同时召回画面中的多个“研究”候选，
+        # 不能只返回第一个，否则普通建筑附近的背景字可能抢先通过。
+        回退结果 = self._执行局部放大OCR(
+            回退区域,
+            颜色通道="蓝色",
+        )
+        回退候选 = self._查找放大文字(
+            回退结果,
+            回退区域,
+            ("研究",),
+            最低置信度=0.80,
+        )
+        if 回退候选 and hasattr(self, "上下文"):
+            self.上下文.置脚本状态(
+                "研究标签彩色OCR未命中，已用下半区蓝色通道定位候选"
+            )
+        return 回退候选
 
     def _选中后是否为实验室(self) -> bool:
         # 测试服选中卡片的“实验室(等级)”标题字体带阴影，RapidOCR
         # 经常读不到；底部“研究”操作按钮反而稳定。只有确认这个按钮
         # 存在才允许继续，普通建筑的卡片只会出现“升级”。
         return self._查找选中实验室研究按钮() is not None
+
+    @classmethod
+    def _结果存在详情信息按钮(cls, 识别结果, 区域) -> bool:
+        """识别普通建筑详情卡的“信息”按钮，排除地图上的升级标签。"""
+        x最小, y最小, x最大, y最大 = 区域
+        for 项 in 识别结果 or []:
+            if not isinstance(项, (list, tuple)) or len(项) < 2:
+                continue
+            文本 = cls._规范化文本(项[1])
+            if not any(词 in 文本 for 词 in ("资讯", "資訊", "信息", "情報")):
+                continue
+            try:
+                框 = 项[0]
+                中心x = sum(float(点[0]) for 点 in 框) / len(框) / cls.局部OCR放大倍数 + x最小
+                中心y = sum(float(点[1]) for 点 in 框) / len(框) / cls.局部OCR放大倍数 + y最小
+                置信度 = float(项[2]) if len(项) >= 3 else 0.0
+            except (TypeError, ValueError, IndexError, ZeroDivisionError):
+                continue
+            if 置信度 >= 0.55 and 300 <= 中心x <= 430 and 470 <= 中心y <= 545:
+                return True
+        return False
+
+    def _清理普通建筑详情(self) -> bool:
+        """研究任务入口清除残留普通建筑卡，不发送 ESC/BACK。"""
+        识别结果 = self._执行局部放大OCR(
+            self.研究按钮搜索区域,
+            颜色通道="蓝色",
+        )
+        if not (
+            self._结果存在普通升级按钮(
+                识别结果,
+                self.研究按钮搜索区域,
+            )
+            and self._结果存在详情信息按钮(
+                识别结果,
+                self.研究按钮搜索区域,
+            )
+        ):
+            return True
+        self.上下文.置脚本状态(
+            "检测到残留普通建筑详情卡，点击主世界空白区域关闭；"
+            "禁止点击升级、宝石和商店"
+        )
+        if self.上下文.点击(700, 300, 是否精确点击=True) is False:
+            self.上下文.页面恢复失败 = True
+            return False
+        self.上下文.脚本延时(350)
+        return True
+
+    @classmethod
+    def _结果存在普通升级按钮(cls, 识别结果, 区域) -> bool:
+        """详情卡明确出现普通“升级”时，拒绝背景中的“研究”字。"""
+        x最小, y最小, x最大, y最大 = 区域
+        for 项 in 识别结果 or []:
+            if not isinstance(项, (list, tuple)) or len(项) < 2:
+                continue
+            文本 = cls._规范化文本(项[1])
+            if not any(词 in 文本 for 词 in ("升级", "升級")):
+                continue
+            try:
+                框 = 项[0]
+                中心x = sum(float(点[0]) for 点 in 框) / len(框) / cls.局部OCR放大倍数 + x最小
+                中心y = sum(float(点[1]) for 点 in 框) / len(框) / cls.局部OCR放大倍数 + y最小
+                置信度 = float(项[2]) if len(项) >= 3 else 0.0
+            except (TypeError, ValueError, IndexError, ZeroDivisionError):
+                continue
+            # 只把详情卡右下操作按钮区域作为冲突证据，地图上的
+            # 其它“升级中”文字不应误否决实验室。
+            if (
+                0.75 <= 置信度
+                and 420 <= 中心x <= 520
+                and 470 <= 中心y <= 545
+            ):
+                return True
+        return False
 
     def _查找选中实验室研究按钮(self):
         识别结果 = self._执行局部放大OCR(self.研究按钮搜索区域)
@@ -248,6 +371,27 @@ class 打开研究面板任务(基础任务):
             ("研究",),
             最低置信度=0.85,
         )
+        if self._结果存在普通升级按钮(
+            识别结果,
+            self.研究按钮搜索区域,
+        ):
+            return None
+        if not 候选:
+            蓝色结果 = self._执行局部放大OCR(
+                self.研究按钮搜索区域,
+                颜色通道="蓝色",
+            )
+            候选 = self._查找放大文字(
+                蓝色结果,
+                self.研究按钮搜索区域,
+                ("研究",),
+                最低置信度=0.80,
+            )
+            if self._结果存在普通升级按钮(
+                蓝色结果,
+                self.研究按钮搜索区域,
+            ):
+                return None
         if not 候选:
             return None
         _, x, y, _ = max(候选, key=lambda 项: 项[2])
