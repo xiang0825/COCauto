@@ -214,6 +214,37 @@ class 资源状态测试(unittest.TestCase):
         self.assertTrue(结果["识别成功"])
         self.assertEqual(结果["黑油"], 469_558)
 
+    def test_普通百万级主资源也必须整栏复核黑油短读数(self):
+        """实机回归：8m/4m 主资源时黑油 52059 不能被写成 7/1。"""
+        任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((160, 210, 3), dtype=np.uint8)),
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.ocr引擎 = Mock(return_value=(
+            [
+                ([[98, 25], [160, 25], [160, 42], [98, 42]], "8118875", 0.99),
+                ([[98, 82], [161, 82], [161, 98], [98, 98]], "4190339", 0.99),
+                ([[115, 137], [163, 137], [163, 153], [115, 154]], "52059", 0.99),
+            ],
+            None,
+        ))
+
+        with patch(
+            "任务流程.更新主世界账号资源状态.单行资源识别",
+            side_effect=[8_118_875, 4_190_339, 7],
+        ):
+            结果 = 任务.识别当前资源(上下文)
+
+        self.assertTrue(结果["识别成功"])
+        self.assertEqual(结果["金币"], 8_118_875)
+        self.assertEqual(结果["圣水"], 4_190_339)
+        self.assertEqual(结果["黑油"], 52_059)
+
     def test_资源行使用重叠切分修复黑油漏首位(self):
         任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
         上下文 = SimpleNamespace(
