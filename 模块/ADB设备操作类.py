@@ -1564,21 +1564,20 @@ class ADB设备操作类:
         self._验证目标()
         self._验证输入前台()
         if self._是MuMu连接():
-            事件信息 = self._获取MuMu触摸事件设备()
-            if not 事件信息:
-                raise ADB错误(
-                    "无法定位 CoC display 对应的 MuMu 触摸设备；"
-                    "已拒绝发送无 display 目标的滑动输入。"
-                )
-            事件设备, 原始宽度, 原始高度 = 事件信息
-            屏幕宽度, 屏幕高度 = self.取屏幕尺寸()
-            设备起点 = self.参考坐标转设备坐标(*起点)
-            设备终点 = self.参考坐标转设备坐标(*终点)
-            脚本 = self._生成MuMu滑动脚本(
-                事件设备, 原始宽度, 原始高度, 屏幕宽度, 屏幕高度,
-                设备起点, 设备终点, 时长毫秒,
-            )
-            self._执行MuMu触控脚本(脚本, timeout=max(10, int(时长毫秒 / 1000) + 8))
+            # MuMu organized display 的 Xiaomi Touchscreen event 轴是旋转
+            # 后的 720×1280。旧的 protocol-B sendevent 坐标变换在实机上
+            # 会把地图拖动投到左下 HUD，实际打开军队/星级页面；点击和
+            # 双指缩放仍使用各自已验证的专用路径，单指地图滑动改用
+            # Android input display 坐标，和 screenshot 的 1280×720 方向
+            # 一致，并由 ADB 子进程超时保护。
+            起点 = self.参考坐标转设备坐标(*起点)
+            终点 = self.参考坐标转设备坐标(*终点)
+            self.执行([
+                "shell", "input", *self._输入显示参数(), "swipe",
+                str(int(起点[0])), str(int(起点[1])),
+                str(int(终点[0])), str(int(终点[1])),
+                str(max(1, int(时长毫秒))),
+            ], timeout=10)
             return True
         起点 = self.参考坐标转设备坐标(*起点)
         终点 = self.参考坐标转设备坐标(*终点)

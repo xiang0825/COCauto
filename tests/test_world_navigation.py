@@ -68,6 +68,42 @@ class 世界跳转测试(unittest.TestCase):
             any("禁止点击、滑动、ESC或返回键" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
         )
 
+    def test_世界识别转场帧返回None时也不发送拖动(self):
+        模块 = importlib.import_module("任务流程.世界跳转.进入世界基类")
+        时钟 = SimpleNamespace(当前时间=0.0)
+
+        def 脚本延时(毫秒数):
+            时钟.当前时间 += 毫秒数 / 1000
+
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8))),
+            脚本延时=脚本延时,
+            置脚本状态=Mock(),
+        )
+        任务 = object.__new__(进入世界任务基类)
+        任务.上下文 = 上下文
+        任务.状态文本 = "主世界"
+        任务.船模板路径 = "船.bmp"
+        任务.滑动配置 = SimpleNamespace(起点=(1, 1), 终点=(2, 2))
+        任务.模板识别 = Mock()
+        任务.模板识别.执行最佳匹配.return_value = (0.0, (0, 0), None)
+        任务.滑动屏幕 = Mock()
+        任务.是否在目标世界 = Mock(return_value=False)
+        任务.识别当前世界 = Mock(return_value=SimpleNamespace(当前世界=None))
+        任务._页面级确认目标世界 = Mock(return_value=False)
+
+        原时间函数 = 模块.time.time
+        模块.time.time = lambda: 时钟.当前时间
+        try:
+            self.assertFalse(任务.执行())
+        finally:
+            模块.time.time = 原时间函数
+
+        任务.滑动屏幕.assert_not_called()
+        self.assertTrue(
+            any("禁止点击、滑动、ESC或返回键" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
+        )
+
     def test_夜世界入口暂时漏检时请求退避而不抛线程异常(self):
         模块 = importlib.import_module("任务流程.世界跳转.进入世界基类")
         时钟 = SimpleNamespace(当前时间=0.0)
@@ -286,7 +322,7 @@ class 世界跳转测试(unittest.TestCase):
         self.assertEqual(坐标, (0, 0))
         self.assertAlmostEqual(分数, 0.0)
 
-    def test_夜世界返回主世界使用右上入口区域(self):
+    def test_夜世界返回主世界只在地图区搜索入口(self):
         任务 = object.__new__(到主世界任务)
         任务.船模板路径 = "船.bmp"
         任务.模板识别 = Mock()
@@ -297,13 +333,18 @@ class 世界跳转测试(unittest.TestCase):
         )
 
         self.assertTrue(命中)
-        self.assertEqual(坐标, (521, 72))
+        self.assertEqual(坐标, (151, 152))
         self.assertAlmostEqual(分数, 0.925)
         区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
-        self.assertEqual(区域.shape[:2], (250, 350))
+        self.assertEqual(区域.shape[:2], (510, 680))
+
+    def test_夜世界返回主世界多尺度也只扫地图区(self):
+        任务 = object.__new__(到主世界任务)
+        self.assertEqual(任务.世界入口多尺度安全区域, (80, 80, 760, 590))
 
     def test_夜世界返回主世界右上未命中时扫描备用地图区(self):
         任务 = object.__new__(到主世界任务)
+        任务.世界入口搜索区域 = (450, 0, 800, 250)
         任务.船模板路径 = "船.bmp"
         任务.模板识别 = Mock()
         任务.模板识别.执行最佳匹配.side_effect = [
@@ -336,10 +377,10 @@ class 世界跳转测试(unittest.TestCase):
         )
 
         self.assertTrue(命中)
-        self.assertEqual(坐标, (521, 72))
+        self.assertEqual(坐标, (151, 152))
         self.assertAlmostEqual(分数, 0.925)
         区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
-        self.assertEqual(区域.shape[:2], (250, 350))
+        self.assertEqual(区域.shape[:2], (510, 680))
 
     def test_同一入口连续未转场后停止重复点击(self):
         模块 = importlib.import_module("任务流程.世界跳转.进入世界基类")

@@ -355,6 +355,34 @@ ABS_MT_POSITION_Y : value 0, min 0, max 1280
         self.assertIn("sendevent /dev/input/event16 3 53 679", runner.命令[-1][-1])
         self.assertIn("sendevent /dev/input/event16 3 54 19", runner.命令[-1][-1])
 
+    def test_MuMu地图滑动使用input_display而不是旋转事件轴(self):
+        """organized display 的单指拖动必须沿用截图方向，不能误点 HUD。"""
+        runner = 假Runner()
+        设备 = ADB设备操作类(
+            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            "127.0.0.1:16416",
+            runner=runner,
+            自动检测路径=False,
+        )
+        设备.设置目标包名("com.supercell.clashofclans")
+        with patch.object(设备, "_验证目标"), \
+                patch.object(设备, "_验证输入前台"), \
+                patch.object(设备, "_输入显示参数", return_value=["-d", "7"]), \
+                patch.object(
+                    设备,
+                    "参考坐标转设备坐标",
+                    side_effect=[(952, 218), (216, 580)],
+                ):
+            self.assertTrue(设备.滑动((595, 182), (135, 483), 350))
+
+        self.assertEqual(
+            runner.命令[-1][1:],
+            [
+                "-s", "127.0.0.1:16416", "shell", "input", "-d", "7",
+                "swipe", "952", "218", "216", "580", "350",
+            ],
+        )
+
     def test_MuMu拉伸手势明确发送到游戏display(self):
         窗口输出 = b"""
   Display: mDisplayId=0
