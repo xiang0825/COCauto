@@ -81,6 +81,34 @@ class 页面识别测试(unittest.TestCase):
         self.assertFalse(上下文.停止事件.is_set())
         self.assertTrue(any("军队配置页" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list))
 
+    def test_实机军队配置页右上角关闭点可被识别(self):
+        屏幕 = self._读取截图("army_config_current2.png")
+        关闭点 = 任务上下文._检测主世界活动弹窗关闭点(屏幕)
+        self.assertIsNotNone(关闭点)
+        self.assertAlmostEqual(关闭点[0], 773, delta=8)
+        self.assertAlmostEqual(关闭点[1], 54, delta=8)
+
+    def test_启动时军队配置页优先调用专用关闭器(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        屏幕[80:530, 96:704] = (180, 180, 180)
+        屏幕[490:570, 560:760] = (0, 200, 100)
+        上下文 = SimpleNamespace(
+            数据库=Mock(),
+            机器人标志="robot_test",
+            关闭军队配置页=Mock(return_value=True),
+            清理主世界活动弹窗=Mock(return_value=False),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            页面恢复失败=False,
+            停止事件=threading.Event(),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
+
+        self.assertTrue(任务._启动阶段处理军队配置页(屏幕))
+        上下文.关闭军队配置页.assert_called_once_with(屏幕)
+        上下文.清理主世界活动弹窗.assert_not_called()
+        self.assertFalse(上下文.停止事件.is_set())
+
     def test_启动时活动面板在主页匹配前安全关闭(self):
         上下文 = SimpleNamespace(
             数据库=Mock(),
