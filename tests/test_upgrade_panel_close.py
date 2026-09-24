@@ -16,6 +16,41 @@ from 任务流程.战宠升级.打开要升级的宠物 import 打开要升级�
 
 
 class 升级面板关闭安全测试(unittest.TestCase):
+    def test_公共安全返回键在主世界主页拒绝发送返回键(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.页面恢复失败 = False
+        上下文._战斗中 = False
+        上下文.识别点击画面 = Mock(
+            return_value=SimpleNamespace(页面="主世界主页")
+        )
+        上下文.置脚本状态 = Mock()
+        上下文.键盘 = SimpleNamespace(按字符按压=Mock(return_value=True))
+        上下文.机器人标志 = "robot_1"
+        上下文.数据库 = SimpleNamespace(
+            获取机器人设置=Mock(
+                return_value=SimpleNamespace(
+                    部落冲突包名="com.supercell.clashofclans"
+                )
+            )
+        )
+        上下文.op = SimpleNamespace(
+            设备=SimpleNamespace(
+                获取当前前台包名=Mock(
+                    return_value="com.supercell.clashofclans"
+                )
+            )
+        )
+
+        self.assertFalse(
+            任务上下文.安全返回键(
+                上下文,
+                "主世界误触保护",
+                已确认可关闭面板=True,
+            )
+        )
+        上下文.键盘.按字符按压.assert_not_called()
+        self.assertTrue(上下文.页面恢复失败)
+
     def test_实机建筑详情面板只定位右上关闭而不定位立即完成(self):
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         # 右上角红色 X 的实机缩小候选；底部文字由 OCR 结构授权。
