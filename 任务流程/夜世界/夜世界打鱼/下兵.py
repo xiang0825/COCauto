@@ -20,6 +20,7 @@ class 下兵(夜世界基础任务):
 
         try:
             self.上下文._战斗中 = True
+            self._战斗结算已确认 = False
             self.上下文.脚本延时(random.randint(300, 600))
             if not self._等待真实战斗画面():
                 self.上下文.页面恢复失败 = True
@@ -28,11 +29,26 @@ class 下兵(夜世界基础任务):
                 )
                 return False
             if not self.执行下兵操作():
+                # 战斗可能恰好在“选择下一兵槽”之前结束。输入护栏会
+                # 正确拒绝该次点击，但这不是下兵失败；应交给后面的
+                # 回营任务处理结算页，不能把已完成战斗留在结算画面。
+                if self._战斗结算已确认:
+                    self.上下文.置脚本状态(
+                        "夜世界战斗已在兵槽切换前结束，停止继续下兵并交给回营流程"
+                    )
+                    return True
                 self.上下文.页面恢复失败 = True
                 self.上下文.置脚本状态(
                     "夜世界未确认完成下兵，停止后续英雄/技能点击"
                 )
                 return False
+
+            if self._当前已是结算页():
+                self._战斗结算已确认 = True
+                self.上下文.置脚本状态(
+                    "夜世界兵种批次完成后已确认结算页，跳过英雄/技能点击并交给回营流程"
+                )
+                return True
 
             # 选择英雄
             if self.上下文.点击(80, 520) is False:
@@ -105,6 +121,11 @@ class 下兵(夜世界基础任务):
                 return False
             选中 = self.上下文.点击(槽位x, 槽位y, 80, 是否精确点击=True)
             if 选中 is False:
+                if self._当前已是结算页():
+                    self._战斗结算已确认 = True
+                    self.上下文.置脚本状态(
+                        "选择下一兵槽时已确认战斗结算，停止兵槽循环"
+                    )
                 self.上下文.置脚本状态("夜世界兵槽选择被拒绝，中止本次下兵及后续英雄操作")
                 return False
             本槽成功 = 0
@@ -113,6 +134,11 @@ class 下兵(夜世界基础任务):
                     return False
                 点位 = self.可下兵点[重复次数 % len(self.可下兵点)]
                 if self.上下文.点击(*点位, 80, 是否精确点击=True) is False:
+                    if self._当前已是结算页():
+                        self._战斗结算已确认 = True
+                        self.上下文.置脚本状态(
+                            "下兵点输入时已确认战斗结算，停止本槽及后续兵槽"
+                        )
                     self.上下文.置脚本状态("夜世界下兵中途输入被拒绝，中止本次下兵及后续英雄操作")
                     return False
                 本槽成功 += 1
@@ -132,6 +158,18 @@ class 下兵(夜世界基础任务):
             )
             return True
         return False
+
+    def _当前已是结算页(self) -> bool:
+        """只读确认战斗是否已结束，避免把结算护栏拒绝当成下兵失败。"""
+        识别 = getattr(self.上下文, "识别点击画面", None)
+        if not callable(识别):
+            return False
+        try:
+            结果 = 识别()
+            页面 = str(getattr(结果, "页面", "") or "")
+            return 页面 in {"战斗结算", "战斗星级奖励"}
+        except Exception:
+            return False
 
     def 尝试在区域内完成下兵(self, 左上角: tuple, 右下角: tuple) -> bool:
         """在指定区域内尝试完成下兵操作，若提示下满兵则返回 True"""

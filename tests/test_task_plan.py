@@ -358,6 +358,49 @@ class 任务计划测试(unittest.TestCase):
                 for 调用 in 上下文.置脚本状态.call_args_list)
         )
 
+    def test_夜世界没有圣水车时跳过收集但继续战斗(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = threading.Event()
+        机器人.机器人标志 = "测试机器人"
+        状态 = SimpleNamespace(
+            状态数据={"夜世界资源": {"金币": 123456, "圣水": 234567, "识别成功": True}}
+        )
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            机器人标志="测试机器人",
+            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态)),
+            识别点击画面=Mock(return_value=SimpleNamespace(页面="夜世界主页")),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+
+        with patch("线程.自动化机器人.到夜世界任务") as 回夜世界, \
+                patch("线程.自动化机器人.收集资源任务") as 收集资源, \
+                patch("线程.自动化机器人.更新夜世界资源状态任务") as 更新资源, \
+                patch("线程.自动化机器人.收集圣水车任务") as 收集圣水车, \
+                patch("线程.自动化机器人.夜世界打鱼任务") as 打鱼:
+            回夜世界.return_value.执行.return_value = True
+            更新资源.return_value.执行.return_value = True
+            收集资源.return_value.执行.return_value = True
+            收集圣水车.return_value.执行.return_value = False
+            收集圣水车.return_value._本轮未发现可收集圣水车 = True
+
+            def 只测试一场战斗():
+                机器人.停止事件.set()
+                return True
+
+            打鱼.return_value.执行.side_effect = 只测试一场战斗
+            结果 = 机器人._执行夜世界刷资源计划(上下文, Mock())
+
+        self.assertFalse(结果)
+        self.assertTrue(上下文.页面恢复失败)
+        self.assertEqual(收集资源.return_value.执行.call_count, 2)
+        打鱼.return_value.执行.assert_called_once_with()
+        self.assertTrue(
+            any("跳过收集并继续夜世界资源流程" in 调用.args[0]
+                for 调用 in 上下文.置脚本状态.call_args_list)
+        )
+
     def test_夜世界入口暂不可用时保留主世界并请求退避(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
         机器人.停止事件 = threading.Event()
@@ -717,6 +760,28 @@ class 任务计划测试(unittest.TestCase):
                 self.assertTrue(上下文.页面恢复失败)
                 任务.异常处理.assert_not_called()
                 任务.启动后台放英雄技能.assert_not_called()
+
+    def test_夜世界结算出现在兵槽切换时交给回营流程(self):
+        任务 = 下兵.__new__(下兵)
+        上下文 = SimpleNamespace(
+            停止事件=threading.Event(), 页面恢复失败=False,
+            点击=Mock(side_effect=[True] * 13 + [False]),
+            识别点击画面=Mock(return_value=SimpleNamespace(页面="战斗结算")),
+            置脚本状态=Mock(), 脚本延时=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务._等待真实战斗画面 = Mock(return_value=True)
+        任务.异常处理 = Mock()
+        任务.启动后台放英雄技能 = Mock()
+
+        self.assertTrue(任务.执行())
+        self.assertFalse(上下文.页面恢复失败)
+        self.assertEqual(上下文.点击.call_count, 14)
+        任务.启动后台放英雄技能.assert_not_called()
+        self.assertTrue(any(
+            "交给回营流程" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
 
     def test_夜世界一批下兵中收到停止请求不继续点下一兵(self):
         任务 = 下兵.__new__(下兵)

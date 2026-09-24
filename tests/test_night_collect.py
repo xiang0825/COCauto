@@ -185,6 +185,7 @@ class 夜世界圣水车测试(unittest.TestCase):
         self.assertFalse(任务.执行())
         self.assertEqual(任务._查找海岸船锚点.call_count, 5)
         任务.上下文.滑动屏幕.assert_not_called()
+        self.assertTrue(任务._本轮未发现可收集圣水车)
         self.assertTrue(any("有限扫描" in c.args[0] for c in 任务.上下文.置脚本状态.call_args_list))
 
 
