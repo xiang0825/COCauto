@@ -191,6 +191,8 @@ class 寻找建筑(夜世界基础任务):
                 )
                 if 识别建议名称 is None:
                     self.上下文.置脚本状态(f"警告，无法确定建议升级列表中的建筑,ocr结果为"+ocr结果.__str__())
+                    self.安全跳过 = True
+                    self._安全关闭建议建筑面板("建议列表 OCR 无法确认")
                     return False
 
                 self.建筑列表 = [
@@ -213,6 +215,7 @@ class 寻找建筑(夜世界基础任务):
                         "建议升级列表本轮只有研究或非建筑项目，"
                         "安全跳过并等待下次检查；不点击普通建筑入口"
                     )
+                    self._安全关闭建议建筑面板("建议列表没有普通建筑目标")
                     return False
 
                 self.上下文.置脚本状态(f"建议升级{', '.join(self.建筑列表)}")
@@ -236,6 +239,7 @@ class 寻找建筑(夜世界基础任务):
                         "建议升级列表本轮没有可安全提交的普通建筑，"
                         "安全跳过并等待下次检查"
                     )
+                    self._安全关闭建议建筑面板("建议列表候选均不可安全提交")
                 return 选中成功
 
         except 资源不足错误 as e:
@@ -243,6 +247,79 @@ class 寻找建筑(夜世界基础任务):
             return False
         except Exception as e:
             self.异常处理(e)
+            return False
+
+    def _安全关闭建议建筑面板(self, 原因: str) -> bool:
+        """安全收尾建议升级列表，避免遮罩残留到下一项任务。
+
+        建议列表只覆盖主世界底图；通用主页识别仍可能把它判成主世界，
+        所以不能只依赖页面识别。先用建筑入口的精确点击关闭，再用面板
+        OCR和主页识别复核；最多重试一次，失败则禁止后续任务继续输入。
+        """
+        try:
+            if self.关闭建筑页面() is False:
+                self.上下文.页面恢复失败 = True
+                self.上下文.置脚本状态(
+                    f"{原因}；建议升级面板关闭输入未通过安全复核，停止后续任务"
+                )
+                return False
+            self.上下文.脚本延时(350)
+
+            # 入口是开关式按钮。若首帧仍确认面板存在，只允许按同一精确
+            # 入口重试一次；绝不改用 ESC/BACK，避免返回模拟器或弹出退出确认。
+            try:
+                面板仍在 = bool(self._建筑升级面板已打开())
+            except Exception as 异常:
+                面板仍在 = True
+                self.上下文.置脚本状态(f"建议升级面板关闭状态复核失败：{异常}")
+            if 面板仍在:
+                if self.上下文.点击(
+                    *self.建筑入口参考坐标,
+                    延时=500,
+                    是否精确点击=True,
+                ) is False:
+                    self.上下文.页面恢复失败 = True
+                    self.上下文.置脚本状态(
+                        "建议升级面板重试关闭输入未通过安全复核，停止后续任务"
+                    )
+                    return False
+                self.上下文.脚本延时(350)
+                try:
+                    面板仍在 = bool(self._建筑升级面板已打开())
+                except Exception:
+                    面板仍在 = True
+            if 面板仍在:
+                self.上下文.页面恢复失败 = True
+                self.上下文.置脚本状态(
+                    "建议升级面板关闭后仍被 OCR 确认存在，禁止进入下一项任务"
+                )
+                return False
+
+            识别 = getattr(self.上下文, "识别点击画面", None)
+            if callable(识别):
+                try:
+                    try:
+                        结果 = 识别(强制=True)
+                    except TypeError:
+                        结果 = 识别()
+                except Exception as 异常:
+                    self.上下文.页面恢复失败 = True
+                    self.上下文.置脚本状态(f"建议升级面板关闭后主页复核失败：{异常}")
+                    return False
+                if not (
+                    getattr(结果, "页面", "") == "主世界主页"
+                    and getattr(结果, "世界", "") == "主世界"
+                ):
+                    self.上下文.页面恢复失败 = True
+                    self.上下文.置脚本状态(
+                        "建议升级面板已点击关闭但未确认主世界，禁止后续任务输入"
+                    )
+                    return False
+            self.上下文.置脚本状态("建议升级面板已安全关闭并确认回到主世界")
+            return True
+        except Exception as 异常:
+            self.上下文.页面恢复失败 = True
+            self.上下文.置脚本状态(f"建议升级面板安全收尾失败：{异常}")
             return False
 
     @staticmethod

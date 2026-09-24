@@ -26,7 +26,9 @@ class 建筑升级边界测试(unittest.TestCase):
         任务.上下文 = SimpleNamespace(
             页面恢复失败=False,
             置脚本状态=Mock(),
+            脚本延时=Mock(),
         )
+        任务.关闭建筑页面 = Mock(return_value=True)
         任务.打开建筑页面 = Mock(return_value=True)
         任务.执行OCR识别 = Mock(return_value=[
             ([[0, 0], [80, 0], [80, 20], [0, 20]], "建議升級", 0.99),
@@ -51,7 +53,9 @@ class 建筑升级边界测试(unittest.TestCase):
         任务.上下文 = SimpleNamespace(
             页面恢复失败=False,
             置脚本状态=Mock(),
+            脚本延时=Mock(),
         )
+        任务.关闭建筑页面 = Mock(return_value=True)
         任务.打开建筑页面 = Mock(return_value=True)
         任务.执行OCR识别 = Mock(return_value=[
             ([[0, 0], [80, 0], [80, 20], [0, 20]], "建議升級", 0.99),
@@ -78,7 +82,9 @@ class 建筑升级边界测试(unittest.TestCase):
         任务.上下文 = SimpleNamespace(
             页面恢复失败=False,
             置脚本状态=Mock(),
+            脚本延时=Mock(),
         )
+        任务.关闭建筑页面 = Mock(return_value=True)
         任务.打开建筑页面 = Mock(return_value=True)
         任务.执行OCR识别 = Mock(return_value=[
             ([[0, 0], [80, 0], [80, 20], [0, 20]], "建議升級", 0.99),
