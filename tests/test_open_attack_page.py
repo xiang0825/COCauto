@@ -339,6 +339,24 @@ class 打开进攻页面测试(unittest.TestCase):
             705, 535, 延时=700, 是否精确点击=True
         )
 
+    def test_入口超时边界仍在战斗时交给下兵流程(self):
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务._识别已存在的战斗页面 = Mock(return_value="战斗中")
+        任务._标记本场资源评分不可用 = Mock()
+
+        self.assertTrue(任务._超时后接管已进入战斗(上下文, True, False))
+        self.assertTrue(上下文._入口已进入战斗)
+        任务._标记本场资源评分不可用.assert_called_once()
+        self.assertTrue(any(
+            "超时边界确认仍在战斗页" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
     def test_新一场开始会清除上一场资源评分(self):
         上下文 = SimpleNamespace(
             本场目标战利品={"金币": 900000},
