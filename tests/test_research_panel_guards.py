@@ -75,26 +75,65 @@ class 研究面板OCR护栏测试(unittest.TestCase):
             点击=Mock(return_value=False),
         )
         任务._检查实验室是否空闲 = Mock(return_value=True)
-        任务._读取研究文字 = Mock(return_value=None)
+        任务._查找实验室标签候选 = Mock(return_value=[])
 
         self.assertFalse(任务.执行())
         任务.上下文.点击.assert_not_called()
 
-    def test_通过实验室标签和研究按钮打开面板(self):
+    def test_OCR漏检时不使用固定候选点(self):
         任务 = 打开研究面板任务.__new__(打开研究面板任务)
         任务.上下文 = SimpleNamespace(
             置脚本状态=Mock(),
             点击=Mock(return_value=True),
         )
         任务._检查实验室是否空闲 = Mock(return_value=True)
-        任务._读取研究文字 = Mock(side_effect=[(450, 375), (490, 470)])
-        任务.最大入口等待秒 = 0.1
+        任务._查找实验室标签候选 = Mock(return_value=[])
+        任务.最大入口等待秒 = 0.01
+
+        self.assertFalse(任务.执行())
+        任务.上下文.点击.assert_not_called()
+
+    def test_候选点未确认实验室时不会点击研究按钮(self):
+        任务 = 打开研究面板任务.__new__(打开研究面板任务)
+        任务.上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+        )
+        任务._检查实验室是否空闲 = Mock(return_value=True)
+        任务._查找实验室标签候选 = Mock(side_effect=[
+            [(455, 352, 0.99, "研究")],
+            [],
+        ])
+        任务._选中后是否为实验室 = Mock(return_value=False)
+        任务.最大入口等待秒 = 0.01
+
+        self.assertFalse(任务.执行())
+        # 只允许尝试候选建筑和取消选中，绝不能把普通建筑当研究按钮。
+        self.assertEqual(任务.上下文.点击.call_count, 7 * 2)
+        任务._查找选中实验室研究按钮 = Mock()
+        任务._查找选中实验室研究按钮.assert_not_called()
+
+    def test_确认实验室后才点击研究按钮并确认面板(self):
+        任务 = 打开研究面板任务.__new__(打开研究面板任务)
+        任务.上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+        )
+        任务._检查实验室是否空闲 = Mock(return_value=True)
+        任务._查找实验室标签候选 = Mock(return_value=[(455, 352, 0.99, "研究")])
+        任务._选中后是否为实验室 = Mock(return_value=True)
+        任务._查找选中实验室研究按钮 = Mock(return_value=(490, 470))
+        任务._获取全屏画面 = Mock(return_value=None)
+        任务._研究面板已确认 = Mock(return_value=True)
+        任务.最大入口等待秒 = 0.01
 
         self.assertTrue(任务.执行())
         self.assertEqual(
             任务.上下文.点击.call_args_list,
             [
-                unittest.mock.call(450, 375, 是否精确点击=True),
+                unittest.mock.call(455, 365, 是否精确点击=True),
                 unittest.mock.call(490, 470, 是否精确点击=True),
             ],
         )

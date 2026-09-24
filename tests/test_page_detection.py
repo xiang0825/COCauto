@@ -281,6 +281,69 @@ class 页面识别测试(unittest.TestCase):
 
         self.assertIsNone(上下文._识别中央游戏提示(图像))
 
+    def test_传统能力继续提示可以识别中央继续按钮(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.获取OCR引擎 = Mock(return_value=Mock(return_value=(
+            [
+                ([[234, 336], [374, 336], [374, 386], [234, 386]],
+                 "繼續", 0.98),
+            ],
+            None,
+        )))
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+
+        候选 = 上下文._识别中央游戏提示(图像)
+
+        self.assertIsNotNone(候选)
+        self.assertEqual(候选["点击点"], (400, 505))
+
+    def test_延时期间会低频处理异步中央能力提示(self):
+        """能力弹层在任务运行中出现时，不能等到下一轮任务才处理。"""
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.停止事件 = threading.Event()
+        上下文.继续事件 = threading.Event()
+        上下文.继续事件.set()
+        上下文._战斗中 = False
+        上下文._升级完成弹窗调度时间 = 10**9
+        上下文._星级奖励调度时间 = 10**9
+        上下文.自动确认升级完成弹窗 = Mock()
+        上下文.处理战斗星级奖励弹窗 = Mock()
+        上下文.清理中央游戏提示 = Mock(return_value=True)
+        上下文.企业微信通知器 = None
+        上下文.上报间隔秒 = 0
+
+        上下文.脚本延时(800)
+
+        self.assertGreaterEqual(上下文.清理中央游戏提示.call_count, 1)
+        self.assertLessEqual(上下文.清理中央游戏提示.call_count, 2)
+
+    def test_中央说明正文较大时仍优先点击底部继续按钮(self):
+        """不能把能力说明正文当成继续按钮点击。"""
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.获取OCR引擎 = Mock(side_effect=[
+            Mock(return_value=(
+                [
+                    ([[350, 250], [650, 250], [650, 285], [350, 285]],
+                     "魔法護盾不會影響排位", 0.98),
+                ],
+                None,
+            )),
+            Mock(return_value=(
+                [
+                    ([[300, 78], [340, 78], [340, 100], [300, 100]],
+                     "继續", 0.70),
+                ],
+                None,
+            )),
+        ])
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+
+        候选 = 上下文._识别中央游戏提示(图像)
+
+        self.assertIsNotNone(候选)
+        self.assertEqual(候选["文本"], "继續")
+        self.assertGreater(候选["点击点"][1], 450)
+
     def test_奖励选择横幅优先于左下角战斗按钮(self):
         """奖励覆盖层仍带放弃按钮时，不能继续被识别为战斗页。"""
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)

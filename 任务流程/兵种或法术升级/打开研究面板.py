@@ -2,6 +2,7 @@ import re
 import math
 import time
 
+import cv2
 import numpy as np
 
 from 任务流程.基础任务框架 import 基础任务
@@ -16,14 +17,20 @@ class 打开研究面板任务(基础任务):
     # 研究入口不是顶部的活动/奖励图标。旧坐标会打开“活动特惠”，
     # 随后研究 OCR 在主世界上无限重试。现在先通过 OCR 找到地图上的
     # “研究”标签，选中实验室，再点击选中卡片中的“研究”按钮。
-    建筑标签搜索区域 = (160, 250, 700, 460)
-    研究按钮搜索区域 = (260, 400, 700, 560)
-    # 测试服当前 800×600 主世界布局中，实验室标签过小且经常被装饰物
-    # 遮挡，OCR 可能完全漏掉。这个点只作为“主世界已确认且 OCR 漏检”
-    # 时的单次候选，不作为研究按钮直接点击；后续仍必须识别到“研究”
-    # 按钮，避免把其它建筑的升级按钮误当成研究入口。
-    实验室备用建筑点击 = (487, 370)
-    实验室备用研究按钮 = (490, 470)
+    # 拉远视距后实验室标签很小；只在地图下半区做局部放大 OCR。
+    # 研究入口不能使用固定建筑坐标：同一坐标在镜头轻微移动后可能落到
+    # 城墙、迫击炮或陷阱。任何候选点都必须先选中并 OCR 确认“实验室”。
+    建筑标签搜索区域 = (250, 250, 650, 430)
+    研究按钮搜索区域 = (400, 400, 580, 540)
+    局部OCR放大倍数 = 3
+    实验室标题关键词 = ("实验室", "實驗室")
+    # OCR 框是飘在建筑上方的标签，不一定落在建筑实体上；不同缩放下
+    # 实验室相对标签会向右下或右上偏移。每个候选最多尝试这一组有限
+    # 偏移，并且每次都用“实验室”标题复核，禁止无限扫图或误点升级。
+    研究入口偏移候选 = (
+        (0, 13), (0, 20), (15, 0), (25, -7),
+        (25, 0), (15, 8), (-10, 13),
+    )
     最大入口等待秒 = 6.0
 
     def 执行(self) -> bool:
@@ -66,8 +73,8 @@ class 打开研究面板任务(基础任务):
             return None
         # 地图布局在缩放后仍可能出现多个“研究”字样；优先靠近当前
         # 实验室标签/研究按钮的参考位置，并用 OCR 置信度打破平局。
-        目标x = 450 if y最大 <= 460 else 490
-        目标y = 375 if y最大 <= 460 else 470
+        目标x = 450 if y最大 <= 460 else 460
+        目标y = 375 if y最大 <= 460 else 445
         return min(
             候选,
             key=lambda 项: (
@@ -83,6 +90,102 @@ class 打开研究面板任务(基础任务):
             return None
         return self._查找研究文字(识别结果, 区域)
 
+    def _执行局部放大OCR(self, 区域):
+        """对小型建筑标签做一次放大 OCR，并保留参考画布坐标。"""
+        try:
+            获取图像 = self.上下文.op.获取屏幕图像cv
+            try:
+                # 点击建筑后必须绕过 ADB 屏幕的短缓存，否则会把点击前
+                # 的主世界旧帧当成“未选中”，继续误试其它建筑。
+                图像 = 获取图像(*区域, 强制刷新=True)
+            except TypeError:
+                # 兼容旧的测试/模拟截图适配器。
+                图像 = 获取图像(*区域)
+            if 图像 is None or getattr(图像, "size", 0) == 0:
+                return []
+            放大图像 = cv2.resize(
+                图像,
+                None,
+                fx=self.局部OCR放大倍数,
+                fy=self.局部OCR放大倍数,
+                interpolation=cv2.INTER_CUBIC,
+            )
+            结果, _ = self.ocr引擎(放大图像)
+            return 结果 or []
+        except Exception as 异常:
+            self.上下文.置脚本状态(f"研究局部OCR暂不可用，安全跳过：{异常}")
+            return []
+
+    @classmethod
+    def _查找放大文字(cls, 识别结果, 区域, 关键词, 最低置信度=0.70):
+        """把局部放大 OCR 框还原到 800×600 参考画布坐标。"""
+        x最小, y最小, x最大, y最大 = 区域
+        候选 = []
+        倍数 = cls.局部OCR放大倍数
+        for 项 in 识别结果 or []:
+            if not isinstance(项, (list, tuple)) or len(项) < 2:
+                continue
+            文本 = cls._规范化文本(项[1])
+            if not any(词 in 文本 for 词 in 关键词):
+                continue
+            try:
+                框 = 项[0]
+                中心x = sum(float(点[0]) for 点 in 框) / len(框) / 倍数 + x最小
+                中心y = sum(float(点[1]) for 点 in 框) / len(框) / 倍数 + y最小
+                置信度 = float(项[2]) if len(项) >= 3 else 0.0
+            except (TypeError, ValueError, IndexError, ZeroDivisionError):
+                continue
+            if 置信度 < 最低置信度:
+                continue
+            if not (x最小 <= 中心x <= x最大 and y最小 <= 中心y <= y最大):
+                continue
+            候选.append((置信度, 中心x, 中心y, 文本))
+        # 同一标签可能被检测成相邻的两个框，只保留置信度较高者。
+        去重 = []
+        for 项 in sorted(候选, key=lambda 值: -值[0]):
+            if any(
+                math.hypot(项[1] - 已有[1], 项[2] - 已有[2]) < 18
+                for 已有 in 去重
+            ):
+                continue
+            去重.append(项)
+        return [(项[1], 项[2], 项[0], 项[3]) for 项 in 去重]
+
+    def _查找实验室标签候选(self):
+        识别结果 = self._执行局部放大OCR(self.建筑标签搜索区域)
+        return self._查找放大文字(
+            识别结果,
+            self.建筑标签搜索区域,
+            ("研究",),
+            最低置信度=0.70,
+        )
+
+    def _选中后是否为实验室(self) -> bool:
+        # 测试服选中卡片的“实验室(等级)”标题字体带阴影，RapidOCR
+        # 经常读不到；底部“研究”操作按钮反而稳定。只有确认这个按钮
+        # 存在才允许继续，普通建筑的卡片只会出现“升级”。
+        return self._查找选中实验室研究按钮() is not None
+
+    def _查找选中实验室研究按钮(self):
+        识别结果 = self._执行局部放大OCR(self.研究按钮搜索区域)
+        候选 = self._查找放大文字(
+            识别结果,
+            self.研究按钮搜索区域,
+            ("研究",),
+            最低置信度=0.85,
+        )
+        if not 候选:
+            return None
+        _, x, y, _ = max(候选, key=lambda 项: 项[2])
+        return x, y
+
+    def _安全取消建筑选中(self):
+        """只在已知主世界选中态时点水面空白，清除错误候选。"""
+        try:
+            self.上下文.点击(100, 300, 是否精确点击=True)
+        except Exception:
+            pass
+
     def _等待研究文字(self, 区域, 截止时间):
         while time.monotonic() < 截止时间:
             位置 = self._读取研究文字(区域)
@@ -92,50 +195,54 @@ class 打开研究面板任务(基础任务):
         return None
 
     def _打开研究入口(self) -> bool:
-        """通过已识别的实验室和研究按钮打开研究面板。"""
+        """通过视觉候选和建筑标题确认后打开研究面板。"""
         self.上下文.置脚本状态("正在定位实验室研究入口")
-        标签位置 = self._等待研究文字(
-            self.建筑标签搜索区域,
-            time.monotonic() + self.最大入口等待秒,
+        截止时间 = time.monotonic() + self.最大入口等待秒
+        候选 = []
+        while time.monotonic() < 截止时间 and not 候选:
+            候选 = self._查找实验室标签候选()
+            if not 候选:
+                self.上下文.脚本延时(250)
+        for x, y, _, _ in 候选:
+            for 偏移x, 偏移y in self.研究入口偏移候选:
+                    if self.上下文.点击(
+                        round(x + 偏移x), round(y + 偏移y), 是否精确点击=True
+                    ) is False:
+                        self.上下文.置脚本状态("实验室候选点击未被安全输入层接受")
+                        return False
+                    self.上下文.脚本延时(450)
+                    if not self._选中后是否为实验室():
+                        self._安全取消建筑选中()
+                        continue
+                    self.上下文.置脚本状态("已确认选中实验室，定位研究按钮")
+                    研究位置 = self._查找选中实验室研究按钮()
+                    if 研究位置 is None:
+                        self._安全取消建筑选中()
+                        self.上下文.置脚本状态("实验室研究按钮未确认，安全跳过研究升级")
+                        return False
+                    研究前画面 = self._获取全屏画面()
+                    if self.上下文.点击(*map(round, 研究位置), 是否精确点击=True) is False:
+                        self.上下文.置脚本状态("研究按钮未被安全输入层接受，停止研究操作")
+                        return False
+                    self.上下文.脚本延时(350)
+                    if not self._研究面板已确认():
+                        self.上下文.置脚本状态(
+                            "研究按钮点击后未确认研究面板，安全停止，禁止点击兵种"
+                        )
+                        return False
+                    self.上下文.置脚本状态("研究面板已打开")
+                    return True
+        self.上下文.置脚本状态("实验室标签或建筑名称未确认，安全跳过研究升级")
+        return False
+
+    def _研究面板已确认(self) -> bool:
+        识别结果 = self._执行局部放大OCR((80, 0, 720, 590))
+        文本 = "".join(
+            self._规范化文本(项[1])
+            for 项 in 识别结果
+            if isinstance(项, (list, tuple)) and len(项) >= 2
         )
-        使用备用实验室点 = 标签位置 is None
-        if 使用备用实验室点:
-            标签位置 = self.实验室备用建筑点击
-            self.上下文.置脚本状态(
-                "实验室标签OCR漏检，使用已验证的主世界实验室候选点"
-            )
-        if self.上下文.点击(*map(round, 标签位置), 是否精确点击=True) is False:
-            self.上下文.置脚本状态("实验室选择未被安全输入层接受，停止研究操作")
-            return False
-
-        # 研究按钮点击前保留“实验室已选中”的基准画面；研究面板会
-        # 覆盖大部分地图。如果点击后画面几乎没有变化，就不能把一次
-        # 普通地图点击误报成“研究面板已打开”。
-        研究前画面 = self._获取全屏画面()
-
-        if 使用备用实验室点:
-            # 当前测试服的研究按钮文字尺寸很小，面板已由上面的实验室
-            # 候选点确定后，使用同一 800×600 参考布局中的已验证按钮点。
-            # 这一步只在实验室候选点路径触发，不对未确认的普通建筑生效。
-            研究位置 = self.实验室备用研究按钮
-        else:
-            研究位置 = self._等待研究文字(
-                self.研究按钮搜索区域,
-                time.monotonic() + self.最大入口等待秒,
-            )
-        if 研究位置 is None:
-            self.上下文.置脚本状态("实验室已选中但未识别到研究按钮，安全跳过研究升级")
-            return False
-        if self.上下文.点击(*map(round, 研究位置), 是否精确点击=True) is False:
-            self.上下文.置脚本状态("研究按钮未被安全输入层接受，停止研究操作")
-            return False
-        if not self._画面变化明显(研究前画面):
-            self.上下文.置脚本状态(
-                "研究按钮点击后画面未切换到研究面板，安全停止，禁止在主世界滑动"
-            )
-            return False
-        self.上下文.置脚本状态("研究面板已打开")
-        return True
+        return any(关键词 in 文本 for 关键词 in ("选择要升级的目标", "選擇要升級的目標"))
 
     def _获取全屏画面(self):
         操作 = getattr(self.上下文, "op", None)
