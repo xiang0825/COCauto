@@ -1,4 +1,5 @@
 import unittest
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -261,6 +262,39 @@ class 升级面板关闭安全测试(unittest.TestCase):
         self.assertFalse(任务.关闭战宠小屋页面())
         self.assertTrue(任务.上下文.页面恢复失败)
 
+    def test_战宠页面已回到主世界时禁止返回键并只清理空白(self):
+        返回 = Mock(return_value=True)
+        点击 = Mock(return_value=True)
+        识别 = Mock(return_value=SimpleNamespace(页面="主世界主页", 世界="主世界"))
+        任务 = 打开要升级的宠物任务.__new__(打开要升级的宠物任务)
+        任务.上下文 = SimpleNamespace(
+            安全返回键=返回,
+            识别点击画面=识别,
+            点击=点击,
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+
+        self.assertTrue(任务.关闭战宠小屋页面())
+        返回.assert_not_called()
+        点击.assert_called_once_with(700, 300, 延时=700, 是否精确点击=True)
+
+    def test_战宠页面未知且没有面板文字时禁止返回键(self):
+        返回 = Mock(return_value=True)
+        识别 = Mock(return_value=SimpleNamespace(页面="多按钮弹窗", 世界=None))
+        任务 = 打开要升级的宠物任务.__new__(打开要升级的宠物任务)
+        任务.上下文 = SimpleNamespace(
+            安全返回键=返回,
+            识别点击画面=识别,
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+        )
+        任务.执行OCR识别 = Mock(return_value=[([], "确认退出", 0.99)])
+
+        self.assertFalse(任务.关闭战宠小屋页面())
+        返回.assert_not_called()
+        self.assertTrue(任务.上下文.页面恢复失败)
+
     def test_战宠候选安全取消被拒绝时标记页面失败(self):
         任务 = 寻找战宠小屋任务.__new__(寻找战宠小屋任务)
         任务.上下文 = SimpleNamespace(
@@ -348,6 +382,48 @@ class 升级面板关闭安全测试(unittest.TestCase):
 
         self.assertTrue(任务._安全取消误候选面板())
         点击.assert_called_once_with(700, 300, 延时=500, 是否精确点击=True)
+
+    def test_战宠列表扫描超时仍释放鼠标(self):
+        任务 = 打开要升级的宠物任务.__new__(打开要升级的宠物任务)
+        任务.欲打开的宠物 = "独角"
+        任务.滑动扫描最长秒数 = 0.0
+        鼠标 = SimpleNamespace(
+            移动到=Mock(),
+            左键按下=Mock(),
+            移动相对位置=Mock(),
+            左键抬起=Mock(),
+        )
+        任务.上下文 = SimpleNamespace(
+            鼠标=鼠标,
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            停止事件=threading.Event(),
+        )
+        任务.当前是否存在目标宠物 = Mock(return_value=False)
+
+        with self.assertRaises(Exception):
+            任务.滑动到目标宠物位置()
+
+        鼠标.左键抬起.assert_called_once_with()
+
+    def test_战宠列表扫描收到停止请求时不开始拖动(self):
+        任务 = 打开要升级的宠物任务.__new__(打开要升级的宠物任务)
+        任务.欲打开的宠物 = "独角"
+        鼠标 = SimpleNamespace(
+            移动到=Mock(),
+            左键按下=Mock(),
+            移动相对位置=Mock(),
+            左键抬起=Mock(),
+        )
+        停止事件 = threading.Event()
+        停止事件.set()
+        任务.上下文 = SimpleNamespace(鼠标=鼠标, 停止事件=停止事件)
+
+        with self.assertRaises(SystemExit):
+            任务.滑动到目标宠物位置()
+
+        鼠标.移动到.assert_not_called()
+        鼠标.左键按下.assert_not_called()
 
 
 if __name__ == "__main__":
