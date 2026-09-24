@@ -252,7 +252,7 @@ class 页面识别测试(unittest.TestCase):
 
         self.assertIsNone(任务上下文._检测主世界活动弹窗关闭点(图像))
 
-    def test_中央教程提示只返回下半屏正文点击点(self):
+    def test_中央教程只有正文没有按钮时安全停止(self):
         上下文 = 任务上下文.__new__(任务上下文)
         上下文.获取OCR引擎 = Mock(return_value=Mock(return_value=(
             [
@@ -265,8 +265,7 @@ class 页面识别测试(unittest.TestCase):
 
         候选 = 上下文._识别中央游戏提示(图像)
 
-        self.assertIsNotNone(候选)
-        self.assertEqual(候选["点击点"], (446, 384))
+        self.assertIsNone(候选)
 
     def test_顶部资源栏文字不能触发中央教程提示(self):
         上下文 = 任务上下文.__new__(任务上下文)
@@ -304,6 +303,7 @@ class 页面识别测试(unittest.TestCase):
         上下文.继续事件 = threading.Event()
         上下文.继续事件.set()
         上下文._战斗中 = False
+        上下文.op = None
         上下文._升级完成弹窗调度时间 = 10**9
         上下文._星级奖励调度时间 = 10**9
         上下文.自动确认升级完成弹窗 = Mock()
@@ -316,6 +316,33 @@ class 页面识别测试(unittest.TestCase):
 
         self.assertGreaterEqual(上下文.清理中央游戏提示.call_count, 1)
         self.assertLessEqual(上下文.清理中央游戏提示.call_count, 2)
+
+    def test_延时期间断线页面不会处理底层中央提示(self):
+        """后台低频检查也必须阻止断线遮罩下的底层 OCR 点击。"""
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.停止事件 = threading.Event()
+        上下文.继续事件 = threading.Event()
+        上下文.继续事件.set()
+        上下文._战斗中 = False
+        上下文._升级完成弹窗调度时间 = 10**9
+        上下文._星级奖励调度时间 = 10**9
+        上下文.自动确认升级完成弹窗 = Mock()
+        上下文.处理战斗星级奖励弹窗 = Mock()
+        上下文.清理中央游戏提示 = Mock(return_value=True)
+        上下文.企业微信通知器 = None
+        上下文.上报间隔秒 = 0
+        上下文.op = SimpleNamespace(
+            获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8))
+        )
+        上下文.获取模板识别器 = Mock(return_value=Mock())
+
+        with patch("模块.检测.页面识别器.页面识别器") as 页面识别器:
+            页面识别器.return_value.识别.return_value = SimpleNamespace(
+                页面="断线弹窗"
+            )
+            上下文.脚本延时(800)
+
+        上下文.清理中央游戏提示.assert_not_called()
 
     def test_中央说明正文较大时仍优先点击底部继续按钮(self):
         """不能把能力说明正文当成继续按钮点击。"""
@@ -343,6 +370,24 @@ class 页面识别测试(unittest.TestCase):
         self.assertIsNotNone(候选)
         self.assertEqual(候选["文本"], "继續")
         self.assertGreater(候选["点击点"][1], 450)
+
+    def test_能力正文漏掉按钮文字时使用绿色按钮中心(self):
+        """正文 OCR 只能确认提示存在，点击点必须来自底部按钮几何。"""
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.获取OCR引擎 = Mock(return_value=Mock(return_value=(
+            [
+                ([[350, 250], [650, 250], [650, 285], [350, 285]],
+                 "魔法護盾不會影響排位", 0.98),
+            ],
+            None,
+        )))
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (275, 490), (525, 545), (60, 150, 70), -1)
+
+        候选 = 上下文._识别中央游戏提示(图像)
+
+        self.assertIsNotNone(候选)
+        self.assertEqual(候选["点击点"], (400, 518))
 
     def test_奖励选择横幅优先于左下角战斗按钮(self):
         """奖励覆盖层仍带放弃按钮时，不能继续被识别为战斗页。"""
@@ -902,6 +947,31 @@ class 页面识别测试(unittest.TestCase):
         self.assertTrue(上下文.页面恢复失败)
         self.assertTrue(上下文.停止事件.is_set())
         self.assertTrue(any("恢复3次仍未消失" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
+    def test_断线弹窗优先于底层中央能力提示(self):
+        """断线遮住能力层时不能先点击被遮挡的底层继续按钮。"""
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=屏幕)),
+            数据库=Mock(),
+            机器人标志="robot_test",
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            点击已确认安全按钮=Mock(return_value=False),
+            清理中央游戏提示=Mock(return_value=True),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
+        with patch("任务流程.检测游戏登录状态.模板匹配引擎") as 引擎类, \
+             patch("任务流程.检测游戏登录状态.页面识别器") as 页面识别器:
+            引擎类.return_value.执行匹配.return_value = (False, (0, 0), 0.0)
+            页面识别器.return_value.识别.return_value = SimpleNamespace(页面="断线弹窗")
+            任务._检测断线弹窗 = Mock(return_value=(True, (416, 440)))
+            self.assertFalse(任务.执行(首次登录=False))
+
+        上下文.清理中央游戏提示.assert_not_called()
+        上下文.点击已确认安全按钮.assert_called_once_with(416, 440, 延时=180)
 
     def test_登录确定按钮被拒绝时停止恢复不继续轮询(self):
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
