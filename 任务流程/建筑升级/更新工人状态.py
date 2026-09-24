@@ -1,10 +1,53 @@
 import re
 import time
 
+import cv2
+
 from 任务流程.夜世界.夜世界打鱼.夜世界基础任务类 import 夜世界基础任务
 
 
 class 更新工人状态任务(夜世界基础任务):
+
+    def _放大工人区域OCR(self, 区域):
+        """对顶部工人计数做一次高对比度放大 OCR。"""
+        操作 = getattr(self.上下文, "op", None)
+        获取图像 = getattr(操作, "获取屏幕图像cv", None)
+        if not callable(获取图像):
+            return []
+        try:
+            try:
+                图像 = 获取图像(*区域, 强制刷新=True)
+            except TypeError:
+                图像 = 获取图像(*区域)
+            if 图像 is None or getattr(图像, "size", 0) == 0:
+                return []
+            灰度图 = cv2.cvtColor(图像, cv2.COLOR_BGR2GRAY)
+            # 当前 MuMu 1280×720 截图缩放到 800×600 后，白色的斜线
+            # 经常被 RapidOCR 漏掉；Otsu + 3 倍放大可稳定恢复 ``1/1``。
+            二值图 = cv2.threshold(
+                灰度图, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+            )[1]
+            放大图 = cv2.resize(
+                二值图, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC
+            )
+            结果 = self.ocr引擎(放大图)
+            结果 = 结果[0] if isinstance(结果, tuple) else 结果
+            规范结果 = []
+            for 项 in 结果 or []:
+                if not isinstance(项, (list, tuple)) or len(项) < 2:
+                    continue
+                框 = 项[0]
+                try:
+                    缩小框 = [
+                        [float(点[0]) / 3, float(点[1]) / 3]
+                        for 点 in 框
+                    ]
+                except (TypeError, ValueError, IndexError):
+                    continue
+                规范结果.append([缩小框, 项[1], *项[2:]])
+            return 规范结果
+        except Exception:
+            return []
 
     @staticmethod
     def 解析工人计数(识别结果, 区域左侧: int = 0) -> tuple[int, int]:
@@ -68,20 +111,45 @@ class 更新工人状态任务(夜世界基础任务):
             # 旧区域 (349,3,441,47) 实际覆盖英雄栏 1/6 和升级文字，
             # 会把英雄数量误写成工人数量，升级过程中还会解析到“正在進行升”。
             主要区域 = (285, 0, 335, 60)
-            识别结果 = self.执行OCR识别(主要区域)
+            空闲工人 = 工人总数 = None
+            最后错误 = None
+            # 页面刚从研究页/建筑页返回时，顶部 HUD 可能有一到两帧不完整；
+            # 只重读同一顶部区域，不点击、不发送返回键，避免瞬时漏 OCR
+            # 被记录成建筑任务永久失败。
+            for 尝试次数 in range(3):
+                try:
+                    识别结果 = self.执行OCR识别(主要区域)
+                    try:
+                        空闲工人, 工人总数 = self.解析工人计数(
+                            识别结果, 主要区域[0]
+                        )
+                    except ValueError:
+                        回退区域 = (250, 0, 370, 85)
+                        回退结果 = self.执行OCR识别(回退区域)
+                        try:
+                            空闲工人, 工人总数 = self.解析工人计数(
+                                回退结果, 回退区域[0]
+                            )
+                        except ValueError:
+                            增强结果 = self._放大工人区域OCR(回退区域)
+                            空闲工人, 工人总数 = self.解析工人计数(
+                                增强结果, 回退区域[0]
+                            )
+                        self.上下文.置脚本状态(
+                            f"建筑工人窄区域OCR未命中，已用顶部宽区域回退识别：{空闲工人}/{工人总数}"
+                        )
+                    break
+                except (ValueError, TypeError) as 异常:
+                    最后错误 = 异常
+                    if 尝试次数 >= 2:
+                        raise
+                    self.上下文.置脚本状态(
+                        f"建筑工人首帧未识别，等待转场后重试（{尝试次数 + 1}/2）"
+                    )
+                    self.上下文.脚本延时(350)
 
-            try:
-                空闲工人, 工人总数 = self.解析工人计数(识别结果, 主要区域[0])
-            except ValueError:
-                # MuMu 在缩放/转场后的首帧可能让窄裁剪完全没有 OCR
-                # 结果。只扩大同一顶部区域重试，不发送任何点击；并且
-                # 通过全局横坐标过滤，不能把右侧英雄栏的 1/7 当工人。
-                回退区域 = (250, 0, 370, 85)
-                回退结果 = self.执行OCR识别(回退区域)
-                空闲工人, 工人总数 = self.解析工人计数(回退结果, 回退区域[0])
-                self.上下文.置脚本状态(
-                    f"建筑工人窄区域OCR未命中，已用顶部宽区域回退识别：{空闲工人}/{工人总数}"
-                )
+            if 空闲工人 is None or 工人总数 is None:
+                raise ValueError(str(最后错误 or "未识别到合法工人计数"))
 
             状态字典 = {
                 "空闲工人": 空闲工人,

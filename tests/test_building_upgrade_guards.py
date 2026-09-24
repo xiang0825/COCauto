@@ -14,6 +14,7 @@ from 任务流程.建筑升级.升级普通建筑 import (
 )
 from 任务流程.建筑升级.更新工人状态 import 更新工人状态任务
 from 任务流程.建筑升级.升级英雄 import 升级英雄任务
+from 任务流程.建筑升级 import 建筑升级任务
 
 
 class 建筑升级边界测试(unittest.TestCase):
@@ -143,6 +144,51 @@ class 建筑升级边界测试(unittest.TestCase):
             for 调用 in 任务.上下文.置脚本状态.call_args_list
         ))
 
+    def test_建筑扫描超过监控周期时持续写入心跳(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.建筑列表 = ["兵营"]
+        任务.安全跳过 = False
+        任务.上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+        任务.打开建筑页面 = Mock(return_value=True)
+        任务.执行OCR识别 = Mock(return_value=[])
+        任务.滑动屏幕 = Mock()
+        任务.关闭建筑页面 = Mock(return_value=True)
+
+        # 模拟面板扫描经过 20/40/60 秒；最后一轮才到达 121 秒超时。
+        with unittest.mock.patch.object(
+            time, "time", side_effect=[0.0, 1.0, 2.0, 3.0, 121.0]
+        ), unittest.mock.patch.object(
+            time, "monotonic", side_effect=[0.0, 20.0, 40.0, 60.0]
+        ):
+            self.assertFalse(任务.找建筑循环())
+
+        心跳 = [
+            调用 for 调用 in 任务.上下文.置脚本状态.call_args_list
+            if 调用.args and "建筑扫描进行中" in 调用.args[0]
+        ]
+        self.assertGreaterEqual(len(心跳), 2)
+        self.assertTrue(all(调用.args[1] == 60 for 调用 in 心跳))
+
+    def test_建筑扫描首条日志覆盖有界扫描窗口(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.建筑列表 = ["兵营"]
+        任务.建筑扫描超时秒 = 120.0
+        任务.上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            停止事件=threading.Event(),
+            脚本延时=Mock(),
+        )
+        任务.打开建筑页面 = Mock(return_value=False)
+
+        self.assertFalse(任务.找建筑循环())
+        首条日志 = 任务.上下文.置脚本状态.call_args_list[0]
+        self.assertIn("开始寻找建筑", 首条日志.args[0])
+        self.assertEqual(首条日志.args[1], 180)
+
     def test_关闭刷资源时建筑入口仍使用主世界坐标(self):
         点击 = Mock()
         任务 = 寻找建筑.__new__(寻找建筑)
@@ -174,6 +220,19 @@ class 建筑升级边界测试(unittest.TestCase):
 
         鼠标.移动到.assert_called_once_with(399, 116)
 
+    def test_MuMu建筑面板滑动使用单次设备级手势(self):
+        设备 = SimpleNamespace(滑动=Mock(return_value=True))
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.上下文 = SimpleNamespace(
+            op=SimpleNamespace(设备=设备),
+            输入前安全检查=Mock(return_value=False),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+
+        self.assertTrue(任务.滑动到建筑栏底部())
+        设备.滑动.assert_called_once_with((399, 116), (399, 0), 时长毫秒=900)
+
     def test_建筑升级面板已打开时不会重复点击入口(self):
         点击 = Mock()
         任务 = 寻找建筑.__new__(寻找建筑)
@@ -186,12 +245,22 @@ class 建筑升级边界测试(unittest.TestCase):
         任务.执行OCR识别 = Mock(return_value=[
             ([[10, 10], [60, 10], [60, 30], [10, 30]], "升级中", 0.95),
             ([[10, 40], [60, 40], [60, 60], [10, 60]], "建升级", 0.95),
+            ([[10, 70], [60, 70], [60, 90], [10, 90]], "可使用", 0.95),
         ])
 
         任务.打开建筑页面(划到底部=False)
 
         点击.assert_not_called()
         任务.上下文.置脚本状态.assert_called_once()
+
+    def test_主世界单个升级文字不能冒充建筑升级面板(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.上下文 = SimpleNamespace()
+        任务.执行OCR识别 = Mock(return_value=[
+            ([[10, 10], [60, 10], [60, 30], [10, 30]], "升级中", 0.95),
+        ])
+
+        self.assertFalse(任务._建筑升级面板已打开())
 
     def test_建筑升级入口点击被拒绝时不继续读取列表(self):
         任务 = 寻找建筑.__new__(寻找建筑)
@@ -205,6 +274,34 @@ class 建筑升级边界测试(unittest.TestCase):
 
         self.assertFalse(任务.打开建筑页面(划到底部=False))
         self.assertTrue(任务.上下文.页面恢复失败)
+
+    def test_建筑入口点击后未确认建筑面板时安全停止(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.安全跳过 = False
+        任务.上下文 = SimpleNamespace(
+            点击=Mock(return_value=True),
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+        任务._建筑升级面板已打开 = Mock(side_effect=[False, False])
+
+        self.assertFalse(任务.打开建筑页面(划到底部=False))
+        self.assertTrue(任务.安全跳过)
+        任务.上下文.点击.assert_called_once_with(262, 33, 延时=1000)
+        self.assertTrue(any(
+            "未确认建筑升级面板" in 调用.args[0]
+            for 调用 in 任务.上下文.置脚本状态.call_args_list
+        ))
+
+    def test_建筑任务开始前清理残留研究目标页(self):
+        任务 = 建筑升级任务.__new__(建筑升级任务)
+        任务.上下文 = SimpleNamespace(点击=Mock())
+        with unittest.mock.patch(
+            "任务流程.建筑升级.打开研究面板任务"
+        ) as 研究任务:
+            研究任务.return_value._清理残留研究面板.return_value = True
+            self.assertTrue(任务._清理残留研究目标页())
+        研究任务.return_value._清理残留研究面板.assert_called_once_with()
 
     def test_建筑候选点击被拒绝时不报告已选中(self):
         任务 = 寻找建筑.__new__(寻找建筑)
@@ -707,6 +804,38 @@ class 工人状态容错测试(unittest.TestCase):
         self.assertEqual(任务.执行OCR识别.call_args_list[1].args[0], (250, 0, 370, 85))
         self.assertEqual(
             任务.数据库.更新状态.call_args.args[2]["空闲工人"],
+            1,
+        )
+
+    def test_工人首帧转场漏识别时有限重试后成功(self):
+        任务 = 更新工人状态任务.__new__(更新工人状态任务)
+        任务.机器人标志 = "robot_1"
+        任务.执行OCR识别 = Mock(side_effect=[
+            [], [],
+            [], [],
+            [([[12, 12], [38, 12], [38, 34], [12, 34]], "1/2", 0.99)],
+        ])
+        任务.数据库 = SimpleNamespace(更新状态=Mock())
+        任务.上下文 = SimpleNamespace(置脚本状态=Mock(), 脚本延时=Mock())
+
+        self.assertTrue(任务.识别当前工人状态写入数据库())
+        self.assertEqual(任务.执行OCR识别.call_count, 5)
+        任务.上下文.脚本延时.assert_any_call(350)
+
+    def test_工人斜线漏识别时使用放大OCR恢复计数(self):
+        任务 = 更新工人状态任务.__new__(更新工人状态任务)
+        任务.机器人标志 = "robot_1"
+        任务.执行OCR识别 = Mock(return_value=[])
+        任务._放大工人区域OCR = Mock(return_value=[
+            ([[49, 22], [78, 18], [81, 42], [52, 46]], "1/1", 0.95),
+        ])
+        任务.数据库 = SimpleNamespace(更新状态=Mock())
+        任务.上下文 = SimpleNamespace(置脚本状态=Mock(), 脚本延时=Mock())
+
+        self.assertTrue(任务.识别当前工人状态写入数据库())
+        任务._放大工人区域OCR.assert_called()
+        self.assertEqual(
+            任务.数据库.更新状态.call_args.args[2]["工人总数"],
             1,
         )
 
