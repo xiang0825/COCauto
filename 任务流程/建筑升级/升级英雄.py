@@ -133,6 +133,95 @@ class 升级英雄任务(夜世界基础任务):
         except (AttributeError, TypeError, ValueError, cv2.error):
             return None
 
+    def _英雄殿堂文本仍在(self) -> bool:
+        """用新 OCR 帧确认英雄殿堂列表是否仍覆盖主世界。"""
+        # 详情 X 关闭后，测试服可能先露出一帧“主世界主页”再重新绘制
+        # 英雄殿堂列表。只读重试几帧，不能在首帧 OCR 为空时立刻退回
+        # 旧的右上角红色候选点，否则会误点 HUD。
+        延时 = getattr(self.上下文, "脚本延时", None)
+        for 尝试序号 in range(3):
+            try:
+                OCR结果 = self.执行OCR识别((250, 55, 710, 590))
+            except Exception:
+                OCR结果 = []
+            文本 = "".join(
+                str(项[1]) for 项 in (OCR结果 or [])
+                if isinstance(项, (list, tuple)) and len(项) > 1
+            ).replace(" ", "").replace("\n", "")
+            规范文本 = 文本
+            # 英雄详情底层卡也会显示“英雄殿堂[等级]”；只有列表中的
+            # “建议升级/可使用”段存在时，才授权顶部入口收尾。
+            if (
+                "英雄殿堂" in 规范文本
+                and ("建议升级" in 规范文本 or "可使用" in 规范文本)
+            ):
+                return True
+            if 尝试序号 < 2 and callable(延时):
+                延时(250)
+        return False
+
+    def _安全关闭英雄殿堂入口(self) -> bool:
+        """通过已确认的顶部英雄入口关闭列表，不猜测右上角 HUD 坐标。"""
+        点击 = getattr(self.上下文, "点击", None)
+        if not callable(点击):
+            self.上下文.页面恢复失败 = True
+            self.上下文.置脚本状态(
+                "缺少英雄殿堂入口关闭能力，禁止发送ESC或盲点输入"
+            )
+            return False
+        for 尝试序号 in range(2):
+            if 点击(
+                356, 33,
+                延时=700,
+                是否精确点击=True,
+            ) is False:
+                self.上下文.页面恢复失败 = True
+                self.上下文.置脚本状态(
+                    "英雄殿堂入口关闭点击被安全层拒绝，停止后续操作"
+                )
+                return False
+            self.上下文.脚本延时(450)
+            if self._英雄殿堂文本仍在():
+                if 尝试序号 == 0:
+                    self.上下文.置脚本状态(
+                        "英雄殿堂入口点击后列表仍在，精确重试一次"
+                    )
+                    continue
+                self.上下文.页面恢复失败 = True
+                self.上下文.置脚本状态(
+                    "英雄殿堂入口重试后列表仍在，禁止继续任务输入"
+                )
+                return False
+
+            识别 = getattr(self.上下文, "识别点击画面", None)
+            if callable(识别):
+                try:
+                    try:
+                        结果 = 识别(强制=True)
+                    except TypeError:
+                        结果 = 识别()
+                except Exception as 异常:
+                    self.上下文.页面恢复失败 = True
+                    self.上下文.置脚本状态(
+                        f"英雄殿堂关闭后主页复核失败：{异常}"
+                    )
+                    return False
+                if not (
+                    getattr(结果, "页面", "") == "主世界主页"
+                    and getattr(结果, "世界", "") == "主世界"
+                ):
+                    self.上下文.页面恢复失败 = True
+                    self.上下文.置脚本状态(
+                        "英雄殿堂已点击关闭但未确认主世界，禁止后续输入"
+                    )
+                    return False
+            self.上下文.置脚本状态(
+                "英雄殿堂列表已通过顶部入口安全关闭并确认回到主世界"
+            )
+            return True
+        self.上下文.页面恢复失败 = True
+        return False
+
     @classmethod
     def _识别英雄升级确认页(cls, OCR结果, 屏幕图像, 目标英雄: str) -> bool:
         """用标题、目标英雄和绿色资源按钮确认升级页。"""
@@ -253,6 +342,13 @@ class 升级英雄任务(夜世界基础任务):
                 return False
             if getattr(self.上下文, "页面恢复失败", False):
                 return False
+
+        # 当前国际服测试服的英雄详情 X 关闭后，英雄殿堂列表仍可能留在
+        # 主世界上方。旧逻辑继续寻找屏幕最右侧红色 X，实机已证明会把
+        # HUD 相似图标当成关闭点；先用本任务已确认的顶部英雄入口关闭，
+        # 再用 OCR 和主页识别双重复核。
+        if self._英雄殿堂文本仍在():
+            return self._安全关闭英雄殿堂入口()
 
         # 英雄列表/详情页没有专用关闭按钮时，只点已知的主世界空白区域；
         # 不再用 Android BACK，避免过渡帧把它解释为退出游戏。

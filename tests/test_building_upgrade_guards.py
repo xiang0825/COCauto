@@ -297,6 +297,53 @@ class 建筑升级边界测试(unittest.TestCase):
         任务.上下文.关闭升级详情弹窗.assert_called_once_with()
         self.assertTrue(任务.上下文.页面恢复失败)
 
+    def test_英雄详情关闭后仍有殿堂列表时使用顶部入口收尾(self):
+        任务 = 升级英雄任务.__new__(升级英雄任务)
+        点击 = Mock(return_value=True)
+        主页 = SimpleNamespace(页面="主世界主页", 世界="主世界")
+        任务.上下文 = SimpleNamespace(
+            关闭升级详情弹窗=Mock(return_value=True),
+            点击=点击,
+            脚本延时=Mock(),
+            识别点击画面=Mock(return_value=主页),
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+        任务.执行OCR识别 = Mock(side_effect=[
+            [([[0, 0], [100, 0], [100, 20], [0, 20]], "英雄殿堂 建议升级", 0.99)],
+            [],
+        ])
+
+        self.assertTrue(任务.关闭英雄升级页面())
+        任务.上下文.关闭升级详情弹窗.assert_called_once_with()
+        点击.assert_called_once_with(
+            356, 33, 延时=700, 是否精确点击=True
+        )
+        self.assertFalse(任务.上下文.页面恢复失败)
+
+    def test_英雄殿堂首帧为空时等待转场后再识别(self):
+        任务 = 升级英雄任务.__new__(升级英雄任务)
+        点击 = Mock(return_value=True)
+        主页 = SimpleNamespace(页面="主世界主页", 世界="主世界")
+        任务.上下文 = SimpleNamespace(
+            关闭升级详情弹窗=Mock(return_value=True),
+            点击=点击,
+            脚本延时=Mock(),
+            识别点击画面=Mock(return_value=主页),
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+        任务.执行OCR识别 = Mock(side_effect=[
+            [],
+            [([[0, 0], [100, 0], [100, 20], [0, 20]], "英雄殿堂 可使用", 0.99)],
+        ])
+
+        self.assertTrue(任务.关闭英雄升级页面())
+        任务.上下文.脚本延时.assert_any_call(250)
+        点击.assert_called_once_with(
+            356, 33, 延时=700, 是否精确点击=True
+        )
+
     def test_建议列表跳过本轮已提交的项目(self):
         任务 = 寻找建筑.__new__(寻找建筑)
         任务.建筑列表 = ["头号杀手", "攻城车"]
