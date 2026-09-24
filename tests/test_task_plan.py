@@ -21,6 +21,28 @@ from 任务流程.基础任务框架 import 任务上下文
 
 
 class 任务计划测试(unittest.TestCase):
+    def test_战后主页确认必须连续两帧(self):
+        """结算过渡帧不能被当作下一轮入口。"""
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            识别点击画面=Mock(side_effect=[
+                SimpleNamespace(页面="主世界主页", 可信度=0.78),
+                SimpleNamespace(页面="战斗结算", 可信度=0.92),
+                SimpleNamespace(页面="主世界主页", 可信度=0.78),
+                SimpleNamespace(页面="主世界主页", 可信度=0.78),
+            ]),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+
+        self.assertTrue(机器人._战后连续确认主世界主页(上下文))
+        self.assertEqual(上下文.识别点击画面.call_count, 4)
+        self.assertTrue(
+            any("连续确认主世界主页" in 调用.args[0]
+                for 调用 in 上下文.置脚本状态.call_args_list)
+        )
+
     def test_世界任务开始时发现断线会先走游戏内重连(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
         上下文 = SimpleNamespace(
