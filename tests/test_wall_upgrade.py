@@ -596,6 +596,33 @@ class 刷墙识别测试(unittest.TestCase):
         候选 = self.任务.选择最低等级墙段(墙体记录)
         self.assertEqual([记录["等级"] for 记录 in 候选], [14, 16])
 
+    def test_城墙确认提交后记录预计等级而不是旧的已点击状态(self):
+        数据库 = Mock()
+        上下文 = SimpleNamespace(
+            数据库=数据库,
+            机器人标志="robot_1",
+            置脚本状态=Mock(),
+        )
+
+        self.任务.记录城墙升级提交(上下文, 327, 151, 16)
+
+        数据库.更新状态.assert_called_once_with(
+            "robot_1",
+            "城墙升级记录",
+            {
+                "坐标": [327, 151],
+                "升级前等级": 16,
+                "升级后预期等级": 17,
+                "状态": "已提交升级",
+            },
+        )
+        self.assertTrue(any(
+            "城墙升级已提交" in 调用.args[0]
+            and "327,151" in 调用.args[0]
+            and "16级→预计17级" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
     def test_能从升级确认框定位确认按钮(self):
         OCR结果 = [
             ([[328, 68], [468, 68], [468, 90], [328, 90]], "将城墙升至17级？", 0.95),
