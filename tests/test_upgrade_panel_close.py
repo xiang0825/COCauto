@@ -59,6 +59,76 @@ class 升级面板关闭安全测试(unittest.TestCase):
 
         self.assertFalse(任务上下文._OCR确认升级详情页(OCR结果))
 
+    def test_OCR英雄详情不会被普通建筑护栏关闭(self):
+        OCR结果 = [
+            (None, "弓箭女皇", 0.99),
+            (None, "升至84级", 0.99),
+            (None, "取消", 0.99),
+            (None, "立即完成", 0.99),
+        ]
+
+        self.assertTrue(任务上下文._OCR确认英雄升级详情(OCR结果))
+
+    def test_OCR普通建筑详情不被识别成英雄详情(self):
+        OCR结果 = [
+            (None, "兵营", 0.99),
+            (None, "升至12级", 0.99),
+            (None, "取消", 0.99),
+            (None, "立即完成", 0.99),
+        ]
+
+        self.assertFalse(任务上下文._OCR确认英雄升级详情(OCR结果))
+
+    def test_英雄详情保留给英雄任务不点击普通关闭按钮(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        OCR返回 = (
+            [
+                (None, "弓箭女皇", 0.99),
+                (None, "升至84级", 0.99),
+                (None, "取消", 0.99),
+                (None, "立即完成", 0.99),
+            ],
+            None,
+        )
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.获取OCR引擎 = Mock(return_value=Mock(return_value=OCR返回))
+        上下文._检测升级详情弹窗关闭点 = Mock(return_value=(770, 33))
+        上下文.置脚本状态 = Mock()
+        上下文.页面恢复失败 = False
+
+        self.assertFalse(上下文.关闭升级详情弹窗(图像))
+        上下文._检测升级详情弹窗关闭点.assert_called_once_with(图像)
+        self.assertFalse(any(
+            "安全点击右上角关闭" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_英雄详情不被主世界弹窗清理器关闭(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        OCR返回 = (
+            [
+                (None, "弓箭女皇", 0.99),
+                (None, "升至84级", 0.99),
+                (None, "取消", 0.99),
+                (None, "立即完成", 0.99),
+            ],
+            None,
+        )
+        页面识别器 = Mock()
+        页面识别器.识别.return_value = SimpleNamespace(
+            页面="主世界主页", 世界="主世界"
+        )
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.op = SimpleNamespace()
+        上下文.获取OCR引擎 = Mock(return_value=Mock(return_value=OCR返回))
+        上下文._获取点击页面识别器 = Mock(return_value=页面识别器)
+        上下文.置脚本状态 = Mock()
+        上下文.点击已确认安全按钮 = Mock(return_value=True)
+        上下文.页面恢复失败 = False
+
+        self.assertFalse(上下文.清理主世界活动弹窗(图像))
+        上下文.点击已确认安全按钮.assert_not_called()
+
     def test_英雄面板关闭授权已确认面板(self):
         返回 = Mock(return_value=True)
         任务 = 升级英雄任务.__new__(升级英雄任务)

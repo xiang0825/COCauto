@@ -21,6 +21,53 @@ from 任务流程.基础任务框架 import 任务上下文
 
 
 class 任务计划测试(unittest.TestCase):
+    def test_残留英雄详情交给英雄专用关闭器而不当作主页(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        画面 = object()
+        取图 = Mock(return_value=画面)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=取图),
+            _当前画面是英雄升级详情=Mock(return_value=True),
+            置脚本状态=Mock(),
+        )
+
+        with patch(
+            "任务流程.建筑升级.升级英雄.升级英雄任务.关闭英雄升级页面",
+            return_value=True,
+        ) as 关闭器:
+            self.assertTrue(机器人._清理残留英雄升级详情(上下文))
+
+        取图.assert_called_once()
+        关闭器.assert_called_once()
+        self.assertTrue(any(
+            "残留英雄升级详情" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_残留英雄殿堂列表使用顶部入口收尾(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        画面 = object()
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=画面)),
+            _当前画面是英雄升级详情=Mock(return_value=False),
+            置脚本状态=Mock(),
+        )
+
+        with patch(
+            "任务流程.建筑升级.升级英雄.升级英雄任务._英雄殿堂文本仍在",
+            return_value=True,
+        ), patch(
+            "任务流程.建筑升级.升级英雄.升级英雄任务._安全关闭英雄殿堂入口",
+            return_value=True,
+        ) as 关闭器:
+            self.assertTrue(机器人._清理残留英雄升级详情(上下文))
+
+        关闭器.assert_called_once()
+        self.assertTrue(any(
+            "英雄殿堂列表" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
     def test_战后主页确认必须连续两帧(self):
         """结算过渡帧不能被当作下一轮入口。"""
         机器人 = 自动化机器人.__new__(自动化机器人)
