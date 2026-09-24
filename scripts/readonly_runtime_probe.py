@@ -62,6 +62,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--adb")
     parser.add_argument("--serial")
+    parser.add_argument(
+        "--package",
+        default="com.supercell.clashofclans",
+        help="目标游戏包名；MuMu 多显示时用于绑定目标 display",
+    )
     parser.add_argument("--frame", type=Path, help="Replay a saved frame without connecting to ADB")
     parser.add_argument("--samples", type=int, default=60)
     args = parser.parse_args()
@@ -72,6 +77,7 @@ def main():
         device = ReplayDevice(args.frame)
     elif args.adb and args.serial:
         device = ADB设备操作类(args.adb, args.serial, runner=readonly_runner, 自动检测路径=False)
+        device.设置目标包名(args.package)
     else:
         parser.error("provide --frame or both --adb and --serial")
     screen = ADB屏幕(device)
