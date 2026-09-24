@@ -51,9 +51,37 @@ class 研究面板OCR护栏测试(unittest.TestCase):
         任务.执行OCR识别 = Mock(return_value=[])
 
         self.assertFalse(任务.尝试点击目标兵种或法术())
-        任务.上下文.点击.assert_called_once_with(
+        任务.上下文.点击.assert_any_call(
             668, 32, 是否精确点击=True
         )
+
+    def test_研究任务开始前清理中断遗留目标页(self):
+        任务 = 打开研究面板任务.__new__(打开研究面板任务)
+        任务.上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+            op=SimpleNamespace(),
+            页面恢复失败=False,
+            识别点击画面=Mock(
+                return_value=SimpleNamespace(页面="主世界主页", 世界="主世界")
+            ),
+        )
+        任务._执行局部放大OCR = Mock(side_effect=[
+            [([[0, 0], [100, 0], [100, 30], [0, 30]],
+              "請選選要升級的目標", 0.87)],
+            [],
+        ])
+
+        self.assertTrue(任务._清理残留研究面板())
+        self.assertEqual(
+            任务.上下文.点击.call_args_list,
+            [
+                unittest.mock.call(668, 32, 是否精确点击=True),
+                unittest.mock.call(100, 300, 是否精确点击=True),
+            ],
+        )
+        self.assertFalse(任务.上下文._研究面板已确认)
 
     def test_研究目标页面异常交给统一异常处理器(self):
         任务 = 打开要升级的兵种或法术任务.__new__(打开要升级的兵种或法术任务)
@@ -67,6 +95,38 @@ class 研究面板OCR护栏测试(unittest.TestCase):
 
         self.assertFalse(任务.执行())
         任务.异常处理.assert_called_once()
+
+    def test_拉远镜头后的下半区研究标签仍在搜索范围内(self):
+        任务 = 打开研究面板任务.__new__(打开研究面板任务)
+        任务._执行局部放大OCR = Mock(return_value=[
+            ([[980, 610], [1050, 610], [1050, 662], [980, 662]], "研究", 0.65),
+        ])
+
+        候选 = 任务._查找实验室标签候选()
+
+        self.assertEqual(任务.建筑标签搜索区域, (200, 300, 700, 520))
+        self.assertEqual(任务.局部OCR放大倍数, 4)
+        self.assertEqual(len(候选), 1)
+        self.assertAlmostEqual(候选[0][0], 453.75, delta=1.0)
+        self.assertAlmostEqual(候选[0][1], 459.0, delta=1.0)
+
+    def test_研究目标页兼容OCR重复选择字(self):
+        任务 = 打开研究面板任务.__new__(打开研究面板任务)
+        任务._执行局部放大OCR = Mock(return_value=[
+            ([[0, 0], [100, 0], [100, 30], [0, 30]],
+             "請選選要升級的目標", 0.87),
+        ])
+
+        self.assertTrue(任务._研究面板已确认())
+
+    def test_实验室详情页不能冒充研究目标页(self):
+        任务 = 打开研究面板任务.__new__(打开研究面板任务)
+        任务._执行局部放大OCR = Mock(return_value=[
+            ([[0, 0], [100, 0], [100, 30], [0, 30]],
+             "實驗室16級需等待", 0.99),
+        ])
+
+        self.assertFalse(任务._研究面板已确认())
 
     def test_未识别实验室研究标签时不发送错误入口点击(self):
         任务 = 打开研究面板任务.__new__(打开研究面板任务)

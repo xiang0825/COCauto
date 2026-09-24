@@ -573,6 +573,16 @@ class 页面识别测试(unittest.TestCase):
                 self.assertTrue(上下文.输入前安全检查())
                 上下文.清理官方评分弹窗.assert_called_once_with()
 
+    def test_已确认研究目标页允许研究流程继续点击(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.检查宝石商店危险页面 = Mock(return_value=False)
+        上下文._最近点击页面结果 = SimpleNamespace(页面="多按钮弹窗")
+        上下文._研究面板已确认 = True
+        上下文.清理官方评分弹窗 = Mock(return_value=False)
+
+        self.assertFalse(上下文.输入前安全检查())
+        上下文.清理官方评分弹窗.assert_not_called()
+
     def test_主页识别到升级面板几何候选时先走安全关闭器(self):
         上下文 = 任务上下文.__new__(任务上下文)
         上下文._战斗中 = False
