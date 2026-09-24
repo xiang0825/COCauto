@@ -192,6 +192,17 @@ class 研究面板OCR护栏测试(unittest.TestCase):
             700, 300, 是否精确点击=True
         )
 
+    def test_候选详情取消被拒绝时停止研究入口(self):
+        任务 = 打开研究面板任务.__new__(打开研究面板任务)
+        任务.上下文 = SimpleNamespace(
+            点击=Mock(return_value=False),
+            置脚本状态=Mock(),
+        )
+
+        self.assertFalse(任务._安全取消建筑选中())
+        self.assertTrue(任务.上下文.页面恢复失败)
+        任务.上下文.置脚本状态.assert_called()
+
     def test_研究目标页兼容OCR重复选择字(self):
         任务 = 打开研究面板任务.__new__(打开研究面板任务)
         任务._执行局部放大OCR = Mock(return_value=[

@@ -397,12 +397,18 @@ class 打开研究面板任务(基础任务):
         _, x, y, _ = max(候选, key=lambda 项: 项[2])
         return x, y
 
-    def _安全取消建筑选中(self):
+    def _安全取消建筑选中(self) -> bool:
         """只在已知主世界选中态时点水面空白，清除错误候选。"""
         try:
-            self.上下文.点击(100, 300, 是否精确点击=True)
-        except Exception:
-            pass
+            成功 = self.上下文.点击(100, 300, 是否精确点击=True)
+        except Exception as 异常:
+            成功 = False
+            self.上下文.置脚本状态(f"清理实验室候选详情失败，停止研究入口：{异常}")
+        if 成功 is False:
+            setattr(self.上下文, "页面恢复失败", True)
+            self.上下文.置脚本状态("清理实验室候选详情未被安全输入层接受")
+            return False
+        return True
 
     def _等待研究文字(self, 区域, 截止时间):
         while time.monotonic() < 截止时间:
@@ -430,13 +436,21 @@ class 打开研究面板任务(基础任务):
                         return False
                     self.上下文.脚本延时(450)
                     if not self._选中后是否为实验室():
-                        self._安全取消建筑选中()
+                        if not self._安全取消建筑选中():
+                            self.上下文.置脚本状态(
+                                "实验室候选不是实验室且无法安全取消选中，停止研究入口"
+                            )
+                            return False
                         continue
                     self.上下文.置脚本状态("已确认选中实验室，定位研究按钮")
                     研究位置 = self._查找选中实验室研究按钮()
                     if 研究位置 is None:
                         setattr(self.上下文, "_研究面板已确认", False)
-                        self._安全取消建筑选中()
+                        if not self._安全取消建筑选中():
+                            self.上下文.置脚本状态(
+                                "研究按钮未确认且无法安全取消选中，停止研究入口"
+                            )
+                            return False
                         self.上下文.置脚本状态("实验室研究按钮未确认，安全跳过研究升级")
                         return False
                     # 实验室详情页和后续目标页都会被通用页面识别器
