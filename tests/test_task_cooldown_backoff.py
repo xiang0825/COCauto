@@ -112,6 +112,24 @@ class 任务计划冷却退避测试(unittest.TestCase):
         self.assertEqual(上下文.任务计划等待秒, 60.0)
         self.assertEqual(上下文._任务计划等待原因, "研究升级不可用退避")
 
+    def test_战宠间隔为零时失败也请求短退避(self):
+        请求等待 = Mock()
+        上下文 = SimpleNamespace(
+            设置=SimpleNamespace(战宠升级检查间隔=0.0),
+            数据库=Mock(),
+            机器人标志="测试",
+            置脚本状态=Mock(),
+            请求任务计划等待=请求等待,
+        )
+        任务 = 战宠升级任务.__new__(战宠升级任务)
+        任务.上下文 = 上下文
+        任务.数据库 = 上下文.数据库
+        任务.机器人标志 = 上下文.机器人标志
+
+        任务.记录状态("未找到战宠小屋")
+
+        请求等待.assert_called_once_with(60.0, "战宠升级不可用退避")
+
 
 if __name__ == "__main__":
     unittest.main()
