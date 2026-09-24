@@ -73,7 +73,7 @@ class 自适应战斗测试(unittest.TestCase):
         任务 = 进攻任务.__new__(进攻任务)
         self.assertEqual(任务.读取自适应进攻策略(上下文), "分散探索")
 
-    def test_连续低表现会收紧资源阵营筛选门槛(self):
+    def test_连续低表现不会改变用户五分进攻门槛(self):
         class 数据库:
             def 获取最新完整状态(self, _标志):
                 return SimpleNamespace(状态数据={
@@ -89,11 +89,11 @@ class 自适应战斗测试(unittest.TestCase):
         上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
         任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
         评分, 可达比例, 说明 = 任务.获取自适应资源筛选门槛(上下文)
-        self.assertEqual(评分, 8.5)
-        self.assertEqual(可达比例, 0.85)
-        self.assertIn("提高可达性门槛", 说明)
+        self.assertEqual(评分, 5.0)
+        self.assertIsNone(可达比例)
+        self.assertEqual(说明, "")
 
-    def test_严格筛选达到上限后恢复用户五分门槛(self):
+    def test_学习反馈始终恢复用户五分门槛(self):
         class 数据库:
             def 获取最新完整状态(self, _标志):
                 return SimpleNamespace(状态数据={
@@ -108,12 +108,7 @@ class 自适应战斗测试(unittest.TestCase):
 
         上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
         任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
-        self.assertEqual(
-            任务.获取自适应资源筛选门槛(
-                上下文, 任务.自适应严格搜索上限
-            ),
-            (5.0, None, "（严格筛选已达到上限，恢复用户>5分门槛）"),
-        )
+        self.assertEqual(任务.获取自适应资源筛选门槛(上下文), (5.0, None, ""))
 
     def test_没有学习反馈时仍保持用户设定的五分门槛(self):
         class 数据库:
@@ -274,6 +269,29 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertFalse(结果[0]["数量已确认"])
         self.assertEqual(结果[0]["名称"], "未匹配模板(待探测)")
         self.assertTrue(any("启用一次安全探测" in 文本 for 文本 in 状态))
+
+    def test_前五格大数量未匹配卡牌按普通兵种启用高速下兵(self):
+        """模板缺失但 x40 这类大数量卡牌不能被误当成慢速攻城器械。"""
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.兵栏槽位 = [("第1格", (0, 0, 10, 10))]
+        任务.取本次兵种模板列表 = lambda _上下文: []
+        任务._识别槽位文本 = lambda _图像: ("x40", "")
+        任务._识别槽位数量 = lambda _图像, _文本: 40
+        任务._槽位最佳模板 = lambda *_参数: ("", 0.0)
+        任务.是否为灰色图片 = lambda *_参数, **_关键字: False
+        状态 = []
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=lambda *_区域: np.zeros((10, 10, 3), dtype=np.uint8),
+            ),
+            置脚本状态=状态.append,
+        )
+
+        结果 = 任务.检查当前配兵(上下文)
+
+        self.assertEqual(结果[0]["数量"], 40)
+        self.assertEqual(结果[0]["类别"], "兵种")
+        self.assertTrue(any("启用高速下兵" in 文本 for 文本 in 状态))
 
     def test_英雄技能无专用模板时按英雄槽位识别高亮(self):
         任务 = 进攻任务.__new__(进攻任务)
