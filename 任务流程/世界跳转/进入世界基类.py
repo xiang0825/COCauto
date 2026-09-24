@@ -29,6 +29,12 @@ class 进入世界任务基类(基础任务):
     # 镜头移动后飞艇可能离开原左下区域。子类可声明地图备用区；
     # 备用区仍只允许高置信模板命中，颜色候选绝不授权点击。
     世界入口备用搜索区域 = None
+    # 入口素材来自旧版截图，和当前 MuMu 拉远后的飞艇尺寸并不一致。
+    # 多尺度回退只给夜世界入口启用，并且限制在飞艇可能出现的海岸带；
+    # 不能把整屏小图模板匹配结果直接当成可点击坐标。
+    世界入口多尺度比例 = (0.50, 0.60, 0.70, 0.80, 0.90, 1.00, 1.20, 1.40)
+    世界入口多尺度最低分数 = 0.70
+    世界入口多尺度安全区域 = (120, 400, 340, 545)
 
     def __init__(self, 上下文: 任务上下文, 判断图标路径: str, 船模板路径: str, 状态文本: str,滑动参数: 滑动配置):
         super().__init__(上下文)
@@ -72,7 +78,11 @@ class 进入世界任务基类(基础任务):
                 上下文.置脚本状态(f"开始尝试进入{self.状态文本}")
 
             按钮区域 = (0, 0, 800, 600)
-            超时时间 = 30
+            # MuMu 多显示截图、OCR 和受控拖动都可能让一轮搜索超过
+            # 旧的 30 秒；飞艇常在最后一次拖动后才进入可见区域。给
+            # 回切留出一小段确认余量，避免“刚拖出来就超时”而漏掉
+            # 下一帧入口扫描。仍是有限等待，不会无限拖动地图。
+            超时时间 = 45
             开始时间 = time.time()
             未知页面轮次 = 0
             上次入口坐标 = None
@@ -261,6 +271,7 @@ class 进入世界任务基类(基础任务):
         """
         if not isinstance(屏幕图像, np.ndarray) or 屏幕图像.ndim < 2:
             return False, (0, 0), 0.0
+
         # 世界入口坐标和模板区域统一按 800×600 逻辑画布计算。正常
         # 路径会由 ADB屏幕先完成缩放，但部分旧适配器/启动过渡帧可能
         # 直接传入 MuMu 的 1280×720 原图；若把原图按逻辑坐标裁剪，
@@ -370,7 +381,10 @@ class 进入世界任务基类(基础任务):
                         return True, (点击x, 点击y), 分数
                 except Exception:
                     continue
-            return False, (0, 0), 最高分数
+            多尺度命中, 多尺度坐标, 多尺度分数 = self._多尺度入口匹配(屏幕图像)
+            if 多尺度命中:
+                return 多尺度命中, 多尺度坐标, 多尺度分数
+            return False, (0, 0), max(最高分数, 多尺度分数)
 
         # 兼容旧测试替身/旧识图引擎，没有最佳分数接口时仍使用安全区域。
         try:
@@ -383,7 +397,115 @@ class 进入世界任务基类(基础任务):
                 return True, (点击x, 点击y), 1.0
         except Exception:
             pass
-        return False, (0, 0), 0.0
+        多尺度命中, 多尺度坐标, 多尺度分数 = self._多尺度入口匹配(屏幕图像)
+        if 多尺度命中:
+            return 多尺度命中, 多尺度坐标, 多尺度分数
+        return False, (0, 0), 多尺度分数
+
+    def _多尺度入口匹配(self, 屏幕图像):
+        """在受限海岸带寻找缩放后的夜世界飞艇。
+
+        旧模板是从不同客户端尺寸截取的小块船帆。当前国际服在自动
+        拉远后，船帆通常只有旧素材的约 0.6 倍；固定尺寸匹配会稳定地
+        得到 0.55~0.65 的地图纹理分数。这里对少量固定比例做只读匹配，
+        并要求同时满足船体颜色、海岸位置和左侧水域条件。
+        """
+        if getattr(self, "状态文本", "") != "夜世界":
+            return False, (0, 0), 0.0
+        if not isinstance(屏幕图像, np.ndarray) or 屏幕图像.ndim < 2:
+            return False, (0, 0), 0.0
+        try:
+            import cv2
+
+            if 屏幕图像.shape[1] != 800 or 屏幕图像.shape[0] != 600:
+                屏幕图像 = cv2.resize(
+                    屏幕图像, (800, 600), interpolation=cv2.INTER_AREA
+                )
+            左, 上, 右, 下 = [int(v) for v in self.世界入口多尺度安全区域]
+            区域 = 屏幕图像[上:下, 左:右]
+            if 区域.size == 0:
+                return False, (0, 0), 0.0
+            加载模板 = getattr(self.模板识别, "_安全加载模板", None)
+            if not callable(加载模板):
+                return False, (0, 0), 0.0
+            路径列表 = (
+                self.船模板路径.split("|")
+                if isinstance(self.船模板路径, str)
+                else list(self.船模板路径)
+            )
+            hsv = cv2.cvtColor(屏幕图像, cv2.COLOR_BGR2HSV)
+            最佳候选 = None
+            最高分数 = 0.0
+            for 路径 in 路径列表:
+                模板 = 加载模板(路径.strip())
+                if 模板 is None or 模板.size == 0:
+                    continue
+                模板高, 模板宽 = 模板.shape[:2]
+                for 比例 in self.世界入口多尺度比例:
+                    模板宽度 = max(5, int(round(模板宽 * 比例)))
+                    模板高度 = max(5, int(round(模板高 * 比例)))
+                    if 模板宽度 >= 区域.shape[1] or 模板高度 >= 区域.shape[0]:
+                        continue
+                    插值 = cv2.INTER_AREA if 比例 < 1.0 else cv2.INTER_CUBIC
+                    缩放模板 = cv2.resize(
+                        模板, (模板宽度, 模板高度), interpolation=插值
+                    )
+                    匹配图 = cv2.matchTemplate(
+                        区域, 缩放模板, cv2.TM_CCOEFF_NORMED
+                    )
+                    _, 分数, _, 位置 = cv2.minMaxLoc(匹配图)
+                    分数 = float(分数)
+                    if 分数 < self.世界入口多尺度最低分数:
+                        continue
+                    中心x = 左 + int(位置[0]) + 模板宽度 // 2
+                    中心y = 上 + int(位置[1]) + 模板高度 // 2
+                    if not self._飞艇候选颜色可信(hsv, 中心x, 中心y):
+                        continue
+                    候选 = (分数, 中心x, 中心y)
+                    if 最佳候选 is None or 候选[0] > 最佳候选[0]:
+                        最佳候选 = 候选
+                        最高分数 = 分数
+
+            if 最佳候选 is None:
+                return False, (0, 0), 最高分数
+            分数, 中心x, 中心y = 最佳候选
+            return True, (int(中心x) - 25, int(中心y) + 26), float(分数)
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return False, (0, 0), 0.0
+
+    @staticmethod
+    def _飞艇候选颜色可信(hsv, 中心x: int, 中心y: int) -> bool:
+        """验证候选附近的红白船体和左侧水域，拒绝 UI 红点。"""
+        try:
+            高, 宽 = hsv.shape[:2]
+            x1, x2 = max(0, 中心x - 30), min(宽, 中心x + 30)
+            y1, y2 = max(0, 中心y - 30), min(高, 中心y + 30)
+            局部 = hsv[y1:y2, x1:x2]
+            if 局部.size == 0:
+                return False
+            红色 = (
+                ((局部[:, :, 0] <= 15) | (局部[:, :, 0] >= 165))
+                & (局部[:, :, 1] >= 90)
+                & (局部[:, :, 2] >= 70)
+            )
+            白色 = (局部[:, :, 1] < 100) & (局部[:, :, 2] > 145)
+            红覆盖率 = float(红色.mean())
+            白覆盖率 = float(白色.mean())
+            if not (0.05 <= 红覆盖率 <= 0.22 and 白覆盖率 >= 0.015):
+                return False
+            左侧 = hsv[max(0, 中心y - 25):min(高, 中心y + 25),
+                      max(0, 中心x - 50):max(0, 中心x - 10)]
+            if 左侧.size == 0:
+                return False
+            蓝色 = (
+                (左侧[:, :, 0] >= 85)
+                & (左侧[:, :, 0] <= 125)
+                & (左侧[:, :, 1] >= 60)
+                & (左侧[:, :, 2] >= 50)
+            )
+            return float(蓝色.mean()) >= 0.30
+        except (AttributeError, TypeError, ValueError):
+            return False
 
     def 识别当前世界(self):
         """返回当前截图的完整世界识别结果，供任务和日志复用。"""

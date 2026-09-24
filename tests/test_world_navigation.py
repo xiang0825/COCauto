@@ -3,6 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import cv2
 import numpy as np
 
 from 任务流程.世界跳转.进入世界基类 import 进入世界任务基类
@@ -154,6 +155,46 @@ class 世界跳转测试(unittest.TestCase):
         self.assertAlmostEqual(分数, 0.85)
         区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
         self.assertEqual(区域.shape[:2], (240, 300))
+
+    def test_缩放后的夜世界飞艇通过海岸和颜色护栏确认入口(self):
+        """当前 MuMu 拉远后旧船帆素材约为 0.6 倍，必须可识别。"""
+        任务 = object.__new__(到夜世界任务)
+        任务.状态文本 = "夜世界"
+        任务.船模板路径 = "夜世界的船5.bmp"
+        任务.模板识别 = importlib.import_module(
+            "模块.检测.模板匹配器"
+        ).模板匹配引擎()
+        模板 = 任务.模板识别._安全加载模板("夜世界的船5.bmp")
+        self.assertIsNotNone(模板)
+        缩放模板 = cv2.resize(模板, (8, 8), interpolation=cv2.INTER_AREA)
+        画面 = np.full((600, 800, 3), (255, 100, 0), dtype=np.uint8)
+        # 左下海岸带中放置一块缩小后的红白船帆，左侧保持蓝色水面。
+        画面[490:535, 190:215] = (235, 235, 235)
+        画面[490:535, 196:202] = (40, 40, 210)
+        画面[490:535, 207:213] = (40, 40, 210)
+        画面[505:513, 199:207] = 缩放模板
+
+        命中, 坐标, 分数 = 任务.查找世界入口(画面)
+
+        self.assertTrue(命中)
+        self.assertGreaterEqual(分数, 0.70)
+        self.assertNotEqual(坐标, (0, 0))
+
+    def test_缩放匹配不会把左下红色UI当成飞艇(self):
+        任务 = object.__new__(到夜世界任务)
+        任务.状态文本 = "夜世界"
+        任务.船模板路径 = "夜世界的船5.bmp"
+        任务.模板识别 = importlib.import_module(
+            "模块.检测.模板匹配器"
+        ).模板匹配引擎()
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        # 模拟盾牌/任务按钮红色块，左侧不是连续水面，禁止点击。
+        画面[505:545, 190:235] = (0, 0, 220)
+
+        命中, 坐标, _ = 任务.查找世界入口(画面)
+
+        self.assertFalse(命中)
+        self.assertEqual(坐标, (0, 0))
 
     def test_首次画面中的橙色地图建筑不会当成飞艇入口(self):
         任务 = object.__new__(进入世界任务基类)
