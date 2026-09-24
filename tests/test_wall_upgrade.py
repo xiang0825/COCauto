@@ -149,6 +149,23 @@ class 刷墙识别测试(unittest.TestCase):
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
+    def test_安全层先清理主页弹窗后只重试一次地图空白点击(self):
+        页面 = SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.78)
+        上下文 = SimpleNamespace(
+            点击=Mock(side_effect=[False, True]),
+            识别点击画面=Mock(return_value=页面),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+
+        self.assertTrue(self.任务._安全关闭非城墙选中面板(上下文))
+        self.assertEqual(上下文.点击.call_count, 2)
+        self.assertTrue(any(
+            "先清理主世界覆盖弹窗" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
     def test_已确认墙体面板继续扫描前先安全关闭避免重复旧面板(self):
         上下文 = SimpleNamespace(
             点击=Mock(return_value=True),
