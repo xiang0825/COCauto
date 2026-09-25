@@ -144,6 +144,35 @@ class 宝石安全保护测试(unittest.TestCase):
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
+    def test_回营后清除全部结算保护缓存允许下一场点击(self):
+        """回营成功后不能把下一场夜世界入口误当作结算页而拒点。"""
+        上下文 = 创建上下文(np.zeros((600, 800, 3), dtype=np.uint8))
+        上下文._战斗结束已确认 = True
+        上下文._战斗奖励弹窗已确认 = True
+        上下文._非战斗结算输入已拦截 = True
+        上下文._结算输入已锁定日志 = True
+        上下文._结算点击已拦截日志 = True
+        上下文._结算视觉跨帧阻断日志 = True
+        上下文._最近结算视觉时间 = 123.0
+        上下文._最近点击页面结果 = SimpleNamespace(页面="战斗结算")
+        上下文._点击识别截图 = object()
+        上下文._点击识别截图时间 = 123.0
+        上下文._战斗结束截图 = object()
+
+        上下文.清除战斗结算保护状态()
+
+        self.assertFalse(上下文._战斗结束已确认)
+        self.assertFalse(上下文._战斗奖励弹窗已确认)
+        self.assertFalse(上下文._非战斗结算输入已拦截)
+        self.assertFalse(上下文._结算输入已锁定日志)
+        self.assertFalse(上下文._结算点击已拦截日志)
+        self.assertFalse(上下文._结算视觉跨帧阻断日志)
+        self.assertEqual(上下文._最近结算视觉时间, 0.0)
+        self.assertIsNone(上下文._最近点击页面结果)
+        self.assertIsNone(上下文._点击识别截图)
+        self.assertEqual(上下文._点击识别截图时间, 0.0)
+        self.assertIsNone(上下文._战斗结束截图)
+
     def test_结算视觉后一帧主页不触发宝石ESC(self):
         """结算视觉短暂消失时，不能把底层主页纹理当成商店页。"""
         模板 = 读取模板("宝石.bmp")

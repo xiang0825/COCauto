@@ -717,6 +717,7 @@ class 任务计划测试(unittest.TestCase):
             _获取点击页面识别器=Mock(return_value=识别器),
             点击已确认安全按钮=安全点击,
             置脚本状态=Mock(),
+            清除战斗结算保护状态=Mock(),
         )
         任务.上下文 = 上下文
         任务.是否出现图片 = Mock(return_value=(False, (0, 0)))
@@ -725,6 +726,7 @@ class 任务计划测试(unittest.TestCase):
         识别器.定位结算回营按钮.assert_called_once()
         安全点击.assert_called_once_with(400, 508, 延时=300)
         self.assertFalse(上下文._战斗中)
+        上下文.清除战斗结算保护状态.assert_called_once_with()
 
     def test_星级奖励弹窗使用中央安全确定按钮(self):
         上下文 = 任务上下文.__new__(任务上下文)
@@ -742,6 +744,7 @@ class 任务计划测试(unittest.TestCase):
         self.assertTrue(上下文.处理战斗星级奖励弹窗())
         上下文.点击已确认安全按钮.assert_called_once_with(400, 468, 延时=300)
         self.assertFalse(上下文._战斗结束已确认)
+        self.assertIsNone(上下文._最近点击页面结果)
 
     def test_夜世界有限批次下兵不依赖旧版完成模板(self):
         任务 = 下兵.__new__(下兵)
