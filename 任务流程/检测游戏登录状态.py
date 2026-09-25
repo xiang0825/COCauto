@@ -437,6 +437,17 @@ class 检测游戏登录状态任务(基础任务):
                 开始检测时间 = time.monotonic()
                 检测轮次 = 0
                 continue
+            if 当前页面.页面 == "选择卡片弹窗":
+                清理卡片 = getattr(上下文, "清理选择卡片弹窗", None)
+                if callable(清理卡片) and 清理卡片(屏幕图像):
+                    开始检测时间 = time.monotonic()
+                    检测轮次 = 0
+                    continue
+                上下文.置脚本状态(
+                    "登录时选择卡片弹窗关闭失败，停止输入并保留画面"
+                )
+                上下文.页面恢复失败 = True
+                return False
             if 当前页面.页面 == "多按钮弹窗":
                 清理评分 = getattr(上下文, "清理官方评分弹窗", None)
                 if callable(清理评分) and 清理评分(屏幕图像):

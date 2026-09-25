@@ -590,6 +590,61 @@ class 页面识别测试(unittest.TestCase):
                 self.assertEqual(检测游戏登录状态任务._检测断线弹窗(画面),
                                  (False, (0, 0)))
 
+    def test_超级部队选择卡片弹窗优先于主世界HUD(self):
+        """中央卡片覆盖主页时必须识别弹窗，不能让资源任务穿透。"""
+        图像 = np.full((600, 800, 3), (30, 40, 50), dtype=np.uint8)
+        for x in (120, 280, 440, 600):
+            cv2.rectangle(图像, (x, 220), (x + 90, 360), (0, 0, 220), -1)
+            cv2.rectangle(图像, (x, 400), (x + 90, 530), (0, 0, 220), -1)
+        cv2.rectangle(图像, (650, 25), (705, 80), (0, 0, 220), -1)
+        cv2.line(图像, (662, 37), (693, 68), (255, 255, 255), 5)
+        cv2.line(图像, (693, 37), (662, 68), (255, 255, 255), 5)
+
+        结果 = self.识别器.识别(图像)
+
+        self.assertEqual(结果.页面, "选择卡片弹窗")
+        self.assertGreaterEqual(结果.可信度, 0.90)
+        关闭点 = self.识别器.定位选择卡片弹窗关闭按钮(图像)
+        self.assertIsNotNone(关闭点)
+        self.assertAlmostEqual(关闭点[0], 678, delta=8)
+        self.assertAlmostEqual(关闭点[1], 53, delta=8)
+
+    def test_选择卡片弹窗点击护栏先清理并阻断输入(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.检查宝石商店危险页面 = Mock(return_value=False)
+        上下文._最近点击页面结果 = SimpleNamespace(页面="选择卡片弹窗")
+        上下文._点击识别截图 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文.清理选择卡片弹窗 = Mock(return_value=True)
+
+        self.assertTrue(上下文.输入前安全检查())
+        上下文.清理选择卡片弹窗.assert_called_once_with(上下文._点击识别截图)
+
+    def test_选择卡片关闭后断线页交给登录恢复(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文._内存保护已触发 = False
+        上下文.op = SimpleNamespace(
+            清理截图缓存=Mock(),
+            获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8)),
+        )
+        上下文.脚本延时 = Mock()
+        上下文.置脚本状态 = Mock()
+        上下文.点击已确认安全按钮 = Mock(return_value=True)
+        识别器 = Mock()
+        识别器.识别.side_effect = [
+            SimpleNamespace(页面="选择卡片弹窗"),
+            SimpleNamespace(页面="断线弹窗"),
+        ]
+        识别器.定位选择卡片弹窗关闭按钮.return_value = (684, 58)
+        上下文._获取点击页面识别器 = Mock(return_value=识别器)
+
+        self.assertTrue(
+            上下文.清理选择卡片弹窗(np.zeros((600, 800, 3), dtype=np.uint8))
+        )
+        上下文.点击已确认安全按钮.assert_called_once_with(684, 58, 延时=260)
+        self.assertTrue(any("交给登录恢复流程" in 调用.args[0]
+                            for 调用 in 上下文.置脚本状态.call_args_list))
+
     def test_多按钮弹窗文字未确认时禁止穿透输入(self):
         for 已清理 in (False, True):
             with self.subTest(已清理=已清理):

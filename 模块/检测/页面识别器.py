@@ -197,6 +197,101 @@ class 页面识别器:
         except Exception:
             return 0
 
+    def _选择卡片弹窗关闭点(self, 图像: np.ndarray) -> tuple[int, int] | None:
+        """识别覆盖主页的兵种/活动卡片弹窗右上角关闭按钮。
+
+        测试服会弹出“超级部队”卡片页：底层主世界 HUD 仍然可见，
+        但中央有多张横向排列的红色卡片，右上角有一个红色 X。旧版
+        页面识别只看 HUD，因此会把这张弹窗误判成主世界，资源 OCR
+        读到边缘残留数字后继续执行任务。这里仅使用卡片排列、关闭
+        按钮几何和白色 X 三重证据定位，不调用 OCR，也不授权任何
+        购买/确认按钮。
+        """
+        if not isinstance(图像, np.ndarray) or 图像.ndim != 3 or 图像.size == 0:
+            return None
+        try:
+            高, 宽 = 图像.shape[:2]
+            if 高 < 300 or 宽 < 500:
+                return None
+            hsv = cv2.cvtColor(图像, cv2.COLOR_BGR2HSV)
+            色相 = hsv[:, :, 0]
+            红色 = (
+                ((色相 <= 12) | (色相 >= 170))
+                & (hsv[:, :, 1] >= 90)
+                & (hsv[:, :, 2] >= 80)
+            ).astype(np.uint8)
+
+            # 卡片标题条/卡片主体会与图片相连，不能要求固定高度；
+            # 只统计中央下半区内、宽度相近且横向分布的红色大块。
+            左 = int(宽 * 0.08)
+            右 = int(宽 * 0.92)
+            上 = int(高 * 0.28)
+            下 = int(高 * 0.96)
+            卡片区 = cv2.morphologyEx(
+                红色[上:下, 左:右],
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3)),
+            )
+            _, _, 统计, _ = cv2.connectedComponentsWithStats(卡片区, 8)
+            卡片中心 = []
+            for x, y, 方宽, 方高, 面积 in 统计[1:]:
+                if not (
+                    面积 >= max(900, int(宽 * 高 * 0.0012))
+                    and 方宽 >= int(宽 * 0.10)
+                    and 方高 >= int(高 * 0.06)
+                    and x + 方宽 >= int(宽 * 0.10) - 左
+                    and x <= int(宽 * 0.90) - 左
+                ):
+                    continue
+                卡片中心.append(int(左 + x + 方宽 / 2))
+            卡片中心.sort()
+            去重中心 = []
+            最小间距 = max(45, int(宽 * 0.08))
+            for 中心x in 卡片中心:
+                if not 去重中心 or 中心x - 去重中心[-1] >= 最小间距:
+                    去重中心.append(中心x)
+            if len(去重中心) < 3:
+                return None
+
+            # 右上角关闭按钮必须是独立红色方块，并且内部有明显白色 X。
+            顶部左 = int(宽 * 0.76)
+            顶部下 = int(高 * 0.22)
+            顶部红色 = 红色[:顶部下, 顶部左:]
+            _, _, 顶部统计, _ = cv2.connectedComponentsWithStats(顶部红色, 8)
+            灰度 = cv2.cvtColor(图像, cv2.COLOR_BGR2GRAY)
+            for x, y, 方宽, 方高, 面积 in 顶部统计[1:]:
+                中心x = 顶部左 + x + 方宽 / 2
+                中心y = y + 方高 / 2
+                if not (
+                    宽 * 0.80 <= 中心x <= 宽 * 0.98
+                    and 高 * 0.02 <= 中心y <= 高 * 0.20
+                    and 宽 * 0.025 <= 方宽 <= 宽 * 0.10
+                    and 高 * 0.035 <= 方高 <= 高 * 0.16
+                    and 面积 >= 方宽 * 方高 * 0.20
+                ):
+                    continue
+                左x = max(0, 顶部左 + x)
+                上y = max(0, y)
+                右x = min(宽, 左x + 方宽)
+                下y = min(高, 上y + 方高)
+                白色X = (
+                    (hsv[上y:下y, 左x:右x, 1] < 110)
+                    & (灰度[上y:下y, 左x:右x] > 175)
+                )
+                if int(np.count_nonzero(白色X)) >= max(10, int(方宽 * 方高 * 0.02)):
+                    return (int(round(中心x)), int(round(中心y)))
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return None
+        return None
+
+    def _选择卡片弹窗分数(self, 图像: np.ndarray) -> float:
+        """返回覆盖式卡片弹窗的页级置信度。"""
+        return 0.97 if self._选择卡片弹窗关闭点(图像) is not None else 0.0
+
+    def 定位选择卡片弹窗关闭按钮(self, 图像: np.ndarray):
+        """仅在已确认卡片弹窗时返回右上角关闭点。"""
+        return self._选择卡片弹窗关闭点(图像)
+
     def _战斗倒计时分数(self, 图像: np.ndarray) -> float:
         """识别战斗页顶部的白色倒计时数字。
 
@@ -728,6 +823,14 @@ class 页面识别器:
                 世界=None,
                 可信度=维护分数,
                 依据=(f"顶部黄黑维护警示带{维护分数:.2f}",),
+            )
+        选择卡片分数 = self._选择卡片弹窗分数(屏幕图像)
+        if 选择卡片分数 >= 0.90:
+            return 页面识别结果(
+                页面="选择卡片弹窗",
+                世界=None,
+                可信度=选择卡片分数,
+                依据=(f"中央红色卡片+右上角关闭X{选择卡片分数:.2f}",),
             )
         多按钮分数 = self._断线弹窗分数(屏幕图像, 多按钮=True)
         if 多按钮分数 >= 0.90:
