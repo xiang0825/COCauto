@@ -65,6 +65,24 @@ class 宝石安全保护测试(unittest.TestCase):
         self.assertTrue(上下文.检查宝石商店危险页面(强制=True))
         上下文.键盘.按字符按压.assert_called()
 
+    def test_固定主页模板漏检时用连续页面识别确认且不重复ESC(self):
+        """显示层缩放导致固定模板漏检时，主页识别应安全完成恢复确认。"""
+        上下文 = 创建上下文(np.zeros((600, 800, 3), dtype=np.uint8))
+        # 不使用测试替身确认器，覆盖生产环境的真实恢复路径。
+        del 上下文._宝石保护确认主页面
+        上下文.安全返回键 = Mock(return_value=True)
+        上下文.识别点击画面 = Mock(side_effect=[
+            SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.78),
+            SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.78),
+        ])
+
+        self.assertTrue(上下文._宝石保护发送ESC并确认主页面())
+        上下文.安全返回键.assert_called_once_with(
+            "宝石保护第1次", 已确认可关闭面板=True
+        )
+        上下文.键盘.按字符按压.assert_not_called()
+        self.assertEqual(上下文.识别点击画面.call_count, 2)
+
     def test_单张局部宝石图案不会阻断正常战斗点击(self):
         模板 = 读取模板("宝石2.bmp")
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
