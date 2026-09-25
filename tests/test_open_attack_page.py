@@ -339,6 +339,32 @@ class 打开进攻页面测试(unittest.TestCase):
             705, 535, 延时=700, 是否精确点击=True
         )
 
+    def test_入口轻量结算识别会登记宝石跨帧保护(self):
+        """入口识别到结算时，基础护栏不得把同一过渡帧误当宝石页。"""
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        识别器 = Mock()
+        识别器.识别.return_value = SimpleNamespace(页面="战斗结算")
+        上下文 = SimpleNamespace(
+            _获取点击页面识别器=Mock(return_value=识别器),
+            置脚本状态=Mock(),
+        )
+
+        结果 = 任务._识别已存在的战斗页面(
+            上下文,
+            屏幕图像=np.zeros((600, 800, 3), dtype=np.uint8),
+        )
+
+        self.assertEqual(结果, "战斗结算")
+        self.assertGreater(
+            getattr(上下文, "_最近结算视觉时间", 0.0),
+            0.0,
+        )
+        self.assertFalse(getattr(上下文, "_结算视觉跨帧阻断日志", True))
+        识别器.识别.assert_called_once_with(
+            unittest.mock.ANY,
+            战斗中=False,
+        )
+
     def test_点击寻找目标后不再关闭主页弹窗(self):
         """攻击流程开始后，过渡帧不能再次触发升级/宝石恢复输入。"""
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
