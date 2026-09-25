@@ -872,6 +872,20 @@ class 英雄升级确认页测试(unittest.TestCase):
         self.assertAlmostEqual(结果[0], 750, delta=5)
         self.assertAlmostEqual(结果[1], 70, delta=5)
 
+    def test_1280x720英雄详情内侧关闭点回退到通用升级检测器(self):
+        """实机详情 X 约在 0.884W，不能因不在最右侧而遗留宝石面板。"""
+        屏幕 = np.zeros((720, 1280, 3), dtype=np.uint8)
+        cv2.rectangle(屏幕, (1100, 18), (1162, 86), (0, 0, 220), -1)
+        cv2.rectangle(屏幕, (100, 25), (1050, 100), (90, 90, 90), -1)
+        cv2.line(屏幕, (1115, 33), (1147, 71), (255, 255, 255), 5)
+        cv2.line(屏幕, (1147, 33), (1115, 71), (255, 255, 255), 5)
+
+        结果 = 升级英雄任务._检测英雄殿堂关闭点(屏幕)
+
+        self.assertIsNotNone(结果)
+        self.assertAlmostEqual(结果[0], 707, delta=8)
+        self.assertAlmostEqual(结果[1], 44, delta=8)
+
     def test_普通主世界没有英雄殿堂关闭按钮(self):
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
         self.assertIsNone(升级英雄任务._检测英雄殿堂关闭点(屏幕))

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from 任务流程.启动模拟器 import 启动模拟器任务
+from 任务流程.检测游戏登录状态 import 检测游戏登录状态任务
 
 
 class 启动模拟器状态测试(unittest.TestCase):
@@ -38,6 +39,34 @@ class 启动模拟器状态测试(unittest.TestCase):
         self.assertTrue(启动模拟器任务(上下文).执行())
         self.assertGreaterEqual(上下文.脚本延时.call_count, 2)
         self.assertTrue(any("进入前台" in 文本 for 文本 in 日志))
+
+
+class 启动残留英雄详情测试(unittest.TestCase):
+    def test_启动时英雄详情登记后跳过拉远交给英雄任务收尾(self):
+        上下文 = SimpleNamespace(
+            _当前画面是英雄升级详情=Mock(return_value=True),
+            置脚本状态=Mock(),
+        )
+        任务 = 检测游戏登录状态任务.__new__(检测游戏登录状态任务)
+        任务.上下文 = 上下文
+
+        self.assertTrue(任务._启动阶段处理英雄升级详情(None))
+        self.assertTrue(上下文._启动时英雄升级详情)
+        self.assertTrue(any(
+            "跳过活动弹窗清理" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_启动时没有英雄详情不会登记(self):
+        上下文 = SimpleNamespace(
+            _当前画面是英雄升级详情=Mock(return_value=False),
+            置脚本状态=Mock(),
+        )
+        任务 = 检测游戏登录状态任务.__new__(检测游戏登录状态任务)
+        任务.上下文 = 上下文
+
+        self.assertFalse(任务._启动阶段处理英雄升级详情(None))
+        self.assertFalse(hasattr(上下文, "_启动时英雄升级详情"))
 
 
 if __name__ == "__main__":

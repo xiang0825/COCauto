@@ -124,7 +124,13 @@ class 升级英雄任务(夜世界基础任务):
                     continue
                 候选.append((方宽 * 方高, 中心x, 中心y))
             if not 候选:
-                return None
+                # 英雄详情页与普通升级详情页共用同一套 1280×720
+                # 右上角关闭按钮。英雄专用检测器的严格范围主要用于
+                # 英雄殿堂列表，但在高分辨率测试服中详情 X 的中心会
+                # 落在约 0.884W；不能因为它不是“最右侧”就把面板留在
+                # 原地。通用检测器仍要求中央标题栏、红色方形按钮和
+                # 尺寸约束，只返回 X，不会返回底部绿色确认/宝石按钮。
+                return 任务上下文._检测升级详情弹窗关闭点(屏幕图像)
             _, 中心x, 中心y = max(候选, key=lambda 项: 项[0])
             return (
                 int(round(中心x * 800 / 宽)),
@@ -418,6 +424,29 @@ class 升级英雄任务(夜世界基础任务):
                                 "清除英雄升级浮层点击被安全层拒绝，停止后续操作"
                             )
                             return False
+                        识别页面 = getattr(self.上下文, "识别点击画面", None)
+                        if callable(识别页面):
+                            try:
+                                try:
+                                    页面结果 = 识别页面(强制=True)
+                                except TypeError:
+                                    页面结果 = 识别页面()
+                            except Exception as 异常:
+                                self.上下文.页面恢复失败 = True
+                                self.上下文.置脚本状态(
+                                    f"英雄殿堂关闭后主页复核失败：{异常}"
+                                )
+                                return False
+                            if not (
+                                getattr(页面结果, "页面", "") == "主世界主页"
+                                and getattr(页面结果, "世界", "") == "主世界"
+                            ):
+                                self.上下文.页面恢复失败 = True
+                                self.上下文.置脚本状态(
+                                    "英雄殿堂关闭后未确认主世界主页，禁止继续点击"
+                                )
+                                return False
+                        self.上下文.页面恢复失败 = False
                         return True
 
                     self.上下文.置脚本状态(
