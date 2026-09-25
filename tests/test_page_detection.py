@@ -1104,6 +1104,32 @@ class 页面识别测试(unittest.TestCase):
         self.assertTrue(上下文.停止事件.is_set())
         self.assertTrue(any("恢复3次仍未消失" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
 
+    def test_旧版断线模板连续命中也受三次恢复上限保护(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=屏幕)),
+            数据库=Mock(),
+            机器人标志="robot_test",
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            点击已确认安全按钮=Mock(return_value=True),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
+
+        with patch("任务流程.检测游戏登录状态.模板匹配引擎") as 引擎类, \
+                patch("任务流程.检测游戏登录状态.页面识别器") as 页面识别器:
+            引擎类.return_value.执行匹配.return_value = (True, (20, 30), 0.95)
+            页面识别器.return_value.识别.return_value = SimpleNamespace(页面="未知")
+            任务._检测断线弹窗 = Mock(return_value=(False, (0, 0)))
+            self.assertFalse(任务.执行(首次登录=False))
+
+        self.assertEqual(上下文.点击已确认安全按钮.call_count, 3)
+        self.assertTrue(上下文.页面恢复失败)
+        self.assertTrue(上下文.停止事件.is_set())
+        self.assertTrue(any("旧版断线模板" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
     def test_断线弹窗优先于底层中央能力提示(self):
         """断线遮住能力层时不能先点击被遮挡的底层继续按钮。"""
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
