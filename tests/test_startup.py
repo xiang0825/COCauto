@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from 任务流程.启动模拟器 import 启动模拟器任务
 from 任务流程.检测游戏登录状态 import 检测游戏登录状态任务
@@ -67,6 +67,65 @@ class 启动残留英雄详情测试(unittest.TestCase):
 
         self.assertFalse(任务._启动阶段处理英雄升级详情(None))
         self.assertFalse(hasattr(上下文, "_启动时英雄升级详情"))
+
+
+class 启动残留研究目标页测试(unittest.TestCase):
+    def test_启动时研究目标页交给研究页安全收尾器(self):
+        上下文 = SimpleNamespace(
+            获取OCR引擎=Mock(return_value=object()),
+            置脚本状态=Mock(),
+        )
+        任务 = 检测游戏登录状态任务.__new__(检测游戏登录状态任务)
+        任务.上下文 = 上下文
+
+        清理任务 = SimpleNamespace(
+            _研究面板已确认=Mock(return_value=True),
+            _清理残留研究面板=Mock(return_value=True),
+        )
+        class 假研究任务:
+            def __new__(cls):
+                return 清理任务
+
+        with patch(
+            "任务流程.兵种或法术升级.打开研究面板.打开研究面板任务",
+            new=假研究任务,
+        ):
+            self.assertTrue(任务._启动阶段处理研究目标页(None))
+
+        清理任务._研究面板已确认.assert_called_once_with()
+        清理任务._清理残留研究面板.assert_called_once_with()
+        self.assertTrue(any(
+            "残留研究目标页" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_启动时研究目标页清理失败会停止输入(self):
+        停止事件 = Mock()
+        上下文 = SimpleNamespace(
+            获取OCR引擎=Mock(return_value=object()),
+            置脚本状态=Mock(),
+            停止事件=停止事件,
+        )
+        任务 = 检测游戏登录状态任务.__new__(检测游戏登录状态任务)
+        任务.上下文 = 上下文
+
+        清理任务 = SimpleNamespace(
+            _研究面板已确认=Mock(return_value=True),
+            _清理残留研究面板=Mock(return_value=False),
+        )
+        class 假研究任务:
+            def __new__(cls):
+                return 清理任务
+
+        with patch(
+            "任务流程.兵种或法术升级.打开研究面板.打开研究面板任务",
+            new=假研究任务,
+        ):
+
+            self.assertTrue(任务._启动阶段处理研究目标页(None))
+
+        self.assertTrue(上下文.页面恢复失败)
+        停止事件.set.assert_called_once_with()
 
 
 if __name__ == "__main__":

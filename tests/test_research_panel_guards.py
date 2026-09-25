@@ -291,6 +291,54 @@ class 研究面板OCR护栏测试(unittest.TestCase):
             ],
         )
 
+    def test_研究按钮点击后未确认面板会取消实验室选中(self):
+        任务 = 打开研究面板任务.__new__(打开研究面板任务)
+        任务.上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+        )
+        任务.研究入口偏移候选 = ((0, 13),)
+        任务.最大入口等待秒 = 0.01
+        任务._查找实验室标签候选 = Mock(return_value=[(455, 352, 0.99, "研究")])
+        任务._选中后是否为实验室 = Mock(return_value=True)
+        任务._查找选中实验室研究按钮 = Mock(return_value=(490, 470))
+        任务._获取全屏画面 = Mock(return_value=None)
+        任务._研究面板已确认 = Mock(return_value=False)
+        任务._安全取消建筑选中 = Mock(wraps=任务._安全取消建筑选中)
+
+        self.assertFalse(任务._打开研究入口())
+        任务._安全取消建筑选中.assert_called_once_with()
+        任务.上下文.点击.assert_any_call(100, 300, 是否精确点击=True)
+        self.assertTrue(any(
+            "已取消实验室选中" in 调用.args[0]
+            for 调用 in 任务.上下文.置脚本状态.call_args_list
+        ))
+
+    def test_研究按钮输入被拒绝也会取消实验室选中(self):
+        任务 = 打开研究面板任务.__new__(打开研究面板任务)
+        任务.上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            点击=Mock(side_effect=[True, False, True]),
+            脚本延时=Mock(),
+        )
+        任务.研究入口偏移候选 = ((0, 13),)
+        任务.最大入口等待秒 = 0.01
+        任务._查找实验室标签候选 = Mock(return_value=[(455, 352, 0.99, "研究")])
+        任务._选中后是否为实验室 = Mock(return_value=True)
+        任务._查找选中实验室研究按钮 = Mock(return_value=(490, 470))
+        任务._获取全屏画面 = Mock(return_value=None)
+
+        self.assertFalse(任务._打开研究入口())
+        self.assertEqual(
+            任务.上下文.点击.call_args_list,
+            [
+                unittest.mock.call(455, 365, 是否精确点击=True),
+                unittest.mock.call(490, 470, 是否精确点击=True),
+                unittest.mock.call(100, 300, 是否精确点击=True),
+            ],
+        )
+
     def test_研究目标点击被拒绝时关闭研究面板(self):
         任务 = 打开要升级的兵种或法术任务.__new__(打开要升级的兵种或法术任务)
         任务.欲升级的兵种或法术 = "雷电法术"
