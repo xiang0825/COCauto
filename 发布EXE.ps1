@@ -21,9 +21,14 @@ $sourceInternal = Join-Path $source "_internal"
 $targetExe = Join-Path $target "部落冲突.exe"
 $targetInternal = Join-Path $target "_internal"
 
-if (-not (Test-Path -LiteralPath $sourceExe -PathType Leaf) -or
-    -not (Test-Path -LiteralPath (Join-Path $sourceInternal "python311.dll") -PathType Leaf)) {
-    throw "发布包不完整：缺少部落冲突.exe或_internal\python311.dll"
+if (-not (Test-Path -LiteralPath $sourceExe -PathType Leaf)) {
+    throw "发布包不完整：缺少部落冲突.exe"
+}
+$sourcePythonDll = Get-ChildItem -LiteralPath $sourceInternal -File -Filter "python3*.dll" |
+    Where-Object { $_.Length -ge 5000000 } |
+    Select-Object -First 1
+if (-not $sourcePythonDll) {
+    throw "发布包不完整：_internal 中没有有效的 Python 运行时 DLL"
 }
 
 $expectedInternalFileCount = (Get-ChildItem -LiteralPath $sourceInternal -File -Recurse | Measure-Object).Count
@@ -51,9 +56,11 @@ try {
     Move-Item -LiteralPath $sourceExe -Destination $targetExe
 
     $actualInternalFileCount = (Get-ChildItem -LiteralPath $targetInternal -File -Recurse | Measure-Object).Count
-    $dll = Get-Item -LiteralPath (Join-Path $targetInternal "python311.dll")
-    if ($actualInternalFileCount -ne $expectedInternalFileCount -or $dll.Length -lt 5000000) {
-        throw "切换后的发布目录校验失败：_internal files=$actualInternalFileCount/$expectedInternalFileCount, python311.dll=$($dll.Length)"
+    $dll = Get-ChildItem -LiteralPath $targetInternal -File -Filter "python3*.dll" |
+        Where-Object { $_.Length -ge 5000000 } |
+        Select-Object -First 1
+    if ($actualInternalFileCount -ne $expectedInternalFileCount -or -not $dll) {
+        throw "切换后的发布目录校验失败：_internal files=$actualInternalFileCount/$expectedInternalFileCount, Python运行时DLL缺失"
     }
 }
 catch {
@@ -67,4 +74,4 @@ catch {
 # 新包已完成且通过校验后再清理旧包，避免任何旧文件混入当前发布目录。
 if (Test-Path -LiteralPath $oldInternal) { Remove-Item -LiteralPath $oldInternal -Recurse -Force }
 if (Test-Path -LiteralPath $oldExe) { Remove-Item -LiteralPath $oldExe -Force }
-Write-Output "发布完成：$targetExe；_internal 文件数=$actualInternalFileCount；python311.dll=$($dll.Length) 字节"
+Write-Output "发布完成：$targetExe；_internal 文件数=$actualInternalFileCount；$($dll.Name)=$($dll.Length) 字节"

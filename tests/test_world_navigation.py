@@ -208,6 +208,22 @@ class 世界跳转测试(unittest.TestCase):
         区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
         self.assertEqual(区域.shape[:2], (590, 680))
 
+    def test_回主世界中部飞艇点击船体而不是旧水面偏移(self):
+        任务 = object.__new__(到主世界任务)
+        任务.状态文本 = "主世界"
+        任务.船模板路径 = "船.bmp"
+        任务.模板识别 = Mock()
+        # 查找器返回的是安全区域 (80,0,760,590) 内的局部坐标。
+        任务.模板识别.执行最佳匹配.return_value = (0.93, (540, 250), "船.bmp")
+
+        命中, 坐标, 分数 = 任务.查找世界入口(
+            np.zeros((600, 800, 3), dtype=np.uint8)
+        )
+
+        self.assertTrue(命中)
+        self.assertEqual(坐标, (628, 270))
+        self.assertAlmostEqual(分数, 0.93)
+
     def test_缩放后的夜世界飞艇通过海岸和颜色护栏确认入口(self):
         """当前 MuMu 拉远后旧船帆素材约为 0.6 倍，必须可识别。"""
         任务 = object.__new__(到夜世界任务)

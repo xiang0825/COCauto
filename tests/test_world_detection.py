@@ -81,8 +81,11 @@ class 世界识别测试(unittest.TestCase):
 
     def test_实机主世界截图命中主世界且不命中夜世界(self):
         根目录 = pathlib.Path(__file__).resolve().parents[1]
+        图片路径 = 根目录 / ".tmp" / "runtime_observation_after10s.png"
+        if not 图片路径.exists():
+            self.skipTest("没有维护观察截图")
         数据 = np.fromfile(
-            根目录 / ".tmp" / "runtime_observation_after10s.png", dtype=np.uint8
+            图片路径, dtype=np.uint8
         )
         屏幕图像 = cv2.imdecode(数据, cv2.IMREAD_COLOR)
         if 屏幕图像 is None:

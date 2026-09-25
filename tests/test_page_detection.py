@@ -22,7 +22,10 @@ class 页面识别测试(unittest.TestCase):
         cls.识别器 = 页面识别器(cls.引擎)
 
     def _读取截图(self, 名称):
-        数据 = np.fromfile(self.根目录 / ".tmp" / 名称, dtype=np.uint8)
+        路径 = self.根目录 / ".tmp" / 名称
+        if not 路径.exists():
+            return None
+        数据 = np.fromfile(路径, dtype=np.uint8)
         return cv2.imdecode(数据, cv2.IMREAD_COLOR)
 
     def test_顶号等待按毫秒单位为200秒(self):
@@ -83,6 +86,8 @@ class 页面识别测试(unittest.TestCase):
 
     def test_实机军队配置页右上角关闭点可被识别(self):
         屏幕 = self._读取截图("army_config_current2.png")
+        if 屏幕 is None:
+            self.skipTest("没有维护观察截图")
         关闭点 = 任务上下文._检测主世界活动弹窗关闭点(屏幕)
         self.assertIsNotNone(关闭点)
         self.assertAlmostEqual(关闭点[0], 773, delta=8)
