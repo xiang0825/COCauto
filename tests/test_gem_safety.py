@@ -195,6 +195,24 @@ class 宝石安全保护测试(unittest.TestCase):
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
+    def test_高置信主页清除宝石护栏残留失败状态(self):
+        """上一帧护栏失败后，下一帧确认主页不得阻断进攻入口。"""
+        上下文 = 创建上下文(np.zeros((600, 800, 3), dtype=np.uint8))
+        上下文.页面恢复失败 = True
+        上下文._宝石保护已触发 = True
+        上下文.识别点击画面 = Mock(return_value=SimpleNamespace(
+            页面="主世界主页", 世界="主世界", 可信度=0.78
+        ))
+
+        self.assertFalse(上下文.检查宝石商店危险页面(强制=True))
+        self.assertFalse(上下文.页面恢复失败)
+        self.assertFalse(上下文._宝石保护已触发)
+        上下文.键盘.按字符按压.assert_not_called()
+        self.assertTrue(any(
+            "清除上次宝石护栏残留状态" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
     def test_点击检测到危险页面后不会发送鼠标点击(self):
         模板 = 读取模板("宝石.bmp")
         模板1 = 读取模板("宝石1.bmp")
