@@ -378,6 +378,15 @@ class ADB设备操作类:
                 if not 结果.returncode:
                     self._连续传输失败次数 = 0
                     self._ADB熔断截止时间 = 0.0
+                    # MuMu 的 dumpsys 在 Android 服务缺失时可能退出码仍为
+                    # 0，却把诊断写到 stderr。仅保留这一条明确的显示服务
+                    # 诊断，避免上层误以为是空输出并继续复用旧 display。
+                    if (
+                        not binary
+                        and not stdout
+                        and self._是MuMu显示服务缺失错误(stderr)
+                    ):
+                        return stderr
                     return stdout
 
                 if isinstance(stderr, bytes):
@@ -948,6 +957,8 @@ class ADB设备操作类:
                 显示输出 = self.执行(["shell", "dumpsys", "display"], timeout=8)
                 if isinstance(显示输出, bytes):
                     显示输出 = 显示输出.decode("utf-8", errors="replace")
+                if self._是MuMu显示服务缺失错误(显示输出):
+                    raise ADB错误(str(显示输出).strip())
                 self._MuMu显示服务缺失时间 = 0.0
                 物理ID = self._解析MuMu物理显示ID(str(显示输出), 选中逻辑ID)
                 if 物理ID:
@@ -1021,6 +1032,8 @@ class ADB设备操作类:
             窗口输出 = self.执行(["shell", "dumpsys", "window", "displays"], timeout=8)
             if isinstance(窗口输出, bytes):
                 窗口输出 = 窗口输出.decode("utf-8", errors="replace")
+            if self._是MuMu显示服务缺失错误(窗口输出):
+                raise ADB错误(str(窗口输出).strip())
             self._MuMu显示服务缺失时间 = 0.0
             self._输入显示ID = self._解析MuMu逻辑显示ID(窗口输出, self._目标包名)
             if self._输入显示ID:

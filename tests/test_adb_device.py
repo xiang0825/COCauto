@@ -615,7 +615,7 @@ Input Reader State:
             r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
             "127.0.0.1:16416",
             runner=假Runner(
-                结果(code=1, 错误=b"Can't find service: window\n"),
+                结果(错误=b"Can't find service: window\n"),
             ),
             自动检测路径=False,
         )
