@@ -169,12 +169,18 @@ class 自动启动管理器:
         # 构建bat文件内容
         bat内容 = "@echo off\n"
         bat内容 += f"chcp 65001\n"
-        bat内容 += f"cd /d {self.项目根目录}\n"
+        # 计划任务常被放在带空格的用户目录中；cmd 的 cd、activate 和
+        # Python 脚本路径都必须整体引用，否则 schtasks 启动时会把路径
+        # 截断成多个参数，表现为“计划任务已创建但机器人没有启动”。
+        bat内容 += f'cd /d "{self.项目根目录}"\n'
 
         if 使用虚拟环境:
-            bat内容 += "call .venv\\Scripts\\activate.bat\n"
+            bat内容 += f'call "{self.项目根目录 / ".venv\\Scripts\\activate.bat"}"\n'
 
-        bat内容 += f"python 主入口.py --机器人 标志={机器人标识}\n"
+        bat内容 += (
+            f'python "{self.项目根目录 / "主入口.py"}" '
+            f'--机器人 "标志={机器人标识}"\n'
+        )
 
         # 写入文件
         with open(bat文件路径, 'w', encoding='utf-8') as f:
@@ -193,7 +199,9 @@ class 自动启动管理器:
             "schtasks",
             "/Create",
             "/TN", 任务名称,
-            "/TR", str(bat文件路径),
+            # /TR 接收的是一个命令字符串；带空格的 bat 路径必须整体
+            # 引用，否则任务创建成功但运行时找不到脚本。
+            "/TR", f'"{bat文件路径}"',
             "/SC", "DAILY",
             "/ST", 启动时间,
             "/F"  # 强制创建，如果已存在则覆盖
