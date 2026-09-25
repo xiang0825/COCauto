@@ -292,6 +292,93 @@ class 页面识别器:
         """仅在已确认卡片弹窗时返回右上角关闭点。"""
         return self._选择卡片弹窗关闭点(图像)
 
+    def _升级详情弹窗关闭点(self, 图像: np.ndarray) -> tuple[int, int] | None:
+        """识别升级详情面板的安全右上角关闭 X。
+
+        英雄/建筑升级面板会保留主世界资源栏和等级徽章，不能等到
+        主页识别之后再处理；否则资源 OCR 只会读到屏幕边缘残留数字，
+        后续进攻入口也可能把绿色“立即完成/宝石”按钮当成普通输入。
+        这里只做几何页级识别，不点击任何按钮；具体是否关闭以及
+        是否属于英雄详情，交给任务上下文的 OCR 安全护栏复核。
+        """
+        if not isinstance(图像, np.ndarray) or 图像.ndim != 3 or 图像.size == 0:
+            return None
+        try:
+            高, 宽 = 图像.shape[:2]
+            if 高 < 120 or 宽 < 240:
+                return None
+            hsv = cv2.cvtColor(图像, cv2.COLOR_BGR2HSV)
+            标题栏 = hsv[
+                int(高 * 0.035):int(高 * 0.14),
+                int(宽 * 0.08):int(宽 * 0.82),
+            ]
+            if 标题栏.size == 0:
+                return None
+            低饱和明亮像素 = cv2.inRange(
+                标题栏, (0, 0, 55), (180, 105, 235)
+            )
+            支持度 = cv2.countNonZero(低饱和明亮像素) / float(
+                标题栏.shape[0] * 标题栏.shape[1]
+            )
+            if 支持度 < 0.60:
+                return None
+
+            色相 = hsv[:, :, 0]
+            红色 = (
+                ((色相 <= 15) | (色相 >= 165))
+                & (hsv[:, :, 1] >= 100)
+                & (hsv[:, :, 2] >= 100)
+            ).astype(np.uint8)
+            x起点, x终点 = int(宽 * 0.80), int(宽 * 0.95)
+            y终点 = int(高 * 0.20)
+            区域 = cv2.morphologyEx(
+                红色[:y终点, x起点:x终点],
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
+            )
+            _, _, 统计, 重心 = cv2.connectedComponentsWithStats(区域, 8)
+            候选 = []
+            for 序号 in range(1, len(统计)):
+                x, y, 方宽, 方高, 面积 = [int(值) for 值 in 统计[序号]]
+                中心x, 中心y = [float(值) for 值 in 重心[序号]]
+                全局x = x + x起点
+                全局中心x = 中心x + x起点
+                全局中心y = 中心y
+                if not (
+                    宽 * 0.82 <= 全局中心x <= 宽 * 0.95
+                    and 高 * 0.02 <= 全局中心y <= 高 * 0.16
+                    and 宽 * 0.025 <= 方宽 <= 宽 * 0.10
+                    and 高 * 0.035 <= 方高 <= 高 * 0.16
+                    and 面积 >= max(12, int(方宽 * 方高 * 0.20))
+                ):
+                    continue
+                左x = max(0, x起点 + x)
+                上y = max(0, y)
+                右x = min(宽, 左x + 方宽)
+                下y = min(高, 上y + 方高)
+                灰度 = cv2.cvtColor(图像, cv2.COLOR_BGR2GRAY)
+                白色X = (
+                    (hsv[上y:下y, 左x:右x, 1] < 110)
+                    & (灰度[上y:下y, 左x:右x] > 175)
+                )
+                if int(np.count_nonzero(白色X)) < max(10, int(方宽 * 方高 * 0.02)):
+                    continue
+                候选.append((面积, 全局x, 全局中心x, 全局中心y))
+            if not 候选:
+                return None
+            _, _, 中心x, 中心y = max(候选, key=lambda 项: 项[0])
+            return int(round(中心x)), int(round(中心y))
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return None
+
+    def _升级详情弹窗分数(self, 图像: np.ndarray) -> float:
+        """返回升级详情页的几何置信度，不授权输入。"""
+        return 0.96 if self._升级详情弹窗关闭点(图像) is not None else 0.0
+
+    def 定位升级详情弹窗关闭按钮(self, 图像: np.ndarray):
+        """仅在已确认升级详情页时返回右上角关闭点。"""
+        return self._升级详情弹窗关闭点(图像)
+
     def _战斗倒计时分数(self, 图像: np.ndarray) -> float:
         """识别战斗页顶部的白色倒计时数字。
 
@@ -831,6 +918,14 @@ class 页面识别器:
                 世界=None,
                 可信度=选择卡片分数,
                 依据=(f"中央红色卡片+右上角关闭X{选择卡片分数:.2f}",),
+            )
+        升级详情分数 = self._升级详情弹窗分数(屏幕图像)
+        if 升级详情分数 >= 0.90:
+            return 页面识别结果(
+                页面="升级详情弹窗",
+                世界=None,
+                可信度=升级详情分数,
+                依据=(f"中央升级标题栏+右上角关闭X{升级详情分数:.2f}",),
             )
         多按钮分数 = self._断线弹窗分数(屏幕图像, 多按钮=True)
         if 多按钮分数 >= 0.90:

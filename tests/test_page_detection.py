@@ -609,6 +609,34 @@ class 页面识别测试(unittest.TestCase):
         self.assertAlmostEqual(关闭点[0], 678, delta=8)
         self.assertAlmostEqual(关闭点[1], 53, delta=8)
 
+    def test_升级详情弹窗优先于主世界HUD(self):
+        """升级面板露出主页徽章时不能继续读取资源或点击入口。"""
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (70, 20), (730, 580), (70, 80, 90), -1)
+        cv2.rectangle(图像, (90, 30), (650, 80), (100, 100, 105), -1)
+        cv2.rectangle(图像, (690, 20), (730, 70), (0, 0, 220), -1)
+        cv2.line(图像, (698, 28), (722, 62), (245, 245, 245), 6)
+        cv2.line(图像, (722, 28), (698, 62), (245, 245, 245), 6)
+
+        结果 = self.识别器.识别(图像)
+
+        self.assertEqual(结果.页面, "升级详情弹窗")
+        self.assertGreaterEqual(结果.可信度, 0.90)
+        关闭点 = self.识别器.定位升级详情弹窗关闭按钮(图像)
+        self.assertIsNotNone(关闭点)
+        self.assertAlmostEqual(关闭点[0], 710, delta=5)
+        self.assertAlmostEqual(关闭点[1], 45, delta=5)
+
+    def test_升级详情弹窗点击护栏阻断原始输入(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.检查宝石商店危险页面 = Mock(return_value=False)
+        上下文._最近点击页面结果 = SimpleNamespace(页面="升级详情弹窗")
+        上下文._点击识别截图 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文.关闭升级详情弹窗 = Mock(return_value=True)
+
+        self.assertTrue(上下文.输入前安全检查())
+        上下文.关闭升级详情弹窗.assert_called_once_with(上下文._点击识别截图)
+
     def test_选择卡片弹窗点击护栏先清理并阻断输入(self):
         上下文 = 任务上下文.__new__(任务上下文)
         上下文.检查宝石商店危险页面 = Mock(return_value=False)
