@@ -339,6 +339,33 @@ class 打开进攻页面测试(unittest.TestCase):
             705, 535, 延时=700, 是否精确点击=True
         )
 
+    def test_点击寻找目标后不再关闭主页弹窗(self):
+        """攻击流程开始后，过渡帧不能再次触发升级/宝石恢复输入。"""
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        页面状态 = iter((None, None, "战斗中"))
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8))
+            ),
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            关闭升级详情弹窗=Mock(return_value=False),
+            停止事件=threading.Event(),
+        )
+        任务._是否出现下一个 = Mock(return_value=False)
+        任务._识别已存在的战斗页面 = Mock(
+            side_effect=lambda *args, **kwargs: next(页面状态)
+        )
+        任务._检测寻找目标按钮 = Mock(side_effect=[(137, 445), None, None])
+        任务._检测攻击按钮 = Mock(return_value=None)
+
+        self.assertTrue(任务._等待并点击攻击按钮(上下文))
+        上下文.关闭升级详情弹窗.assert_called_once()
+        上下文.点击.assert_called_once_with(
+            137, 445, 延时=700, 是否精确点击=True
+        )
+
     def test_攻击点击后护栏短暂返回False但已进入战斗仍继续(self):
         """真实点击已切入战斗时，不能因结算跨帧把任务链提前终止。"""
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
