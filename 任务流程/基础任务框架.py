@@ -2595,7 +2595,23 @@ class 基础任务(ABC):
         try:
             x1, y1, x2, y2 = 区域
             屏幕图像 = self.上下文.op.获取屏幕图像cv(x1, y1, x2, y2)
-            ocr结果, _ = self.ocr引擎(屏幕图像)
+            # 少数旧任务/测试构造会绕过 __init__（例如从残留升级面板
+            # 恢复任务时直接复用任务对象），这时不能因为缺少实例属性就
+            # 让主页护栏反复报 AttributeError。优先复用上下文共享引擎，
+            # 并把它补回任务实例，避免每一帧重新加载 native OCR 模型。
+            OCR引擎 = getattr(self, "ocr引擎", None)
+            if OCR引擎 is None:
+                获取OCR引擎 = getattr(self.上下文, "获取OCR引擎", None)
+                if callable(获取OCR引擎):
+                    OCR引擎 = 获取OCR引擎()
+                else:
+                    OCR引擎 = 安全OCR引擎()
+                self.ocr引擎 = OCR引擎
+            OCR返回 = OCR引擎(屏幕图像)
+            if isinstance(OCR返回, tuple):
+                ocr结果 = OCR返回[0]
+            else:
+                ocr结果 = OCR返回
             return ocr结果 if ocr结果 is not None else []
         except Exception as e:
             if self.上下文.是否内存异常(e):

@@ -495,7 +495,15 @@ class 搜索目标敌人任务(基础任务):
                 资源图像 = 屏幕图像[67:146, 14:151]
 
             # 单次OCR识别（结果按顺序对应各区域）
-            result, _ = self.ocr引擎(资源图像)
+            OCR返回 = self.ocr引擎(资源图像)
+            if isinstance(OCR返回, tuple):
+                result = OCR返回[0]
+            else:
+                result = OCR返回
+            # RapidOCR 在空帧/模型恢复期间可能返回 (None, None)，
+            # 不能直接对 None 调 len；空结果应当作为本轮未识别，
+            # 交给调用方继续搜索或安全跳过。
+            result = result or []
             # 解析结果（假设OCR按行返回）
             金币文本 = str(result[0][1]) if len(result) > 0 else "0"
             圣水文本 = str(result[1][1]) if len(result) > 1 else "0"

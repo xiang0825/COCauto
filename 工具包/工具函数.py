@@ -15,7 +15,19 @@ def 打印运行耗时(函数):
         结果 = 函数(*参数, **关键字参数)
         结束时间 = time.time()
         耗时 = 结束时间 - 开始时间
-        print(f"函数「{函数.__name__}」运行耗时：{耗时:.4f} 秒")
+        try:
+            print(f"函数「{函数.__name__}」运行耗时：{耗时:.4f} 秒")
+        except (UnicodeEncodeError, OSError):
+            # Windows 以 cp1252 启动源码/调试进程时，中文耗时日志不能
+            # 反过来让已经成功完成的 OCR 任务失败；换成 ASCII 备用日志。
+            try:
+                安全函数名 = str(函数.__name__).encode(
+                    "ascii", "backslashreplace"
+                ).decode("ascii")
+                print(f"elapsed {安全函数名}: {耗时:.4f}s")
+            except (UnicodeEncodeError, OSError):
+                # 日志输出永远不能改变业务函数的返回结果。
+                pass
         return 结果
     return 包装器
 

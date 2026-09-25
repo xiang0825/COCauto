@@ -279,6 +279,26 @@ class 升级面板关闭安全测试(unittest.TestCase):
             self.assertFalse(任务.关闭英雄升级页面() if 任务类 is 升级英雄任务 else 任务.关闭建筑升级页面())
             键盘.按字符按压.assert_not_called()
 
+    def test_绕过初始化的任务OCR会从上下文恢复共享引擎(self):
+        任务 = 升级英雄任务.__new__(升级英雄任务)
+        图像 = np.zeros((20, 30, 3), dtype=np.uint8)
+        引擎 = Mock(return_value=(
+            [([[0, 0], [1, 0], [1, 1], [0, 1]], "英雄殿堂", 0.99)],
+            None,
+        ))
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=图像)),
+            获取OCR引擎=Mock(return_value=引擎),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+
+        结果 = 任务.执行OCR识别((0, 0, 30, 20))
+
+        self.assertEqual(len(结果), 1)
+        self.assertIs(任务.ocr引擎, 引擎)
+        上下文.获取OCR引擎.assert_called_once_with()
+
     def test_战宠小屋回到主世界后清理底层选中卡片(self):
         返回 = Mock(return_value=True)
         点击 = Mock(return_value=True)

@@ -39,6 +39,29 @@ class 自适应战斗测试(unittest.TestCase):
             self.assertEqual(len(文件), 1)
             self.assertGreater(文件[0].stat().st_size, 0)
 
+    def test_敌方资源OCR返回None时按空结果处理(self):
+        任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
+        任务.ocr引擎 = Mock(return_value=(None, None))
+        日志 = []
+        设置 = SimpleNamespace(战利品优先级="金币")
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((79, 137, 3), dtype=np.uint8)),
+            ),
+            数据库=SimpleNamespace(获取机器人设置=Mock(return_value=设置)),
+            机器人标志="robot_1",
+            置脚本状态=日志.append,
+            是否内存异常=lambda _异常: False,
+            触发内存保护=Mock(),
+        )
+
+        结果 = 任务.识别当前资源(上下文)
+
+        self.assertEqual(结果["金币"], 0)
+        self.assertEqual(结果["圣水"], 0)
+        self.assertEqual(结果["黑油"], 0)
+        self.assertFalse(any("NoneType" in 文本 for 文本 in 日志))
+
     def test_奖励页过渡最终结算时交给回营流程(self):
         任务 = 进攻任务.__new__(进攻任务)
         class 可控停止事件:
