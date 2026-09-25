@@ -304,7 +304,8 @@ class 世界跳转测试(unittest.TestCase):
         第五路径 = 任务._获取本轮搜索滑动配置(4)
 
         self.assertNotEqual(第一路径, 第二路径)
-        self.assertEqual(第五路径, 第一路径)
+        self.assertNotEqual(第五路径, 第一路径)
+        self.assertEqual(第五路径.起点[1], 第五路径.终点[1])
 
     def test_世界入口搜索只沿地图边缘拖动(self):
         for 任务类型 in (到主世界任务, 到夜世界任务):
@@ -312,8 +313,8 @@ class 世界跳转测试(unittest.TestCase):
             路径 = getattr(任务, "世界入口搜索滑动路径")
             self.assertGreaterEqual(len(路径), 4)
             for 配置 in 路径:
-                self.assertIn(配置.起点[0], (100, 700))
-                self.assertIn(配置.终点[0], (100, 700))
+                self.assertIn(配置.起点[0], (100, 150, 180, 650, 700))
+                self.assertIn(配置.终点[0], (100, 150, 180, 650, 700))
                 self.assertGreaterEqual(配置.起点[1], 140)
                 self.assertLessEqual(配置.起点[1], 460)
                 self.assertGreaterEqual(配置.终点[1], 140)
