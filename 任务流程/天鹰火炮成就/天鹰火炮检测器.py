@@ -140,15 +140,62 @@ class 天鹰火炮检测器:
 
     def 解析输出(self, 输出数据: np.ndarray, 置信度阈值: float = 0.25):
         """自动判断并解析输出格式"""
-        输出形状 = 输出数据.shape
+        if 输出数据 is None:
+            return []
 
-        if len(输出形状) == 3:
-            if 输出形状[1] == 5:  # 单类别YOLOv8 [1, 5, 8400]
-                return self.解析输出_yolov8_single_class(输出数据, 置信度阈值)
-            elif 输出形状[1] == 84:  # 多类别YOLOv8
-                return self.解析输出_yolov8_single_class(输出数据, 置信度阈值)
+        try:
+            输出数据 = np.asarray(输出数据)
+        except (TypeError, ValueError):
+            return []
 
-        return []
+        # Ultralytics 导出的 ONNX 在不同版本/导出选项下可能是
+        # [1, channels, candidates] 或 [1, candidates, channels]。旧代码
+        # 只接受前一种，并且把多类别输出的第 0 个类别分数误当成置信度，
+        # 使“天鹰火炮”不是第 0 类时始终漏检。
+        if 输出数据.ndim != 3 or 输出数据.shape[0] < 1:
+            return []
+        if 输出数据.shape[1] in (5, 84):
+            候选行 = 输出数据[0].T
+        elif 输出数据.shape[2] in (5, 84):
+            候选行 = 输出数据[0]
+        else:
+            return []
+
+        结果 = []
+        for 行 in 候选行:
+            if len(行) < 5:
+                continue
+            try:
+                数值 = np.asarray(行, dtype=np.float32)
+                if not np.all(np.isfinite(数值[:5])):
+                    continue
+                x_中心, y_中心, 宽, 高 = (float(数值[i]) for i in range(4))
+                # 单类别输出为 [xywh, confidence]；多类别 YOLOv8
+                # 输出为 [xywh, class_0, ...]，应取最高类别分数。
+                if len(数值) == 5:
+                    置信度 = float(数值[4])
+                    类别 = 0
+                else:
+                    类别分数 = 数值[4:]
+                    if not len(类别分数) or not np.all(np.isfinite(类别分数)):
+                        continue
+                    类别 = int(np.argmax(类别分数))
+                    置信度 = float(类别分数[类别])
+            except (TypeError, ValueError, OverflowError):
+                continue
+
+            if 置信度 < 置信度阈值 or 宽 <= 0 or 高 <= 0:
+                continue
+            结果.append({
+                "x1": x_中心 - 宽 / 2,
+                "y1": y_中心 - 高 / 2,
+                "x2": x_中心 + 宽 / 2,
+                "y2": y_中心 + 高 / 2,
+                "置信度": 置信度,
+                "类别": 类别,
+            })
+        结果.sort(key=lambda 项: 项["置信度"], reverse=True)
+        return 结果
 
     def 检测(self, 图像: np.ndarray, 置信度阈值: float = 0.25) -> List[dict]:
         """检测天鹰火炮"""
