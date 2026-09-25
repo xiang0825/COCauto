@@ -968,16 +968,26 @@ class 任务上下文:
             # 形状。先用轻量页面识别确认上下文；夜世界、战斗、结算和
             # 未知页一律不把右上角 X 当作“主世界活动弹窗”来点，避免
             # 启动阶段在夜世界反复点击错误坐标而卡死登录检测。
+            活动OCR确认 = False
             try:
                 页面结果 = self._获取点击页面识别器().识别(
                     屏幕图像,
                     战斗中=False,
                 )
-                if (
+                页面不是主世界 = (
                     getattr(页面结果, "页面", "") != "主世界主页"
                     or getattr(页面结果, "世界", "") != "主世界"
-                ):
-                    return False
+                )
+                if 页面不是主世界:
+                    OCR返回 = self.获取OCR引擎()(屏幕图像)
+                    OCR结果 = OCR返回[0] if isinstance(OCR返回, tuple) else OCR返回
+                    活动OCR确认 = self._OCR确认主世界活动弹窗(OCR结果)
+                    if not 活动OCR确认:
+                        return False
+                    self.置脚本状态(
+                        "轻量页面识别命中升级详情几何特征，但 OCR 确认是活动面板；"
+                        "继续执行活动关闭复核"
+                    )
             except Exception:
                 # 页面识别器不可用时继续使用下面的专用 OCR/几何复核；
                 # 不能因为诊断器异常直接发送关闭点击。
@@ -1294,6 +1304,32 @@ class 任务上下文:
             and ("?" in OCR文本 or "？" in OCR文本)
         )
         return 有升级中标题 or 有升级中结构 or 有升级确认标题
+
+    @staticmethod
+    def _OCR确认主世界活动弹窗(OCR结果) -> bool:
+        """确认覆盖主世界 HUD 的活动面板，避免误当成升级详情。
+
+        活动面板与升级详情共用灰色标题栏和红色右上角 X。活动页还会
+        同时出现“活动/活動”标题以及活动剩余时间或部落竞赛文案；只把
+        这些 OCR 组合当作活动证据。单独出现“剩余时间”不能授权输入，
+        因为升级面板也会显示该文案。
+        """
+        文本 = "".join(
+            str(项[1])
+            for 项 in OCR结果 or []
+            if isinstance(项, (list, tuple)) and len(项) > 1
+        ).replace(" ", "").replace("\n", "")
+        if not 文本:
+            return False
+        有活动标题 = any(词 in 文本 for 词 in ("活动", "活動"))
+        有活动内容 = any(
+            词 in 文本
+            for 词 in (
+                "剩余时间", "剩餘時間", "部落竞赛", "部落競賽",
+                "去看看", "開啟", "开启",
+            )
+        )
+        return 有活动标题 and 有活动内容
 
     def 关闭升级详情弹窗(self, 屏幕图像=None) -> bool:
         """安全关闭升级详情弹窗；绝不点击宝石或立即完成。
@@ -1738,7 +1774,20 @@ class 任务上下文:
         if 结果 is not None and 结果.页面 == "升级详情弹窗":
             当前帧 = getattr(self, "_点击识别截图", None)
             已关闭 = self.关闭升级详情弹窗(当前帧)
+            # 活动面板与升级详情共用几何特征，轻量识别可能先返回升级
+            # 页面。若升级 OCR 未确认标题，立即把同一帧交给活动专用
+            # 关闭器；它还会要求活动文案、红色 X 和主世界背景三重证据。
             if not 已关闭 and not getattr(self, "页面恢复失败", False):
+                已关闭活动 = self.清理主世界活动弹窗(当前帧)
+                if 已关闭活动:
+                    return True
+            else:
+                已关闭活动 = False
+            if (
+                not 已关闭
+                and not 已关闭活动
+                and not getattr(self, "页面恢复失败", False)
+            ):
                 self.置脚本状态(
                     "已识别升级详情弹窗但未完成安全关闭，阻断当前输入；"
                     "禁止点击立即完成、宝石或商店"

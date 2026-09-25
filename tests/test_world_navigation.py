@@ -193,6 +193,21 @@ class 世界跳转测试(unittest.TestCase):
         区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
         self.assertEqual(区域.shape[:2], (240, 300))
 
+    def test_回主世界顶部飞艇使用顶部可点击坐标(self):
+        任务 = object.__new__(到主世界任务)
+        任务.状态文本 = "主世界"
+        任务.船模板路径 = "船.bmp"
+        任务.模板识别 = Mock()
+        任务.模板识别.执行最佳匹配.return_value = (0.90, (594, 13), "船.bmp")
+
+        命中, 坐标, 分数 = 任务.查找世界入口(np.zeros((600, 800, 3), dtype=np.uint8))
+
+        self.assertTrue(命中)
+        self.assertEqual(坐标, (674, 2))
+        self.assertAlmostEqual(分数, 0.90)
+        区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
+        self.assertEqual(区域.shape[:2], (590, 680))
+
     def test_缩放后的夜世界飞艇通过海岸和颜色护栏确认入口(self):
         """当前 MuMu 拉远后旧船帆素材约为 0.6 倍，必须可识别。"""
         任务 = object.__new__(到夜世界任务)
@@ -206,10 +221,10 @@ class 世界跳转测试(unittest.TestCase):
         缩放模板 = cv2.resize(模板, (8, 8), interpolation=cv2.INTER_AREA)
         画面 = np.full((600, 800, 3), (255, 100, 0), dtype=np.uint8)
         # 左下海岸带中放置一块缩小后的红白船帆，左侧保持蓝色水面。
-        画面[490:535, 190:215] = (235, 235, 235)
-        画面[490:535, 196:202] = (40, 40, 210)
-        画面[490:535, 207:213] = (40, 40, 210)
-        画面[505:513, 199:207] = 缩放模板
+        画面[470:515, 190:215] = (235, 235, 235)
+        画面[470:515, 196:202] = (40, 40, 210)
+        画面[470:515, 207:213] = (40, 40, 210)
+        画面[485:493, 199:207] = 缩放模板
 
         命中, 坐标, 分数 = 任务.查找世界入口(画面)
 
@@ -413,14 +428,14 @@ class 世界跳转测试(unittest.TestCase):
         )
 
         self.assertTrue(命中)
-        self.assertEqual(坐标, (151, 152))
+        self.assertEqual(坐标, (151, 72))
         self.assertAlmostEqual(分数, 0.925)
         区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
-        self.assertEqual(区域.shape[:2], (510, 680))
+        self.assertEqual(区域.shape[:2], (590, 680))
 
     def test_夜世界返回主世界多尺度也只扫地图区(self):
         任务 = object.__new__(到主世界任务)
-        self.assertEqual(任务.世界入口多尺度安全区域, (80, 80, 760, 590))
+        self.assertEqual(任务.世界入口多尺度安全区域, (80, 0, 760, 590))
 
     def test_夜世界返回主世界右上未命中时扫描备用地图区(self):
         任务 = object.__new__(到主世界任务)
@@ -437,12 +452,12 @@ class 世界跳转测试(unittest.TestCase):
         )
 
         self.assertTrue(命中)
-        self.assertEqual(坐标, (210, 457))
+        self.assertEqual(坐标, (210, 377))
         self.assertAlmostEqual(分数, 0.86)
         self.assertEqual(任务.模板识别.执行最佳匹配.call_count, 2)
         self.assertEqual(
             任务.模板识别.执行最佳匹配.call_args_list[1].args[0].shape[:2],
-            (510, 680),
+            (590, 680),
         )
 
     def test_原始设备截图会先归一化再搜索右上入口(self):
@@ -457,10 +472,10 @@ class 世界跳转测试(unittest.TestCase):
         )
 
         self.assertTrue(命中)
-        self.assertEqual(坐标, (151, 152))
+        self.assertEqual(坐标, (151, 72))
         self.assertAlmostEqual(分数, 0.925)
         区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
-        self.assertEqual(区域.shape[:2], (510, 680))
+        self.assertEqual(区域.shape[:2], (590, 680))
 
     def test_同一入口连续未转场后停止重复点击(self):
         模块 = importlib.import_module("任务流程.世界跳转.进入世界基类")

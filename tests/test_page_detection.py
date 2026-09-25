@@ -637,6 +637,37 @@ class 页面识别测试(unittest.TestCase):
         self.assertTrue(上下文.输入前安全检查())
         上下文.关闭升级详情弹窗.assert_called_once_with(上下文._点击识别截图)
 
+    def test_活动OCR与升级OCR互斥(self):
+        活动OCR = [
+            ([], "活動"),
+            ([], "剩餘時間：4小時22分鐘"),
+            ([], "部落競賽"),
+        ]
+        升级OCR = [
+            ([], "正在將野蠻人之王升至84級"),
+            ([], "剩餘時間：1小時"),
+        ]
+
+        self.assertTrue(任务上下文._OCR确认主世界活动弹窗(活动OCR))
+        self.assertFalse(任务上下文._OCR确认主世界活动弹窗(升级OCR))
+        self.assertFalse(任务上下文._OCR确认升级详情页(活动OCR))
+        self.assertTrue(任务上下文._OCR确认升级详情页(升级OCR))
+
+    def test_升级几何误判活动页时交给活动关闭器(self):
+        """活动页命中升级几何特征时仍只允许活动专用安全关闭。"""
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文._点击识别截图 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文.检查宝石商店危险页面 = Mock(return_value=False)
+        上下文._最近点击页面结果 = SimpleNamespace(页面="升级详情弹窗")
+        上下文.页面恢复失败 = False
+        上下文.关闭升级详情弹窗 = Mock(return_value=False)
+        上下文.清理主世界活动弹窗 = Mock(return_value=True)
+
+        self.assertTrue(上下文.输入前安全检查())
+        上下文.关闭升级详情弹窗.assert_called_once_with(上下文._点击识别截图)
+        上下文.清理主世界活动弹窗.assert_called_once_with(上下文._点击识别截图)
+
     def test_选择卡片弹窗点击护栏先清理并阻断输入(self):
         上下文 = 任务上下文.__new__(任务上下文)
         上下文.检查宝石商店危险页面 = Mock(return_value=False)
