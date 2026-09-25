@@ -35,6 +35,15 @@ class 夜世界打鱼任务(基础任务):
             return False
         finally:
             # 无论回营成功、失败还是收到停止事件，都不能把战斗护栏
-            # 状态带到下一项世界/资源任务。
+            # 状态带到下一项世界/资源任务。下兵任务可能已经启动后台
+            # 英雄技能线程；如果它在中途失败，不能让该线程越过任务边界
+            # 继续向主世界、结算页或模拟器其它页面发送点击。
+            技能标志 = getattr(self.上下文, "英雄技能标志", None)
+            if 技能标志 is not None:
+                技能标志.set()
+                try:
+                    delattr(self.上下文, "英雄技能标志")
+                except AttributeError:
+                    pass
             self.上下文._战斗中 = False
 
