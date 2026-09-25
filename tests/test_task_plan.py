@@ -196,8 +196,37 @@ class 任务计划测试(unittest.TestCase):
         self.assertEqual(打鱼.return_value.执行.call_count, 1)
         上下文.请求任务计划等待.assert_called_once_with(60, "军队容量未满")
         self.assertFalse(getattr(上下文, "_军队未满待机", False))
+        self.assertFalse(getattr(上下文, "_资源计划已打满", False))
         self.assertEqual(更新资源.return_value.执行.call_count, 1)
         self.assertFalse(上下文.页面恢复失败)
+
+    def test_明确资源打满才设置资源计划完成标志(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = threading.Event()
+        机器人.机器人标志 = "测试机器人"
+        状态 = SimpleNamespace(
+            状态数据={"家乡资源": {"金币": 1000000, "圣水": 1000000, "黑油": 10000}}
+        )
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            机器人标志="测试机器人",
+            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态)),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+        with patch("线程.自动化机器人.收集资源任务") as 收集资源, \
+                patch("线程.自动化机器人.更新家乡资源状态任务") as 更新资源, \
+                patch("线程.自动化机器人.主世界打鱼任务") as 打鱼, \
+                patch("线程.自动化机器人.是否家乡资源打满", return_value=True):
+            收集资源.return_value.执行.return_value = True
+            更新资源.return_value.执行.return_value = True
+            机器人._进入并确认主世界 = Mock(return_value=True)
+            机器人._断线时恢复游戏连接 = Mock(return_value=True)
+
+            self.assertTrue(机器人._执行主世界刷资源计划(上下文, Mock()))
+
+        self.assertTrue(getattr(上下文, "_资源计划已打满", False))
+        打鱼.return_value.执行.assert_not_called()
 
     def test_启动时已有战斗先回营再执行任务计划(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
@@ -435,6 +464,7 @@ class 任务计划测试(unittest.TestCase):
         self.assertTrue(结果)
         self.assertFalse(上下文.页面恢复失败)
         上下文.请求任务计划等待.assert_called_once_with(60, "夜世界入口暂不可用")
+        self.assertFalse(getattr(上下文, "_资源计划已打满", False))
         self.assertTrue(
             any("安全跳过夜世界任务" in 调用.args[0]
                 for 调用 in 上下文.置脚本状态.call_args_list)
