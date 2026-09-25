@@ -17,8 +17,9 @@ class 自动启动管理器测试(unittest.TestCase):
             内容 = 路径.read_text(encoding="utf-8")
 
             self.assertIn(f'cd /d "{根目录}"', 内容)
+            激活脚本 = 根目录 / ".venv" / "Scripts" / "activate.bat"
             self.assertIn(
-                f'call "{根目录 / ".venv\\Scripts\\activate.bat"}"',
+                f'call "{激活脚本}"',
                 内容,
             )
             self.assertIn(

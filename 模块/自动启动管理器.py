@@ -175,7 +175,8 @@ class 自动启动管理器:
         bat内容 += f'cd /d "{self.项目根目录}"\n'
 
         if 使用虚拟环境:
-            bat内容 += f'call "{self.项目根目录 / ".venv\\Scripts\\activate.bat"}"\n'
+            激活脚本 = self.项目根目录 / ".venv" / "Scripts" / "activate.bat"
+            bat内容 += f'call "{激活脚本}"\n'
 
         bat内容 += (
             f'python "{self.项目根目录 / "主入口.py"}" '

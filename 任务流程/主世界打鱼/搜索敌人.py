@@ -504,10 +504,15 @@ class 搜索目标敌人任务(基础任务):
             # 不能直接对 None 调 len；空结果应当作为本轮未识别，
             # 交给调用方继续搜索或安全跳过。
             result = result or []
-            # 解析结果（假设OCR按行返回）
-            金币文本 = str(result[0][1]) if len(result) > 0 else "0"
-            圣水文本 = str(result[1][1]) if len(result) > 1 else "0"
-            黑油文本 = str(result[2][1]) if len(result) > 2 else "0"
+            # 不要假设 OCR 返回顺序或固定返回格式。RapidOCR 的完整结果通常是
+            # ``[四边形, 文本, 置信度]``，轻量配置也可能返回
+            # ``[文本, 置信度]``；而检测顺序在不同版本/分辨率下不一定稳定。
+            # 统一抽取文字并按屏幕 Y 坐标排序，避免把空置信度、错行文字写成
+            # 战利品，或因结果顺序变化而交换金币/圣水/黑油。
+            资源文本 = self._提取资源行文本(result)
+            金币文本 = 资源文本[0] if len(资源文本) > 0 else "0"
+            圣水文本 = 资源文本[1] if len(资源文本) > 1 else "0"
+            黑油文本 = 资源文本[2] if len(资源文本) > 2 else "0"
 
             设置 = 上下文.数据库.获取机器人设置(上下文.机器人标志)
             战利品评分 = self.计算战利品评分(
@@ -525,6 +530,7 @@ class 搜索目标敌人任务(基础任务):
                 "资源易窃取评分": 0.0,
                 "资源易窃取评分依据": {},
             }
+
         except Exception as e:
             判断内存异常 = getattr(self.上下文, "是否内存异常", None)
             触发内存保护 = getattr(self.上下文, "触发内存保护", None)
@@ -540,6 +546,50 @@ class 搜索目标敌人任务(基础任务):
                 "资源易窃取评分": 0.0,
                 "资源易窃取评分依据": {},
             }
+
+    @staticmethod
+    def _提取资源行文本(OCR结果) -> list[str]:
+        """从敌方资源栏 OCR 结果提取按纵向排列的三行文字。
+
+        兼容完整检测结果、轻量 ``[文字, 置信度]`` 结果和空/异常条目。
+        资源栏已经是窄裁剪区域，只保留包含数字的条目；没有坐标的轻量
+        结果沿用引擎返回顺序。
+        """
+        if not isinstance(OCR结果, (list, tuple)):
+            return []
+
+        行结果 = []
+        for 索引, 条目 in enumerate(OCR结果):
+            if not isinstance(条目, (list, tuple)):
+                continue
+
+            文本 = None
+            中心Y = None
+            if len(条目) >= 3 and isinstance(条目[1], str):
+                文本 = 条目[1]
+                框 = 条目[0]
+                try:
+                    点集 = [点 for 点 in 框 if len(点) >= 2]
+                    if 点集:
+                        中心Y = sum(float(点[1]) for 点 in 点集) / len(点集)
+                except (TypeError, ValueError):
+                    中心Y = None
+            elif len(条目) >= 2 and isinstance(条目[0], str):
+                文本 = 条目[0]
+
+            if 文本 is None:
+                continue
+            清理文本 = str(文本).replace("O", "0").replace("o", "0")
+            数字 = "".join(字符 for 字符 in 清理文本 if 字符.isdigit())
+            if 数字:
+                # 没有坐标时使用稳定的原始顺序；有坐标时优先按画面行排序。
+                行结果.append((中心Y if 中心Y is not None else float("inf"), 索引, 数字))
+
+        if any(中心Y != float("inf") for 中心Y, _, _ in 行结果):
+            行结果.sort(key=lambda 项: (项[0], 项[1]))
+        else:
+            行结果.sort(key=lambda 项: 项[1])
+        return [数字 for _, _, 数字 in 行结果[:3]]
 
     @staticmethod
     def 计算战利品评分(金币: int, 圣水: int, 黑油: int, 优先级: str) -> int:
