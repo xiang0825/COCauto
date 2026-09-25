@@ -267,6 +267,23 @@ class 页面识别测试(unittest.TestCase):
 
         self.assertIsNone(候选)
 
+    def test_中央教程误把左下世界切换入口当继续按钮时安全停止(self):
+        """地图上的教程关键词不能授权点击飞艇/世界切换入口。"""
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.获取OCR引擎 = Mock(return_value=Mock(return_value=(
+            [
+                ([[200, 170], [500, 170], [500, 210], [200, 210]],
+                 "首领", 0.95),
+            ],
+            None,
+        )))
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        # 模拟左下常驻世界入口/飞艇附近的大块绿色控件；旧回退会把
+        # 它当作教程“继续”，实机坐标约为 (226,568)。
+        cv2.rectangle(图像, (150, 525), (300, 580), (0, 220, 0), -1)
+
+        self.assertIsNone(上下文._识别中央游戏提示(图像))
+
     def test_顶部资源栏文字不能触发中央教程提示(self):
         上下文 = 任务上下文.__new__(任务上下文)
         上下文.获取OCR引擎 = Mock(return_value=Mock(return_value=(

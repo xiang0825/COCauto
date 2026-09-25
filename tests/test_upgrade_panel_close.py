@@ -115,6 +115,19 @@ class 升级面板关闭安全测试(unittest.TestCase):
 
         self.assertFalse(任务上下文._OCR确认英雄升级详情(OCR结果))
 
+    def test_测试服巨人标题带单位属性时识别为英雄详情(self):
+        OCR结果 = [
+            (None, "將巨人升至14级？", 0.92),
+            (None, "生命值：2700+300", 0.99),
+            (None, "每秒傷害值：104+10", 0.99),
+            (None, "所需空間：5", 0.99),
+            (None, "移動速度：12", 0.99),
+            (None, "升級時間", 0.99),
+            (None, "確認", 0.99),
+        ]
+
+        self.assertTrue(任务上下文._OCR确认英雄升级详情(OCR结果))
+
     def test_英雄详情保留给英雄任务不点击普通关闭按钮(self):
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         OCR返回 = (

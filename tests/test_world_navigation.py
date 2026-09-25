@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 
 from 任务流程.世界跳转.进入世界基类 import 进入世界任务基类
+from 任务流程.基础任务框架 import 任务上下文
 from 任务流程.世界跳转.到主世界任务 import 到主世界任务
 from 任务流程.世界跳转.到夜世界任务 import 到夜世界任务
 from 任务流程.世界跳转.世界识别器 import 世界识别器
@@ -289,6 +290,85 @@ class 世界跳转测试(unittest.TestCase):
 
         self.assertNotEqual(第一路径, 第二路径)
         self.assertEqual(第五路径, 第一路径)
+
+    def test_世界入口搜索只沿地图边缘拖动(self):
+        for 任务类型 in (到主世界任务, 到夜世界任务):
+            任务 = object.__new__(任务类型)
+            路径 = getattr(任务, "世界入口搜索滑动路径")
+            self.assertGreaterEqual(len(路径), 4)
+            for 配置 in 路径:
+                self.assertIn(配置.起点[0], (100, 700))
+                self.assertIn(配置.终点[0], (100, 700))
+                self.assertGreaterEqual(配置.起点[1], 140)
+                self.assertLessEqual(配置.起点[1], 460)
+                self.assertGreaterEqual(配置.终点[1], 140)
+                self.assertLessEqual(配置.终点[1], 460)
+
+    def test_拖动后确认英雄详情时禁止继续拖动(self):
+        模块 = importlib.import_module("任务流程.世界跳转.进入世界基类")
+        时钟 = SimpleNamespace(当前时间=0.0)
+
+        def 脚本延时(毫秒数):
+            时钟.当前时间 += 毫秒数 / 1000
+
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8))
+            ),
+            脚本延时=脚本延时,
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+            _意外英雄详情已检测=True,
+            关闭意外英雄升级详情弹窗=Mock(return_value=False),
+        )
+        任务 = object.__new__(进入世界任务基类)
+        任务.上下文 = 上下文
+        任务.状态文本 = "主世界"
+        任务.船模板路径 = "船.bmp"
+        任务.滑动配置 = SimpleNamespace(起点=(1, 1), 终点=(2, 2))
+        任务.模板识别 = Mock()
+        任务.模板识别.执行最佳匹配.return_value = (0.0, (0, 0), None)
+        任务.滑动屏幕 = Mock()
+        任务.是否在目标世界 = Mock(return_value=False)
+        任务.识别当前世界 = Mock(return_value=SimpleNamespace(当前世界="夜世界"))
+        任务._页面级确认目标世界 = Mock(return_value=False)
+        任务.查找世界入口 = Mock(return_value=(False, (0, 0), 0.0))
+
+        原时间函数 = 模块.time.time
+        模块.time.time = lambda: 时钟.当前时间
+        try:
+            self.assertFalse(任务.执行())
+        finally:
+            模块.time.time = 原时间函数
+
+        任务.滑动屏幕.assert_called_once()
+        上下文.关闭意外英雄升级详情弹窗.assert_called_once_with()
+        self.assertTrue(
+            any("禁止继续拖动" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
+        )
+
+    def test_意外英雄详情只点击右上角X并确认回到主页(self):
+        上下文 = object.__new__(任务上下文)
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文._战斗中 = False
+        上下文.页面恢复失败 = False
+        上下文.op = SimpleNamespace(获取屏幕图像cv=Mock(return_value=画面))
+        上下文._当前画面是英雄升级详情 = Mock(side_effect=[True, False])
+        上下文._检测升级详情弹窗关闭点 = Mock(return_value=(710, 45))
+        上下文.点击已确认安全按钮 = Mock(return_value=True)
+        上下文.识别点击画面 = Mock(
+            return_value=SimpleNamespace(
+                页面="主世界主页", 摘要=lambda: "页面=主世界主页"
+            )
+        )
+        上下文.脚本延时 = Mock()
+        上下文.置脚本状态 = Mock()
+
+        self.assertTrue(上下文.关闭意外英雄升级详情弹窗(画面))
+        上下文.点击已确认安全按钮.assert_called_once_with(710, 45, 延时=250)
+        self.assertFalse(上下文.页面恢复失败)
+        日志 = " ".join(调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
+        self.assertIn("禁止点击绿色确认、宝石和商店", 日志)
 
     def test_低分海岸橙色候选只作为搜索线索不会点击(self):
         任务 = object.__new__(进入世界任务基类)
