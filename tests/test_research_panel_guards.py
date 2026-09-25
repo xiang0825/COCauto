@@ -315,6 +315,30 @@ class 研究面板OCR护栏测试(unittest.TestCase):
             for 调用 in 任务.上下文.置脚本状态.call_args_list
         ))
 
+    def test_研究按钮点击后会等待延迟出现的目标页(self):
+        任务 = 打开研究面板任务.__new__(打开研究面板任务)
+        任务.上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+        )
+        任务.研究入口偏移候选 = ((0, 13),)
+        任务.最大入口等待秒 = 0.01
+        任务.研究面板确认等待秒 = 1.0
+        任务._查找实验室标签候选 = Mock(return_value=[(455, 352, 0.99, "研究")])
+        任务._选中后是否为实验室 = Mock(return_value=True)
+        任务._查找选中实验室研究按钮 = Mock(return_value=(490, 470))
+        任务._获取全屏画面 = Mock(return_value=None)
+        任务._研究面板已确认 = Mock(side_effect=[False, False, True])
+
+        self.assertTrue(任务._打开研究入口())
+        self.assertEqual(任务._研究面板已确认.call_count, 3)
+        任务._安全取消建筑选中 = Mock()
+        self.assertTrue(any(
+            "研究面板已打开" in 调用.args[0]
+            for 调用 in 任务.上下文.置脚本状态.call_args_list
+        ))
+
     def test_研究按钮输入被拒绝也会取消实验室选中(self):
         任务 = 打开研究面板任务.__new__(打开研究面板任务)
         任务.上下文 = SimpleNamespace(
