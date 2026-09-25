@@ -144,6 +144,28 @@ class 宝石安全保护测试(unittest.TestCase):
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
+    def test_结算视觉后一帧主页不触发宝石ESC(self):
+        """结算视觉短暂消失时，不能把底层主页纹理当成商店页。"""
+        模板 = 读取模板("宝石.bmp")
+        模板1 = 读取模板("宝石1.bmp")
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        屏幕[230:230 + 模板.shape[0], 390:390 + 模板.shape[1]] = 模板
+        屏幕[230:230 + 模板1.shape[0], 414:414 + 模板1.shape[1]] = 模板1
+        上下文 = 创建上下文(屏幕)
+        上下文.识别点击画面 = Mock(side_effect=[
+            SimpleNamespace(页面="战斗结算", 世界=None, 可信度=0.94),
+            SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.78),
+        ])
+
+        self.assertTrue(上下文.检查宝石商店危险页面(强制=True))
+        self.assertTrue(上下文.检查宝石商店危险页面(强制=True))
+        self.assertEqual(上下文.键盘.按字符按压.call_count, 0)
+        self.assertEqual(上下文.识别点击画面.call_count, 1)
+        self.assertTrue(any(
+            "结算视觉刚跨帧消失" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
     def test_点击检测到危险页面后不会发送鼠标点击(self):
         模板 = 读取模板("宝石.bmp")
         模板1 = 读取模板("宝石1.bmp")
