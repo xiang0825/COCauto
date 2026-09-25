@@ -28,7 +28,8 @@ COCauto 是一个面向 Android 模拟器的《部落冲突》自动化控制台
 python UI入口.py
 ```
 
-也可以双击 `start_coc.cmd`。发布版使用 `部落冲突助手.exe` 启动。
+也可以双击 `start_coc.cmd`。发布版使用根目录的 `部落冲突.exe` 启动；
+同级 `_internal` 目录必须与 EXE 一起保留。
 
 ## ADB 连接
 

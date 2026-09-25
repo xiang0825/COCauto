@@ -60,6 +60,42 @@ class 页面识别测试(unittest.TestCase):
         )
         上下文.置脚本状态.assert_not_called()
 
+    def test_每次登录重连都重新确认CoC前台(self):
+        """重连任务不能复用上一次执行的前台确认结果。"""
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        前台查询 = Mock(return_value="com.supercell.clashofclans")
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=屏幕),
+                设备=SimpleNamespace(获取当前前台包名=前台查询),
+            ),
+            设置=SimpleNamespace(部落冲突包名="com.supercell.clashofclans"),
+            数据库=Mock(),
+            机器人标志="robot_test",
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            点击已确认安全按钮=Mock(return_value=False),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
+        # 模拟上一轮执行留下的状态；本轮必须清零后再次查询。
+        任务._前台状态已记录 = True
+
+        class 假引擎:
+            def 执行匹配(self, _图像, 模板路径, **_参数):
+                if "登录弹窗的确定" in 模板路径:
+                    return True, (320, 400), 0.95
+                return False, (0, 0), 0.0
+
+        with patch("任务流程.检测游戏登录状态.模板匹配引擎", return_value=假引擎()), \
+             patch("任务流程.检测游戏登录状态.页面识别器") as 页面识别器:
+            页面识别器.return_value.识别.return_value = SimpleNamespace(页面="未知")
+            任务._检测断线弹窗 = Mock(return_value=(False, (0, 0)))
+            self.assertFalse(任务.执行(首次登录=False))
+
+        前台查询.assert_called_once_with()
+
     def test_启动时军队配置页先安全关闭再继续主页识别(self):
         """已打开军队页不能等待登录超时，也不能用ESC退出游戏。"""
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
