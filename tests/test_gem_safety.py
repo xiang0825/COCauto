@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 
@@ -34,6 +35,43 @@ def 创建上下文(屏幕图像: np.ndarray):
 
 
 class 宝石安全保护测试(unittest.TestCase):
+    def test_统一页面识别确认结算后立即登记跨流程保护(self):
+        """结算先被其他流程识别时，下一次宝石护栏不能误扫结算纹理。"""
+        模板 = 读取模板("宝石.bmp")
+        模板1 = 读取模板("宝石1.bmp")
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        屏幕[230:230 + 模板.shape[0], 390:390 + 模板.shape[1]] = 模板
+        屏幕[230:230 + 模板1.shape[0], 414:414 + 模板1.shape[1]] = 模板1
+        上下文 = 创建上下文(屏幕)
+        上下文._获取点击页面识别器 = Mock()
+        上下文._获取点击页面识别器.return_value.识别.return_value = SimpleNamespace(
+            页面="战斗结算", 世界=None, 可信度=0.94, 依据=("结果横幅+回营视觉",),
+            摘要=lambda: "战斗结算"
+        )
+
+        with patch("任务流程.基础任务框架.time.monotonic", return_value=100.0):
+            结果 = 上下文.识别点击画面(强制=True)
+
+        self.assertEqual(结果.页面, "战斗结算")
+        self.assertEqual(上下文._最近结算视觉时间, 100.0)
+        self.assertTrue(上下文.检查宝石商店危险页面(强制=True))
+        上下文.键盘.按字符按压.assert_not_called()
+
+    def test_复核仍在战斗时清除结算过渡保护(self):
+        上下文 = 创建上下文(np.zeros((600, 800, 3), dtype=np.uint8))
+        上下文._战斗中 = True
+        上下文._最近结算视觉时间 = 100.0
+        上下文._获取点击页面识别器 = Mock()
+        上下文._获取点击页面识别器.return_value.识别.return_value = SimpleNamespace(
+            页面="战斗中", 世界=None, 可信度=0.93, 依据=("战斗HUD",),
+            摘要=lambda: "战斗中"
+        )
+
+        with patch("任务流程.基础任务框架.time.monotonic", return_value=101.0):
+            上下文.识别点击画面(强制=True)
+
+        self.assertEqual(上下文._最近结算视觉时间, 0.0)
+
     def test_中部宝石图标触发ESC并标记停止(self):
         模板 = 读取模板("宝石.bmp")
         模板1 = 读取模板("宝石1.bmp")
