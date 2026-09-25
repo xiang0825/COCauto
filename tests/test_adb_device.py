@@ -819,6 +819,59 @@ Input Reader State:
         设备.设置目标包名("com.supercell.clashofclans")
         self.assertEqual(设备.获取当前前台包名(), "com.supercell.clashofclans")
 
+    def test_MuMu前台查询优先按窗口焦点而不是隐藏的CoC历史任务(self):
+        runner = 假Runner(
+            结果(
+                b"topResumedActivity=ActivityRecord{1 u0 app.lawnchair/.LawnchairLauncher t2}\n"
+                b"topResumedActivity=ActivityRecord{2 u0 com.supercell.clashofclans/com.supercell.titan.GameApp t14}\n"
+            ),
+            结果(
+                b"""
+  Display: mDisplayId=0
+    mCurrentFocus=Window{u0 app.lawnchair/app.lawnchair.LawnchairLauncher}
+    mFocusedApp=ActivityRecord{launcher app.lawnchair/.LawnchairLauncher}
+  Display: mDisplayId=4
+    mCurrentFocus=null
+    mFocusedApp=null
+"""
+            ),
+        )
+        设备 = ADB设备操作类(
+            ADB, "127.0.0.1:16416", runner=runner, 自动检测路径=False
+        )
+        设备.设置目标包名("com.supercell.clashofclans")
+        self.assertEqual(设备.获取当前前台包名(), "app.lawnchair")
+
+    def test_MuMu打开应用会切回窗口焦点不是CoC的显示层(self):
+        runner = 假Runner(
+            结果(
+                b"List of devices attached\n"
+                b"127.0.0.1:16416 device product:a55x model:SM_A5560\n"
+            ),
+            结果(
+                b"topResumedActivity=ActivityRecord{1 u0 app.lawnchair/.LawnchairLauncher t2}\n"
+                b"topResumedActivity=ActivityRecord{2 u0 com.supercell.clashofclans/com.supercell.titan.GameApp t14}\n"
+            ),
+            结果(
+                b"""
+  Display: mDisplayId=0
+    mCurrentFocus=Window{u0 app.lawnchair/app.lawnchair.LawnchairLauncher}
+    mFocusedApp=ActivityRecord{launcher app.lawnchair/.LawnchairLauncher}
+  Display: mDisplayId=4
+    mCurrentFocus=null
+    mFocusedApp=null
+"""
+            ),
+            结果(b"priority=0\ncom.supercell.clashofclans/.SplashActivity\n"),
+            结果(),
+        )
+        设备 = ADB设备操作类(
+            ADB, "127.0.0.1:16416", runner=runner, 自动检测路径=False
+        )
+        设备.设置目标包名("com.supercell.clashofclans")
+        设备.打开应用("com.supercell.clashofclans")
+        self.assertTrue(any("am" in 命令 and "start" in 命令 for 命令 in runner.命令))
+
     def test_游戏内拉远视距只向已确认的CoC发送F5(self):
         runner = 假Runner(
             结果(在线模拟器),

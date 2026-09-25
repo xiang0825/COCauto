@@ -144,6 +144,10 @@ class ADB设备操作类:
         # dumpsys window 的逻辑 display ID；两者必须分别缓存，不能混用。
         self._输入显示ID: str | None = None
         self._输入显示ID更新时间 = 0.0
+        # 前台校验和 MuMu display 映射通常在同一个操作前连续发生；短时
+        # 复用同一份 window displays 输出，避免重复 ADB 查询和状态错位。
+        self._MuMu窗口状态缓存 = ""
+        self._MuMu窗口状态缓存时间 = 0.0
         self._最近有效输入显示ID: str | None = None
         self._最近有效输入显示ID时间 = 0.0
         self._显示层缓存有效秒数 = 30.0
@@ -904,6 +908,8 @@ class ADB设备操作类:
         self._最近有效截图显示ID时间 = 0.0
         self._输入显示ID = None
         self._输入显示ID更新时间 = 0.0
+        self._MuMu窗口状态缓存 = ""
+        self._MuMu窗口状态缓存时间 = 0.0
         self._最近有效输入显示ID = None
         self._最近有效输入显示ID时间 = 0.0
         self._触摸事件设备 = None
@@ -1052,9 +1058,9 @@ class ADB设备操作类:
             return self._输入显示ID
         self._输入显示ID更新时间 = 当前时间
         try:
-            窗口输出 = self.执行(["shell", "dumpsys", "window", "displays"], timeout=8)
-            if isinstance(窗口输出, bytes):
-                窗口输出 = 窗口输出.decode("utf-8", errors="replace")
+            窗口输出 = self._获取MuMu窗口状态()
+            if 窗口输出 is None:
+                raise ADB错误("暂未取得 MuMu 窗口显示状态")
             if self._是MuMu显示服务缺失错误(窗口输出):
                 raise ADB错误(str(窗口输出).strip())
             self._MuMu显示服务缺失时间 = 0.0
@@ -1788,10 +1794,22 @@ class ADB设备操作类:
         if isinstance(当前前台, bytes):
             当前前台 = 当前前台.decode("utf-8", errors="replace")
         # MuMu 多显示会同时返回 CoC 和启动器两条 topResumedActivity。
-        # 不能只读第一行，否则会误以为游戏不在前台并反复 am start。
-        前台包名列表 = self._解析前台包名列表(当前前台)
-        if 包名 in 前台包名列表:
-            return
+        # 仅扫描 activity 列表会把“游戏在另一层运行、启动器在当前焦点层”
+        # 误判成已经前台，导致不切回游戏。先用窗口显示层的焦点确认；
+        # 查询失败时才回退旧逻辑，兼容没有 window displays 的旧 Android。
+        if self._是MuMu连接():
+            MuMu前台 = self._获取MuMu焦点包名()
+            if MuMu前台 is not None:
+                if MuMu前台 == 包名:
+                    return
+            else:
+                前台包名列表 = self._解析前台包名列表(当前前台)
+                if 包名 in 前台包名列表:
+                    return
+        else:
+            前台包名列表 = self._解析前台包名列表(当前前台)
+            if 包名 in 前台包名列表:
+                return
         # 不 force-stop：已运行的游戏进程不会被反复杀掉重启。
         # 部分雷电镜像没有 monkey 命令，先解析 MAIN/LAUNCHER Activity，
         # 再用系统自带的 am start 启动，兼容精简 Android 镜像。
@@ -1828,12 +1846,96 @@ class ADB设备操作类:
         当前前台 = self.执行(["shell", "dumpsys", "activity", "activities"], timeout=12)
         if isinstance(当前前台, bytes):
             当前前台 = 当前前台.decode("utf-8", errors="replace")
+        # 先保留 activity 查询，兼容没有 window displays 的旧 Android 和
+        # 已有调用方；MuMu 再用窗口显示层焦点覆盖多显示历史任务误判。
+        if self._是MuMu连接():
+            MuMu前台 = self._获取MuMu焦点包名()
+            if MuMu前台 is not None:
+                return MuMu前台
         前台包名列表 = self._解析前台包名列表(当前前台)
         # 多显示下优先返回当前任务的目标包名，避免把 MuMu 启动器的
         # 辅助显示层当成真实前台，进而误拒绝 CoC 输入。
         if self._目标包名 and self._目标包名 in 前台包名列表:
             return self._目标包名
         return 前台包名列表[0] if 前台包名列表 else ""
+
+    def _获取MuMu焦点包名(self) -> str | None:
+        """按 MuMu 的显示层焦点读取当前应用包名。
+
+        ``dumpsys activity activities`` 在多显示 MuMu 中会同时列出多个
+        ``topResumedActivity``，其中可能包含隐藏游戏层和可见启动器层。
+        ``dumpsys window displays`` 才包含每个 display 的
+        ``mCurrentFocus``/``mFocusedApp``，因此这里优先使用它来避免把
+        后台 CoC 当成当前前台。返回 ``None`` 表示查询格式/服务不可用，
+        调用方可以安全回退旧 Android 逻辑。
+        """
+        try:
+            输出 = self._获取MuMu窗口状态()
+            if 输出 is None:
+                return None
+            return self._解析MuMu焦点包名(输出, self._目标包名)
+        except (ADB错误, OSError, subprocess.TimeoutExpired):
+            return None
+
+    def _获取MuMu窗口状态(self) -> str | None:
+        """读取并短暂缓存 MuMu ``dumpsys window displays`` 输出。"""
+        当前时间 = time.monotonic()
+        if (
+            self._MuMu窗口状态缓存
+            and 当前时间 - self._MuMu窗口状态缓存时间 <= 0.20
+        ):
+            return self._MuMu窗口状态缓存
+        输出 = self.执行(["shell", "dumpsys", "window", "displays"], timeout=8)
+        if isinstance(输出, bytes):
+            输出 = 输出.decode("utf-8", errors="replace")
+        self._MuMu窗口状态缓存 = str(输出)
+        self._MuMu窗口状态缓存时间 = 当前时间
+        return self._MuMu窗口状态缓存
+
+    @staticmethod
+    def _解析MuMu焦点包名(窗口输出: str, 目标包名: str = "") -> str | None:
+        """从 MuMu 多显示窗口焦点中选出当前应用包名。
+
+        目标包在任一显示层的 ``mCurrentFocus`` 优先；没有窗口焦点时，
+        ``mFocusedApp`` 仍是 MuMu 游戏层的有效绑定证据。只有确认了至少
+        一个 display 块，才返回非目标包；完全无法解析时返回 ``None``。
+        """
+        文本 = str(窗口输出 or "")
+        目标包名 = str(目标包名 or "").strip()
+        分块 = re.split(r"\n\s*Display:\s*mDisplayId=", "\n" + 文本)
+        if len(分块) <= 1:
+            return None
+
+        当前焦点包名: list[str] = []
+        应用焦点包名: list[str] = []
+
+        def 提取包名(行: str) -> str:
+            if "=null" in 行 or "= null" in 行:
+                return ""
+            匹配 = re.search(r"\bu\d+\s+([A-Za-z0-9_.$-]+)/", 行)
+            return 匹配.group(1) if 匹配 else ""
+
+        for 块 in 分块[1:]:
+            for 行 in 块.splitlines():
+                行 = 行.strip()
+                if 行.startswith("mCurrentFocus="):
+                    包名 = 提取包名(行)
+                    if 包名 and 包名 not in 当前焦点包名:
+                        当前焦点包名.append(包名)
+                elif 行.startswith("mFocusedApp="):
+                    包名 = 提取包名(行)
+                    if 包名 and 包名 not in 应用焦点包名:
+                        应用焦点包名.append(包名)
+
+        if 目标包名 and 目标包名 in 当前焦点包名:
+            return 目标包名
+        if 目标包名 and 目标包名 in 应用焦点包名:
+            return 目标包名
+        if 当前焦点包名:
+            return 当前焦点包名[0]
+        if 应用焦点包名:
+            return 应用焦点包名[0]
+        return ""
 
     @staticmethod
     def _解析前台包名列表(文本: str) -> list[str]:
