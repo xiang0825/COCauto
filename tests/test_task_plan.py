@@ -107,6 +107,23 @@ class 任务计划测试(unittest.TestCase):
         self.assertFalse(上下文.页面恢复失败)
         self.assertTrue(any("重新登入" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list))
 
+    def test_升级任务开始前发现断线不会把弹窗当主页继续点击(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        上下文 = SimpleNamespace(页面恢复失败=False, 置脚本状态=Mock())
+        机器人._进入并确认主世界 = Mock(return_value=True)
+        机器人._断线时恢复游戏连接 = Mock(return_value=False)
+        检测登录 = Mock()
+
+        with patch("线程.自动化机器人.建筑升级任务") as 建筑任务:
+            结果 = 机器人._执行升级计划("building", 上下文, 检测登录)
+
+        self.assertFalse(结果)
+        self.assertTrue(上下文.页面恢复失败)
+        机器人._断线时恢复游戏连接.assert_called_once_with(上下文, 检测登录)
+        建筑任务.assert_not_called()
+        self.assertTrue(any("禁止执行升级操作" in 调用.args[0]
+                            for 调用 in 上下文.置脚本状态.call_args_list))
+
     def test_战后资源识别前发现断线不会调用OCR(self):
         """战后断线弹窗必须先恢复，不能让 OCR 解析弹窗并抛异常。"""
         机器人 = 自动化机器人.__new__(自动化机器人)
