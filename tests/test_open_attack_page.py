@@ -1,4 +1,5 @@
 import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -465,6 +466,26 @@ class 打开进攻页面测试(unittest.TestCase):
         任务._标记本场资源评分不可用.assert_called_once()
         self.assertTrue(any(
             "超时边界确认仍在战斗页" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_入口超时边界沿用本轮已确认战斗证据(self):
+        """避免已看到战斗页后因过渡帧把入口误报失败。"""
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            _进攻入口最近确认战斗时间=time.monotonic(),
+        )
+
+        任务._识别已存在的战斗页面 = Mock(return_value=None)
+
+        self.assertTrue(任务._超时后接管已进入战斗(上下文, True, False))
+        self.assertTrue(上下文._入口已进入战斗)
+        任务._识别已存在的战斗页面.assert_not_called()
+        self.assertTrue(any(
+            "沿用本轮已确认的战斗页" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
