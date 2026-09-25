@@ -93,6 +93,34 @@ class 宝石安全保护测试(unittest.TestCase):
         self.assertFalse(上下文.检查宝石商店危险页面(强制=True))
         上下文.键盘.按字符按压.assert_not_called()
 
+    def test_高置信主世界不会把中央纹理当成宝石页(self):
+        模板 = 读取模板("宝石.bmp")
+        模板1 = 读取模板("宝石1.bmp")
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        屏幕[230:230 + 模板.shape[0], 390:390 + 模板.shape[1]] = 模板
+        屏幕[230:230 + 模板1.shape[0], 414:414 + 模板1.shape[1]] = 模板1
+        上下文 = 创建上下文(屏幕)
+        上下文.识别点击画面 = Mock(
+            return_value=SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.78)
+        )
+
+        self.assertFalse(上下文.检查宝石商店危险页面(强制=True))
+        上下文.键盘.按字符按压.assert_not_called()
+
+    def test_结算页中央模板命中只阻断输入不发送ESC(self):
+        模板 = 读取模板("宝石.bmp")
+        模板1 = 读取模板("宝石1.bmp")
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        屏幕[230:230 + 模板.shape[0], 390:390 + 模板.shape[1]] = 模板
+        屏幕[230:230 + 模板1.shape[0], 414:414 + 模板1.shape[1]] = 模板1
+        上下文 = 创建上下文(屏幕)
+        上下文.识别点击画面 = Mock(
+            return_value=SimpleNamespace(页面="战斗结算", 世界=None, 可信度=0.94)
+        )
+
+        self.assertTrue(上下文.检查宝石商店危险页面(强制=True))
+        上下文.键盘.按字符按压.assert_not_called()
+
     def test_点击检测到危险页面后不会发送鼠标点击(self):
         模板 = 读取模板("宝石.bmp")
         模板1 = 读取模板("宝石1.bmp")
