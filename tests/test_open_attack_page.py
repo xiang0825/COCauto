@@ -451,6 +451,34 @@ class 打开进攻页面测试(unittest.TestCase):
             705, 535, 延时=700, 是否精确点击=True
         )
 
+    def test_攻击过渡缓存未知时用强制新帧接管战斗(self):
+        """入口缓存仍是未知时，不能错过点击护栏已经看到的战斗页。"""
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=self.军队配置画面())
+            ),
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            停止事件=threading.Event(),
+        )
+        任务._是否出现下一个 = Mock(return_value=False)
+        任务._检测攻击按钮 = Mock(side_effect=[(705, 535), None, None])
+        任务._检测寻找目标按钮 = Mock(return_value=None)
+        任务._识别已存在的战斗页面 = Mock(
+            side_effect=[None, None, "战斗中"]
+        )
+        任务._标记本场资源评分不可用 = Mock()
+
+        self.assertTrue(任务._等待并点击攻击按钮(上下文))
+        强制调用 = [
+            调用 for 调用 in 任务._识别已存在的战斗页面.call_args_list
+            if 调用.kwargs.get("强制") is True
+        ]
+        self.assertTrue(强制调用)
+        任务._标记本场资源评分不可用.assert_called_once()
+
     def test_入口超时边界仍在战斗时交给下兵流程(self):
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
         上下文 = SimpleNamespace(
