@@ -630,6 +630,15 @@ Input Reader State:
         self.assertIsNone(设备._最近有效截图显示ID)
         self.assertFalse(any("screencap" in 命令 for 命令 in 设备._runner.命令))
 
+    def test_ADB成功码携带系统服务缺失诊断时抛出明确错误(self):
+        设备 = ADB设备操作类(
+            ADB,
+            "emulator-5554",
+            runner=假Runner(结果(错误=b"Can't find service: package\n")),
+        )
+        with self.assertRaisesRegex(ADB错误, "Can't find service: package"):
+            设备.执行(["shell", "cmd", "package", "resolve-activity"])
+
     def test_screencap完整截图哨兵不会裁剪超宽设备(self):
         图像 = np.zeros((1200, 2200, 3), dtype=np.uint8)
         编码成功, 编码 = cv2.imencode(".png", 图像)

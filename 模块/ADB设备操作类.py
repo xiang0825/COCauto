@@ -378,15 +378,16 @@ class ADB设备操作类:
                 if not 结果.returncode:
                     self._连续传输失败次数 = 0
                     self._ADB熔断截止时间 = 0.0
-                    # MuMu 的 dumpsys 在 Android 服务缺失时可能退出码仍为
-                    # 0，却把诊断写到 stderr。仅保留这一条明确的显示服务
-                    # 诊断，避免上层误以为是空输出并继续复用旧 display。
-                    if (
-                        not binary
-                        and not stdout
-                        and self._是MuMu显示服务缺失错误(stderr)
-                    ):
-                        return stderr
+                    # MuMu 的 cmd/dumpsys 在 Android 服务缺失时可能退出码仍
+                    # 为 0，却把诊断写到 stdout 或 stderr。必须把这类明确的
+                    # 系统故障继续向上抛出，避免启动流程把空输出当成“应用
+                    # 尚未前台”并反复尝试打开 CoC。
+                    if not binary:
+                        for 服务诊断 in (stdout, stderr):
+                            if self._是Android系统服务缺失错误(服务诊断):
+                                if isinstance(服务诊断, bytes):
+                                    服务诊断 = 服务诊断.decode("utf-8", errors="replace")
+                                raise ADB错误(str(服务诊断).strip())
                     return stdout
 
                 if isinstance(stderr, bytes):
@@ -424,6 +425,12 @@ class ADB设备操作类:
                 "closed",
             )
         )
+
+    @staticmethod
+    def _是Android系统服务缺失错误(错误文本) -> bool:
+        """识别 Android cmd/dumpsys 的明确 Binder 服务缺失诊断。"""
+        文本 = str(错误文本 or "").lower()
+        return "can't find service:" in 文本
 
     @staticmethod
     def _需要重置ADB服务(错误文本: str) -> bool:
