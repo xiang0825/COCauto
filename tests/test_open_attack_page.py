@@ -366,6 +366,33 @@ class 打开进攻页面测试(unittest.TestCase):
             137, 445, 延时=700, 是否精确点击=True
         )
 
+    def test_直接点击军队攻击后不再点击寻找目标(self):
+        """军队页攻击已发出后，不能把过渡帧上的橙色区域当入口。"""
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        页面状态 = iter((None, None, "战斗中"))
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8))
+            ),
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            关闭升级详情弹窗=Mock(return_value=False),
+            停止事件=threading.Event(),
+        )
+        任务._是否出现下一个 = Mock(return_value=False)
+        任务._识别已存在的战斗页面 = Mock(
+            side_effect=lambda *args, **kwargs: next(页面状态)
+        )
+        任务._检测寻找目标按钮 = Mock(side_effect=[None, (137, 445)])
+        任务._检测攻击按钮 = Mock(side_effect=[(705, 535), None, None])
+
+        self.assertTrue(任务._等待并点击攻击按钮(上下文))
+        任务._检测寻找目标按钮.assert_called_once()
+        上下文.点击.assert_called_once_with(
+            705, 535, 延时=700, 是否精确点击=True
+        )
+
     def test_攻击点击后护栏短暂返回False但已进入战斗仍继续(self):
         """真实点击已切入战斗时，不能因结算跨帧把任务链提前终止。"""
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
