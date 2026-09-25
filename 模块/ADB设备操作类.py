@@ -129,11 +129,19 @@ class ADB设备操作类:
         self._屏幕尺寸: tuple[int, int] | None = None
         self._截图显示ID: str | None = None
         self._截图显示ID更新时间 = 0.0
+        # MuMu 转场期间 dumpsys window/display 可能短暂返回空内容。
+        # 保留最近一次已确认的映射用于有限时间的重试；真实 transport
+        # 失败、设备变化或目标包变化时会显式清空，绝不回退到 display 0。
+        self._最近有效截图显示ID: str | None = None
+        self._最近有效截图显示ID时间 = 0.0
         # MuMu Android 15 可能同时存在启动器 display 0 和游戏 display 7。
         # screencap 使用的是 SurfaceFlinger 物理 ID，而 input -d 使用的是
         # dumpsys window 的逻辑 display ID；两者必须分别缓存，不能混用。
         self._输入显示ID: str | None = None
         self._输入显示ID更新时间 = 0.0
+        self._最近有效输入显示ID: str | None = None
+        self._最近有效输入显示ID时间 = 0.0
+        self._显示层缓存有效秒数 = 30.0
         self._触摸事件设备: str | None = None
         self._触摸事件原始尺寸: tuple[int, int] | None = None
         self._触摸事件更新时间 = 0.0
@@ -505,6 +513,12 @@ class ADB设备操作类:
     def _记录传输失败(self) -> None:
         """记录 ADB transport 失败，并在连续失败时短暂熔断。"""
         self._标记目标未验证()
+        # transport 失败可能意味着 MuMu 实例或显示层已经变化，不能把
+        # 旧 display 映射带到另一条 ADB 通道。
+        self._最近有效截图显示ID = None
+        self._最近有效截图显示ID时间 = 0.0
+        self._最近有效输入显示ID = None
+        self._最近有效输入显示ID时间 = 0.0
         self._连续传输失败次数 += 1
         if self._连续传输失败次数 >= 2:
             self._ADB熔断截止时间 = time.monotonic() + self._ADB熔断秒数
@@ -802,6 +816,10 @@ class ADB设备操作类:
                 新设备 = None
             if 新设备 is not None:
                 self.设备序列号 = 新设备.序列号
+                self._最近有效截图显示ID = None
+                self._最近有效截图显示ID时间 = 0.0
+                self._最近有效输入显示ID = None
+                self._最近有效输入显示ID时间 = 0.0
                 锁键 = (os.path.normcase(os.path.abspath(self.adb路径)), self.设备序列号)
                 with self._设备命令锁容器锁:
                     self._命令锁 = self._设备命令锁容器.setdefault(锁键, threading.RLock())
@@ -846,8 +864,12 @@ class ADB设备操作类:
         self._前台包名缓存时间 = 0.0
         self._截图显示ID = None
         self._截图显示ID更新时间 = 0.0
+        self._最近有效截图显示ID = None
+        self._最近有效截图显示ID时间 = 0.0
         self._输入显示ID = None
         self._输入显示ID更新时间 = 0.0
+        self._最近有效输入显示ID = None
+        self._最近有效输入显示ID时间 = 0.0
         self._触摸事件设备 = None
         self._触摸事件原始尺寸 = None
         self._触摸事件更新时间 = 0.0
@@ -900,8 +922,12 @@ class ADB设备操作类:
         # 可能短暂返回空内容，缓存 None 会让这一帧之后的所有截图都失败。
         if self._截图显示ID and 当前时间 - self._截图显示ID更新时间 < 3.0:
             return self._截图显示ID
-        上次有效显示ID = self._截图显示ID
-        上次有效时间 = self._截图显示ID更新时间
+        上次有效显示ID = self._截图显示ID or self._最近有效截图显示ID
+        上次有效时间 = (
+            self._截图显示ID更新时间
+            if self._截图显示ID
+            else self._最近有效截图显示ID时间
+        )
         for 尝试次数 in range(3):
             self._截图显示ID更新时间 = time.monotonic()
             try:
@@ -916,6 +942,8 @@ class ADB设备操作类:
                 物理ID = self._解析MuMu物理显示ID(str(显示输出), 选中逻辑ID)
                 if 物理ID:
                     self._截图显示ID = 物理ID
+                    self._最近有效截图显示ID = 物理ID
+                    self._最近有效截图显示ID时间 = time.monotonic()
                     return 物理ID
                 raise ADB错误(f"MuMu display {选中逻辑ID} 暂无可用物理显示层")
             except (ADB错误, ValueError, TypeError, re.error):
@@ -926,7 +954,13 @@ class ADB设备操作类:
                 self._输入显示ID更新时间 = 0.0
                 if 尝试次数 < 2:
                     time.sleep(0.12 * (尝试次数 + 1))
-        if 上次有效显示ID and time.monotonic() - 上次有效时间 <= 10.0:
+        if (
+            上次有效显示ID
+            and 上次有效时间
+            and time.monotonic() - 上次有效时间 <= self._显示层缓存有效秒数
+        ):
+            self._截图显示ID = 上次有效显示ID
+            self._截图显示ID更新时间 = 上次有效时间
             return 上次有效显示ID
         self._截图显示ID = None
         return None
@@ -964,10 +998,24 @@ class ADB设备操作类:
             if isinstance(窗口输出, bytes):
                 窗口输出 = 窗口输出.decode("utf-8", errors="replace")
             self._输入显示ID = self._解析MuMu逻辑显示ID(窗口输出, self._目标包名)
-            return self._输入显示ID
+            if self._输入显示ID:
+                self._最近有效输入显示ID = self._输入显示ID
+                self._最近有效输入显示ID时间 = time.monotonic()
+                return self._输入显示ID
         except (ADB错误, ValueError, TypeError, re.error):
             self._输入显示ID = None
-            return None
+        # MuMu 转场时窗口焦点字段可能暂时为空。输入路径仍会通过
+        # _验证输入前台 检查目标包名，因此在短时窗口内复用最近映射不
+        # 会把触控发送到启动器；超过窗口则继续 fail-closed。
+        if (
+            self._最近有效输入显示ID
+            and self._最近有效输入显示ID时间
+            and 当前时间 - self._最近有效输入显示ID时间 <= self._显示层缓存有效秒数
+        ):
+            self._输入显示ID = self._最近有效输入显示ID
+            self._输入显示ID更新时间 = self._最近有效输入显示ID时间
+            return self._输入显示ID
+        return None
 
     def 获取目标显示ID(self) -> str | None:
         """返回当前 CoC 输入/点击使用的逻辑 display ID，供状态日志使用。"""

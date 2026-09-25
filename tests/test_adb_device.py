@@ -1,6 +1,7 @@
 import sys
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -293,6 +294,30 @@ mViewports=[DisplayViewport{type=INTERNAL, valid=true, displayId=0, uniqueId='lo
 mViewports=[DisplayViewport{type=EXTERNAL, valid=true, displayId=6, uniqueId='local:4619827203584079877'}]
 """
         设备._runner = 假Runner(结果(b""), 结果(窗口输出), 结果(显示输出))
+        self.assertEqual(设备._获取MuMu截图显示ID(), "4619827203584079877")
+
+    def test_MuMu窗口焦点短暂丢失复用最近逻辑显示层(self):
+        设备 = ADB设备操作类(
+            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            "127.0.0.1:16416",
+        )
+        设备.设置目标包名("com.supercell.clashofclans")
+        设备._最近有效输入显示ID = "6"
+        设备._最近有效输入显示ID时间 = time.monotonic()
+        设备._runner = 假Runner(结果(b""))
+        self.assertEqual(设备._获取MuMu输入显示ID(), "6")
+
+    def test_MuMu显示层短暂丢失复用最近物理映射但不回退display0(self):
+        设备 = ADB设备操作类(
+            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            "127.0.0.1:16416",
+        )
+        设备.设置目标包名("com.supercell.clashofclans")
+        设备._最近有效输入显示ID = "6"
+        设备._最近有效输入显示ID时间 = time.monotonic()
+        设备._最近有效截图显示ID = "4619827203584079877"
+        设备._最近有效截图显示ID时间 = time.monotonic()
+        设备._runner = 假Runner(结果(b""))
         self.assertEqual(设备._获取MuMu截图显示ID(), "4619827203584079877")
 
     def test_MuMu输入显示层使用游戏逻辑display而不是启动器display(self):
