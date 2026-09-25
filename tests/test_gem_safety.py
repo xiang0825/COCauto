@@ -225,6 +225,40 @@ class 宝石安全保护测试(unittest.TestCase):
         self.assertFalse(上下文.检查宝石商店危险页面(强制=True))
         上下文.键盘.按字符按压.assert_not_called()
 
+    def test_战斗结算单帧误报复核为战斗中时继续下兵(self):
+        """实机出现过结算误报后一帧仍在战斗，不能中断批量下兵。"""
+        上下文 = 创建上下文(np.zeros((600, 800, 3), dtype=np.uint8))
+        上下文._战斗中 = True
+        上下文.识别点击画面 = Mock(side_effect=[
+            SimpleNamespace(页面="战斗结算"),
+            SimpleNamespace(页面="战斗中"),
+        ])
+
+        self.assertFalse(上下文.检查宝石商店危险页面(强制=True))
+        self.assertFalse(上下文._战斗结束已确认)
+        self.assertEqual(上下文.识别点击画面.call_count, 2)
+        self.assertTrue(any(
+            "单帧误报" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_战斗结算跨帧复核仍为结算才锁定(self):
+        """只有复核仍是结算页时，才允许回营状态机接管。"""
+        上下文 = 创建上下文(np.zeros((600, 800, 3), dtype=np.uint8))
+        上下文._战斗中 = True
+        上下文.识别点击画面 = Mock(side_effect=[
+            SimpleNamespace(页面="战斗结算"),
+            SimpleNamespace(页面="战斗结算"),
+        ])
+
+        self.assertTrue(上下文.检查宝石商店危险页面(强制=True))
+        self.assertTrue(上下文._战斗结束已确认)
+        self.assertEqual(上下文.识别点击画面.call_count, 2)
+        self.assertTrue(any(
+            "跨帧复核确认战斗结算页" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
     def test_点击完成后强制再次检查危险页面(self):
         上下文 = 创建上下文(np.zeros((600, 800, 3), dtype=np.uint8))
         上下文.检查宝石商店危险页面 = Mock(side_effect=[False, True])

@@ -138,6 +138,7 @@ class 任务上下文:
         self._战斗过渡已阻止日志 = False
         self._战斗护栏失败已记录 = False
         self._战斗奖励弹窗已记录 = False
+        self._战斗结算待确认次数 = 0
         try:
             self.置脚本状态(
                 "结算回营已确认，已清除本场结算保护状态，允许下一场重新识别世界和进攻入口"
@@ -2115,9 +2116,41 @@ class 任务上下文:
                     pass
                 return True
             if 结果.页面 == "战斗结算":
+                # 实战中偶尔会有一帧被视觉识别器误报为结算页，
+                # 下一帧仍是战场。单帧直接锁定结算会打断高速批量下兵，
+                # 甚至让上层误以为本场已经结束。这里做一次短延时强制复核；
+                # 明确回到战斗时清除候选并继续下兵。
+                self._战斗结算待确认次数 = int(
+                    getattr(self, "_战斗结算待确认次数", 0) or 0
+                ) + 1
+                复核结果 = None
+                try:
+                    延时函数 = getattr(self, "脚本延时", None)
+                    if callable(延时函数):
+                        延时函数(180)
+                    self._点击识别截图 = None
+                    self._点击识别截图时间 = 0.0
+                    复核结果 = self.识别点击画面(强制=True)
+                except Exception:
+                    复核结果 = None
+                if 复核结果 is not None and 复核结果.页面 == "战斗中":
+                    self._战斗结算待确认次数 = 0
+                    self._战斗结束已确认 = False
+                    self._战斗过渡已阻止日志 = False
+                    self.置脚本状态(
+                        "战斗结算单帧误报，跨帧复核仍在战斗中，继续下兵"
+                    )
+                    return False
+                if 复核结果 is None or getattr(复核结果, "页面", "") not in {
+                    "战斗结算", "战斗奖励选择", "战斗星级奖励"
+                }:
+                    self.置脚本状态(
+                        "战斗结算候选页未获得明确复核，阻止本次输入但不结束战斗"
+                    )
+                    return True
                 self._战斗结束已确认 = True
                 if not getattr(self, "_结算点击已拦截日志", False):
-                    self.置脚本状态("点击护栏：已识别战斗结算页，阻止继续下兵")
+                    self.置脚本状态("跨帧复核确认战斗结算页，阻止继续下兵")
                     self._结算点击已拦截日志 = True
                 return True
             if 结果.页面 == "战斗奖励选择":
