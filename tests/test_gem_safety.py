@@ -83,6 +83,23 @@ class 宝石安全保护测试(unittest.TestCase):
         上下文.键盘.按字符按压.assert_not_called()
         self.assertEqual(上下文.识别点击画面.call_count, 2)
 
+    def test_安全返回键因已在主页拒绝时仍视为恢复成功(self):
+        """复现正式日志：主页已识别，安全返回键拒绝，不能再报恢复失败。"""
+        上下文 = 创建上下文(np.zeros((600, 800, 3), dtype=np.uint8))
+        del 上下文._宝石保护确认主页面
+        上下文.安全返回键 = Mock(return_value=False)
+        上下文.识别点击画面 = Mock(side_effect=[
+            SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.78),
+            SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.78),
+        ])
+
+        self.assertTrue(上下文._宝石保护发送ESC并确认主页面())
+        上下文.安全返回键.assert_called_once_with(
+            "宝石保护第1次", 已确认可关闭面板=True
+        )
+        上下文.键盘.按字符按压.assert_not_called()
+        self.assertEqual(上下文.识别点击画面.call_count, 2)
+
     def test_单张局部宝石图案不会阻断正常战斗点击(self):
         模板 = 读取模板("宝石2.bmp")
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)

@@ -2421,6 +2421,41 @@ class 任务上下文:
 
     def _宝石保护发送ESC并确认主页面(self) -> bool:
         """只用 ESC 退出危险页，并用主城入口和资源栏确认恢复成功。"""
+        def 只读确认主世界主页() -> bool:
+            """确认已经在主页时只读放行，绝不追加 ESC。"""
+            识别页面 = getattr(self, "识别点击画面", None)
+            if not callable(识别页面):
+                return False
+            连续主世界 = 0
+            截止时间 = time.monotonic() + 1.8
+            while time.monotonic() < 截止时间:
+                try:
+                    try:
+                        页面结果 = 识别页面(强制=True)
+                    except TypeError:
+                        页面结果 = 识别页面()
+                    页面名称 = str(getattr(页面结果, "页面", "") or "")
+                    世界名称 = str(getattr(页面结果, "世界", "") or "")
+                    可信度 = float(getattr(页面结果, "可信度", 0.0) or 0.0)
+                except Exception:
+                    连续主世界 = 0
+                    页面名称 = ""
+                    世界名称 = ""
+                    可信度 = 0.0
+
+                if (
+                    页面名称 == "主世界主页"
+                    and 世界名称 in {"", "主世界"}
+                    and 可信度 >= 0.70
+                ):
+                    连续主世界 += 1
+                    if 连续主世界 >= 2:
+                        return True
+                else:
+                    连续主世界 = 0
+                self.脚本延时(180)
+            return False
+
         预设确认器 = getattr(self, "_宝石保护确认主页面", None)
         按字符按压 = getattr(getattr(self, "键盘", None), "按字符按压", None)
         if not callable(按字符按压):
@@ -2435,9 +2470,17 @@ class 任务上下文:
             if not callable(安全返回键) or not 安全返回键(
                 "宝石保护预设确认", 已确认可关闭面板=True
             ):
+                if 只读确认主世界主页():
+                    self.置脚本状态(
+                        "[安全拦截] 安全返回键因已在主世界主页而拒绝；"
+                        "连续页面识别确认成功，不重复发送ESC"
+                    )
+                    return True
                 return False
             self.置脚本状态("[安全拦截] 已发送1次ESC退出危险页面，不执行第二选择")
-            return bool(预设确认器())
+            if bool(预设确认器()):
+                return True
+            return 只读确认主世界主页()
 
         识图引擎 = self.获取模板识别器()
         # 危险页只允许一次 BACK。第一次通常足以关闭确认框；如果
@@ -2447,6 +2490,12 @@ class 任务上下文:
         安全返回键 = getattr(self, "安全返回键", None)
         if callable(安全返回键):
             if not 安全返回键(f"宝石保护第{序号}次", 已确认可关闭面板=True):
+                if 只读确认主世界主页():
+                    self.置脚本状态(
+                        f"[安全拦截] 安全返回键因已在主世界主页而拒绝；"
+                        f"第{序号}次页面复核确认成功，不重复发送ESC"
+                    )
+                    return True
                 return False
         else:
             self.置脚本状态("[安全拦截] 缺少安全返回键入口，未发送ESC")
@@ -2475,44 +2524,14 @@ class 任务上下文:
         # 直接判失败，入口任务会把已成功退出危险页的状态锁死，形成
         # “已回主页但无法继续”的假故障。使用页面识别做只读兜底，要求
         # 连续两帧高置信主世界；不再发送第二次 ESC，也不点击任何控件。
-        识别页面 = getattr(self, "识别点击画面", None)
-        if callable(识别页面):
-            连续主世界 = 0
-            截止时间 = time.monotonic() + 1.8
-            while time.monotonic() < 截止时间:
-                try:
-                    try:
-                        页面结果 = 识别页面(强制=True)
-                    except TypeError:
-                        页面结果 = 识别页面()
-                    页面名称 = str(getattr(页面结果, "页面", "") or "")
-                    世界名称 = str(getattr(页面结果, "世界", "") or "")
-                    可信度 = float(getattr(页面结果, "可信度", 0.0) or 0.0)
-                except Exception:
-                    连续主世界 = 0
-                    页面结果 = None
-                    页面名称 = ""
-                    世界名称 = ""
-                    可信度 = 0.0
-
-                if (
-                    页面名称 == "主世界主页"
-                    and 世界名称 in {"", "主世界"}
-                    and 可信度 >= 0.70
-                ):
-                    连续主世界 += 1
-                    if 连续主世界 >= 2:
-                        self.置脚本状态(
-                            f"[安全拦截] 第{序号}次ESC后通过页面识别确认主世界主页"
-                        )
-                        return True
-                else:
-                    连续主世界 = 0
-                self.脚本延时(180)
-
+        if 只读确认主世界主页():
             self.置脚本状态(
-                "[安全拦截] ESC后页面识别未连续确认主世界主页，保持保护锁"
+                f"[安全拦截] 第{序号}次ESC后通过页面识别确认主世界主页"
             )
+            return True
+        self.置脚本状态(
+            "[安全拦截] ESC后页面识别未连续确认主世界主页，保持保护锁"
+        )
         return False
 
     def 发送死亡通知(self, 原因: str):
