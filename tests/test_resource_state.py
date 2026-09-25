@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from 任务流程.更新主世界账号资源状态 import 更新家乡资源状态任务
 from 工具包.工具函数 import 单行资源识别
+from 模块.检测.OCR识别器 import 安全OCR引擎
 
 
 class 资源状态测试(unittest.TestCase):
@@ -26,6 +27,20 @@ class 资源状态测试(unittest.TestCase):
         图像 = np.zeros((24, 120, 3), dtype=np.uint8)
 
         self.assertEqual(单行资源识别(引擎, 图像), 0)
+
+    def test_线程安全OCR代理统一空返回格式(self):
+        引擎类 = 安全OCR引擎.__wrapped__
+        代理 = 引擎类.__new__(引擎类)
+        代理._操作锁 = __import__("threading").Lock()
+        代理._原始引擎 = Mock(return_value=None)
+
+        self.assertEqual(代理(np.zeros((2, 2, 3), dtype=np.uint8)), ([], None))
+
+        代理._原始引擎.return_value = ([('文字', 0.9)],)
+        self.assertEqual(
+            代理(np.zeros((2, 2, 3), dtype=np.uint8)),
+            ([('文字', 0.9)], None),
+        )
 
     def test_圈号数字不会让资源识别抛出转换异常(self):
         引擎 = Mock(return_value=([("①②③", 0.99)], None))
