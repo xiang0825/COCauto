@@ -7,11 +7,27 @@ import cv2
 import numpy as np
 
 from 任务流程.升级城墙 import 城墙升级任务
+from 任务流程.基础任务框架 import 任务上下文
 
 
 class 刷墙识别测试(unittest.TestCase):
     def setUp(self):
         self.任务 = 城墙升级任务.__new__(城墙升级任务)
+
+    def test_城墙确认按钮优先于通用升级详情关闭器(self):
+        """OCR确认页的合法资源确认点击不能被右上角关闭器抢先处理。"""
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._内存保护已触发 = False
+        上下文._城墙升级确认中 = True
+        上下文._城墙升级资源点击中 = False
+        上下文._最近点击页面结果 = SimpleNamespace(页面="升级详情弹窗")
+        上下文.检查宝石商店危险页面 = Mock(return_value=False)
+        上下文.关闭升级详情弹窗 = Mock(return_value=True)
+        上下文.置脚本状态 = Mock()
+
+        self.assertFalse(上下文.输入前安全检查())
+        上下文.关闭升级详情弹窗.assert_not_called()
+        上下文.置脚本状态.assert_called_once()
 
     def test_OCR坐标使用真实包围框而不是固定右边界(self):
         坐标 = self.任务.解析OCR坐标(
