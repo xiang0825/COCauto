@@ -1140,6 +1140,60 @@ class 页面识别测试(unittest.TestCase):
         self.assertTrue(上下文.停止事件.is_set())
         self.assertTrue(any("恢复3次仍未消失" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
 
+    def test_断线弹窗恢复成功后继续确认主页并只点击一次(self):
+        """完整回放断线→重新登入→主页，不能停在恢复分支或重复点击。"""
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(side_effect=[屏幕, 屏幕, 屏幕]),
+                设备=SimpleNamespace(
+                    获取当前前台包名=Mock(return_value="com.supercell.clashofclans")
+                ),
+            ),
+            设置=SimpleNamespace(部落冲突包名="com.supercell.clashofclans"),
+            数据库=Mock(),
+            机器人标志="robot_test",
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            点击已确认安全按钮=Mock(return_value=True),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
+        任务.第一次检测游戏登录 = False
+        任务._检测断线弹窗 = Mock(
+            side_effect=[(True, (256, 365)), (False, (0, 0))]
+        )
+        for 方法名 in (
+            "_启动阶段处理英雄升级详情",
+            "_启动阶段处理研究目标页",
+            "_启动阶段处理结算页",
+            "_启动阶段处理军队配置页",
+            "_启动阶段处理主世界活动弹窗",
+        ):
+            setattr(任务, 方法名, Mock(return_value=False))
+        任务._登录主页已确认 = Mock(return_value=True)
+
+        class 假引擎:
+            def 执行匹配(self, _图像, 模板路径, **_参数):
+                if "家乡进攻图标" in 模板路径 or "不用拉远视距" in 模板路径:
+                    return True, (100, 100), 0.95
+                return False, (0, 0), 0.0
+
+        class 假页面识别器:
+            def 识别(self, _图像, **_参数):
+                return SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.78)
+
+        with patch("任务流程.检测游戏登录状态.模板匹配引擎", return_value=假引擎()), \
+             patch("任务流程.检测游戏登录状态.页面识别器", return_value=假页面识别器()):
+            self.assertTrue(任务.执行(首次登录=False))
+
+        上下文.点击已确认安全按钮.assert_called_once_with(256, 365, 延时=180)
+        self.assertEqual(任务._断线弹窗恢复次数, 1)
+        self.assertFalse(上下文.页面恢复失败)
+        self.assertFalse(上下文.停止事件.is_set())
+        self.assertTrue(any("重新载入游戏" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
     def test_旧版断线模板连续命中也受三次恢复上限保护(self):
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
         上下文 = SimpleNamespace(
