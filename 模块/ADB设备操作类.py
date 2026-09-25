@@ -142,6 +142,10 @@ class ADB设备操作类:
         self._最近有效输入显示ID: str | None = None
         self._最近有效输入显示ID时间 = 0.0
         self._显示层缓存有效秒数 = 30.0
+        # MuMu 的 display/window 服务失效时，旧的 display ID 不能继续用于
+        # screencap。否则会反复创建超时 adb.exe，拖垮宿主机和模拟器。
+        self._MuMu显示服务缺失时间 = 0.0
+        self._MuMu显示服务缺失冷却秒数 = 10.0
         self._触摸事件设备: str | None = None
         self._触摸事件原始尺寸: tuple[int, int] | None = None
         self._触摸事件更新时间 = 0.0
@@ -918,6 +922,11 @@ class ADB设备操作类:
     def _获取MuMu截图显示ID(self) -> str | None:
         """返回当前前台应用所在 MuMu 虚拟显示的 SurfaceFlinger ID。"""
         当前时间 = time.monotonic()
+        # 已明确收到 ``Can't find service: display/window`` 时，不能因为
+        # 最近一次缓存尚未过期而把截图发到失效层。
+        if self._MuMu显示服务仍缺失():
+            self._截图显示ID = None
+            return None
         # 失败结果不能在3秒缓存；MuMu 战斗过渡时 dumpsys window/display
         # 可能短暂返回空内容，缓存 None 会让这一帧之后的所有截图都失败。
         if self._截图显示ID and 当前时间 - self._截图显示ID更新时间 < 3.0:
@@ -939,6 +948,7 @@ class ADB设备操作类:
                 显示输出 = self.执行(["shell", "dumpsys", "display"], timeout=8)
                 if isinstance(显示输出, bytes):
                     显示输出 = 显示输出.decode("utf-8", errors="replace")
+                self._MuMu显示服务缺失时间 = 0.0
                 物理ID = self._解析MuMu物理显示ID(str(显示输出), 选中逻辑ID)
                 if 物理ID:
                     self._截图显示ID = 物理ID
@@ -946,14 +956,25 @@ class ADB设备操作类:
                     self._最近有效截图显示ID时间 = time.monotonic()
                     return 物理ID
                 raise ADB错误(f"MuMu display {选中逻辑ID} 暂无可用物理显示层")
-            except (ADB错误, ValueError, TypeError, re.error):
+            except (ADB错误, ValueError, TypeError, re.error) as 异常:
                 # 仅截图允许短暂沿用上一次已确认的物理 display；它不参与
                 # input 坐标。这样窗口 dumpsys 抖动不会把战斗流程直接打死，
                 # 但新建连接/长期失效时仍然 fail-closed，不回退到 display 0。
                 self._截图显示ID = 上次有效显示ID
                 self._输入显示ID更新时间 = 0.0
+                if self._是MuMu显示服务缺失错误(异常):
+                    self._MuMu显示服务缺失时间 = time.monotonic()
+                    self._最近有效截图显示ID = None
+                    self._最近有效截图显示ID时间 = 0.0
+                if self._MuMu显示服务仍缺失():
+                    self._最近有效截图显示ID = None
+                    self._最近有效截图显示ID时间 = 0.0
+                    break
                 if 尝试次数 < 2:
                     time.sleep(0.12 * (尝试次数 + 1))
+        if self._MuMu显示服务仍缺失():
+            self._截图显示ID = None
+            return None
         if (
             上次有效显示ID
             and 上次有效时间
@@ -990,6 +1011,9 @@ class ADB设备操作类:
     def _获取MuMu输入显示ID(self) -> str | None:
         """返回 ``input -d`` 使用的逻辑 display ID。"""
         当前时间 = time.monotonic()
+        if self._MuMu显示服务仍缺失():
+            self._输入显示ID = None
+            return None
         if self._输入显示ID and 当前时间 - self._输入显示ID更新时间 < 3.0:
             return self._输入显示ID
         self._输入显示ID更新时间 = 当前时间
@@ -997,13 +1021,18 @@ class ADB设备操作类:
             窗口输出 = self.执行(["shell", "dumpsys", "window", "displays"], timeout=8)
             if isinstance(窗口输出, bytes):
                 窗口输出 = 窗口输出.decode("utf-8", errors="replace")
+            self._MuMu显示服务缺失时间 = 0.0
             self._输入显示ID = self._解析MuMu逻辑显示ID(窗口输出, self._目标包名)
             if self._输入显示ID:
                 self._最近有效输入显示ID = self._输入显示ID
                 self._最近有效输入显示ID时间 = time.monotonic()
                 return self._输入显示ID
-        except (ADB错误, ValueError, TypeError, re.error):
+        except (ADB错误, ValueError, TypeError, re.error) as 异常:
             self._输入显示ID = None
+            if self._是MuMu显示服务缺失错误(异常):
+                self._MuMu显示服务缺失时间 = time.monotonic()
+                self._最近有效输入显示ID = None
+                self._最近有效输入显示ID时间 = 0.0
         # MuMu 转场时窗口焦点字段可能暂时为空。输入路径仍会通过
         # _验证输入前台 检查目标包名，因此在短时窗口内复用最近映射不
         # 会把触控发送到启动器；超过窗口则继续 fail-closed。
@@ -1016,6 +1045,19 @@ class ADB设备操作类:
             self._输入显示ID更新时间 = self._最近有效输入显示ID时间
             return self._输入显示ID
         return None
+
+    @staticmethod
+    def _是MuMu显示服务缺失错误(异常: BaseException) -> bool:
+        """判断 dumpsys 明确报告 Android display/window 服务不存在。"""
+        文本 = str(异常 or "").lower()
+        return "can't find service: display" in 文本 or "can't find service: window" in 文本
+
+    def _MuMu显示服务仍缺失(self) -> bool:
+        时间 = float(getattr(self, "_MuMu显示服务缺失时间", 0.0) or 0.0)
+        return bool(
+            时间
+            and time.monotonic() - 时间 < float(self._MuMu显示服务缺失冷却秒数)
+        )
 
     def 获取目标显示ID(self) -> str | None:
         """返回当前 CoC 输入/点击使用的逻辑 display ID，供状态日志使用。"""
@@ -1415,6 +1457,10 @@ class ADB设备操作类:
             except (cv2.error, ValueError, TypeError) as 异常:
                 最后错误 = ADB错误(f"ADB 截图解码失败：{异常}")
 
+            # MuMu 已明确报告 display/window 服务不存在时，继续 reconnect
+            # 或重复 screencap 没有恢复意义，只会制造更多 adb 进程。
+            if self._MuMu显示服务仍缺失():
+                break
             if 尝试次数 + 1 < self._截图重试上限:
                 self._标记目标未验证()
                 # 参考 MAA 的“重新连接后重试原命令”语义，但等待和次数

@@ -610,6 +610,26 @@ Input Reader State:
             with self.assertRaisesRegex(ADB错误, "未确认 CoC 所在的 MuMu 游戏显示层"):
                 设备.获取屏幕图像cv()
 
+    def test_MuMu显示服务缺失时不复用旧显示ID或创建截图进程(self):
+        设备 = ADB设备操作类(
+            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            "127.0.0.1:16416",
+            runner=假Runner(
+                结果(code=1, 错误=b"Can't find service: window\n"),
+            ),
+            自动检测路径=False,
+        )
+        设备._最近有效输入显示ID = "7"
+        设备._最近有效输入显示ID时间 = time.monotonic()
+        设备._最近有效截图显示ID = "4619827203584079877"
+        设备._最近有效截图显示ID时间 = time.monotonic()
+        with patch.object(设备, "_验证目标"), patch.object(设备, "_检查主机内存预算"):
+            with self.assertRaisesRegex(ADB错误, "未确认 CoC 所在的 MuMu 游戏显示层"):
+                设备.获取屏幕图像cv()
+        self.assertIsNone(设备._最近有效输入显示ID)
+        self.assertIsNone(设备._最近有效截图显示ID)
+        self.assertFalse(any("screencap" in 命令 for 命令 in 设备._runner.命令))
+
     def test_screencap完整截图哨兵不会裁剪超宽设备(self):
         图像 = np.zeros((1200, 2200, 3), dtype=np.uint8)
         编码成功, 编码 = cv2.imencode(".png", 图像)
