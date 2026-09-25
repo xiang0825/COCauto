@@ -21,6 +21,12 @@ class 资源状态测试(unittest.TestCase):
             {"use_det": False, "use_cls": False},
         )
 
+    def test_单行资源空OCR返回不会抛二元组解包异常(self):
+        引擎 = Mock(return_value=None)
+        图像 = np.zeros((24, 120, 3), dtype=np.uint8)
+
+        self.assertEqual(单行资源识别(引擎, 图像), 0)
+
     def test_圈号数字不会让资源识别抛出转换异常(self):
         引擎 = Mock(return_value=([("①②③", 0.99)], None))
         图像 = np.zeros((24, 120, 3), dtype=np.uint8)

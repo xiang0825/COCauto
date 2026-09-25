@@ -179,10 +179,17 @@ def 单行资源识别(ocr引擎, img, 允许完整识别=False, 最大值=None)
             候选 = [数字 for 数字 in 候选 if int(数字) <= 最大值]
         return max(候选, key=len) if 候选 else ""
 
+    def 安全OCR(输入图, **参数):
+        """兼容 OCR 返回 ``(结果, 其他)``、结果列表和空结果。"""
+        OCR返回 = ocr引擎(输入图, **参数)
+        if isinstance(OCR返回, tuple):
+            return OCR返回[0] if OCR返回 else []
+        return OCR返回 or []
+
     # 彩色原图保留浅色数字的边缘；二值图作为不同主题下的备用输入。
     轻量数字 = ""
     for 输入图 in (img, 二值图):
-        result, _ = ocr引擎(输入图, use_det=False, use_cls=False)
+        result = 安全OCR(输入图, use_det=False, use_cls=False)
         数字 = 提取数字(result, 只取合法=最大值 is not None)
         if len(数字) > len(轻量数字):
             轻量数字 = 数字
@@ -199,7 +206,7 @@ def 单行资源识别(ocr引擎, img, 允许完整识别=False, 最大值=None)
     if 允许完整识别:
         完整数字 = ""
         for 输入图 in (img, 二值图):
-            result, _ = ocr引擎(输入图, use_cls=False)
+            result = 安全OCR(输入图, use_cls=False)
             数字 = 提取数字(result, 只取合法=最大值 is not None)
             if len(数字) > len(完整数字):
                 完整数字 = 数字
