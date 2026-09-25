@@ -144,7 +144,7 @@ class 机器人管理面板(ttk.LabelFrame):
         机器人 = self.获取当前机器人()
         if 机器人:
             try:
-                机器人.启动()
+                self.监控中心.启动机器人(机器人.机器人标志)
                 return f"{机器人.机器人标志} 已启动"
             except Exception as e:
                 messagebox.showerror("启动失败", str(e))
