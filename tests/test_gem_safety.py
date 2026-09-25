@@ -28,6 +28,8 @@ def 创建上下文(屏幕图像: np.ndarray):
     上下文.停止事件.set = Mock()
     上下文._宝石保护确认主页面 = Mock(return_value=False)
     上下文._战斗中 = False
+    上下文._战斗结束已确认 = False
+    上下文._最近点击页面结果 = None
     return 上下文
 
 
@@ -120,6 +122,27 @@ class 宝石安全保护测试(unittest.TestCase):
 
         self.assertTrue(上下文.检查宝石商店危险页面(强制=True))
         上下文.键盘.按字符按压.assert_not_called()
+
+    def test_已确认结算跨帧时不重新扫描宝石或发送ESC(self):
+        """复现正式日志中的结算页后一帧误判宝石问题。"""
+        模板 = 读取模板("宝石.bmp")
+        模板1 = 读取模板("宝石1.bmp")
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        屏幕[230:230 + 模板.shape[0], 390:390 + 模板.shape[1]] = 模板
+        屏幕[230:230 + 模板1.shape[0], 414:414 + 模板1.shape[1]] = 模板1
+        上下文 = 创建上下文(屏幕)
+        上下文._战斗结束已确认 = True
+        上下文.识别点击画面 = Mock(
+            return_value=SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.78)
+        )
+
+        self.assertTrue(上下文.检查宝石商店危险页面(强制=True))
+        上下文.识别点击画面.assert_not_called()
+        上下文.键盘.按字符按压.assert_not_called()
+        self.assertTrue(any(
+            "结算状态已锁定" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
 
     def test_点击检测到危险页面后不会发送鼠标点击(self):
         模板 = 读取模板("宝石.bmp")
