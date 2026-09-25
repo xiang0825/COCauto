@@ -46,6 +46,11 @@ def 结果(输出=b"", code=0, 错误=b""):
 
 
 class ADB设备测试(unittest.TestCase):
+    def setUp(self):
+        # ADB 服务冷却是进程级保护；测试之间必须清理时间戳，避免前一个
+        # 测试的模拟重置影响后续测试的命令序列断言。
+        ADB设备操作类._全局最近ADB服务重置时间 = 0.0
+
     def test_单文件模式数据库放在EXE旁而非临时解包目录(self):
         with tempfile.TemporaryDirectory() as 临时目录:
             exe路径 = str(Path(临时目录) / "app.exe")
@@ -490,6 +495,18 @@ Input Reader State:
         self.assertEqual(runner.命令[2][1:], ["start-server"])
         self.assertEqual(runner.命令[3][1:], ["devices", "-l"])
         self.assertFalse(any("force-stop" in 命令 or "reboot" in 命令 for 命令 in runner.命令))
+
+    def test_不同适配器不会并发重复重置ADB服务(self):
+        第一个 = 假Runner()
+        第二个 = 假Runner()
+        设备一 = ADB设备操作类(ADB, "emulator-5554", runner=第一个)
+        设备二 = ADB设备操作类(ADB, "127.0.0.1:16416", runner=第二个)
+
+        设备一._重置ADB服务()
+        设备二._重置ADB服务()
+
+        self.assertEqual([命令[1:] for 命令 in 第一个.命令], [["kill-server"], ["start-server"]])
+        self.assertEqual(第二个.命令, [])
 
     def test_运行期设备消失时重置ADB服务后重试(self):
         runner = 假Runner(

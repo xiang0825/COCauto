@@ -85,6 +85,11 @@ class ADB设备操作类:
     # UI 连接检测和机器人线程并存，也避免多个 adb.exe 同时抢占通道。
     _设备命令锁容器: dict[tuple[str, str], threading.RLock] = {}
     _设备命令锁容器锁 = threading.Lock()
+    # 不同的 ADB 适配器可能绑定同一服务（例如机器人线程和 UI 连接检测）。
+    # kill-server/start-server 不是设备级操作，不能让多个适配器并发执行，
+    # 否则容易把正在恢复的 transport 再次打断，造成设备反复掉线。
+    _ADB服务重置锁 = threading.Lock()
+    _全局最近ADB服务重置时间 = 0.0
 
     @staticmethod
     def _获取主机内存状态() -> dict[str, int] | None:
@@ -469,14 +474,25 @@ class ADB设备操作类:
         当前时间 = time.monotonic()
         if 当前时间 - self._最近ADB服务重置时间 < self._ADB服务重置冷却秒数:
             return
-        self._最近ADB服务重置时间 = 当前时间
-        try:
-            self._运行ADB服务命令("kill-server")
-            self._运行ADB服务命令("start-server")
-        except Exception:
-            # 后续的 devices 查询会给出更准确的最终错误；这里不吞掉查询结果。
-            pass
-        time.sleep(0.35)
+        # 冷却时间必须是进程级的：每个适配器各自记录时间会让多个
+        # 适配器在同一秒内重复 kill-server，正是长期运行时 ADB 抖动的
+        # 常见来源。锁内再次检查，避免等待锁期间重复重置。
+        with self._ADB服务重置锁:
+            当前时间 = time.monotonic()
+            if 当前时间 - self._最近ADB服务重置时间 < self._ADB服务重置冷却秒数:
+                return
+            if 当前时间 - type(self)._全局最近ADB服务重置时间 < self._ADB服务重置冷却秒数:
+                self._最近ADB服务重置时间 = 当前时间
+                return
+            self._最近ADB服务重置时间 = 当前时间
+            type(self)._全局最近ADB服务重置时间 = 当前时间
+            try:
+                self._运行ADB服务命令("kill-server")
+                self._运行ADB服务命令("start-server")
+            except Exception:
+                # 后续的 devices 查询会给出更准确的最终错误；这里不吞掉查询结果。
+                pass
+            time.sleep(0.35)
 
     def _连接已保存网络设备(self) -> None:
         """MuMu 网络 ADB 从设备列表消失时，仅重连保存的本机地址。"""
