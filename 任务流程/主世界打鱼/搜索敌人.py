@@ -61,8 +61,18 @@ class 搜索目标敌人任务(基础任务):
 
 
 
-        # 保存图像
-        cv2.imwrite(str(文件名), 屏幕图像)
+        # Windows 版 OpenCV 的 imwrite 对包含中文目录的路径可能静默
+        # 返回 False（例如“数据集”），但旧代码仍然把采集计数写成成功。
+        # 先编码成 PNG，再由 pathlib 写入字节，避免路径编码问题。
+        编码成功, PNG数据 = cv2.imencode(".png", 屏幕图像)
+        if not 编码成功:
+            上下文.置脚本状态("进攻界面截图编码失败，未计入数据集")
+            return False
+        try:
+            文件名.write_bytes(PNG数据.tobytes())
+        except OSError as 异常:
+            上下文.置脚本状态(f"进攻界面截图写入失败，未计入数据集：{异常}")
+            return False
 
         上下文.置脚本状态(f"目前总共已采集 {self.目录文件数 + 1} 张图像")
 

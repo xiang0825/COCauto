@@ -952,7 +952,13 @@ class 等待战斗结束并回营任务(基础任务):
             目录 = Path("数据集") / "战斗结果"
             目录.mkdir(parents=True, exist_ok=True)
             文件名 = 目录 / f"result_{int(time.time() * 1000)}.png"
-            cv2.imwrite(str(文件名), 屏幕图像)
+            # Windows 版 OpenCV 的 imwrite 对包含中文目录的路径可能静默
+            # 返回 False；先编码，再由 pathlib 写字节，确保“采集进攻
+            # 界面图像”真的留下结果页样本。
+            编码成功, PNG数据 = cv2.imencode(".png", 屏幕图像)
+            if not 编码成功:
+                raise RuntimeError("PNG 编码失败")
+            文件名.write_bytes(PNG数据.tobytes())
         except Exception as 异常:
             上下文.置脚本状态(f"保存战斗结果截图失败：{异常}")
 

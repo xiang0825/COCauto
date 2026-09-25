@@ -1,4 +1,7 @@
 import unittest
+import os
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -11,6 +14,31 @@ from 任务流程.主世界打鱼.等待战斗结束并回营 import 等待战�
 
 
 class 自适应战斗测试(unittest.TestCase):
+    def test_进攻界面截图使用中文数据集目录仍能写入(self):
+        任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
+        任务.数据集目录 = Path("数据集")
+        任务.目录文件数 = 0
+        任务.上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(
+                    return_value=np.zeros((24, 32, 3), dtype=np.uint8)
+                )
+            ),
+            置脚本状态=Mock(),
+        )
+        原目录 = os.getcwd()
+        with tempfile.TemporaryDirectory() as 临时目录:
+            try:
+                os.chdir(临时目录)
+                任务.数据集目录 = Path("数据集")
+                任务.数据集目录.mkdir()
+                self.assertIsNone(任务.采集当前画面())
+            finally:
+                os.chdir(原目录)
+            文件 = list(Path(临时目录).glob("数据集/*.png"))
+            self.assertEqual(len(文件), 1)
+            self.assertGreater(文件[0].stat().st_size, 0)
+
     def test_奖励页过渡最终结算时交给回营流程(self):
         任务 = 进攻任务.__new__(进攻任务)
         class 可控停止事件:

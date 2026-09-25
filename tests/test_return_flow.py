@@ -1,6 +1,8 @@
 import unittest
 import unittest.mock
+import os
 from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 
 import cv2
@@ -46,6 +48,24 @@ class _上下文:
 
 
 class 回营状态机测试(unittest.TestCase):
+    def test_结果截图使用中文目录仍能写入(self):
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        上下文 = SimpleNamespace(
+            设置=SimpleNamespace(是否采集进攻界面图像=True),
+            置脚本状态=unittest.mock.Mock(),
+        )
+        画面 = np.zeros((24, 32, 3), dtype=np.uint8)
+        原目录 = os.getcwd()
+        with tempfile.TemporaryDirectory() as 临时目录:
+            try:
+                os.chdir(临时目录)
+                任务.保存战斗结果截图(上下文, 画面)
+            finally:
+                os.chdir(原目录)
+            文件 = list(Path(临时目录).glob("数据集/战斗结果/*.png"))
+            self.assertEqual(len(文件), 1)
+            self.assertGreater(文件[0].stat().st_size, 0)
+
     def test_速刷等待后已自然结算时跳过放弃确认(self):
         任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
         上下文 = type("上下文", (), {"_战斗结束已确认": True})()
