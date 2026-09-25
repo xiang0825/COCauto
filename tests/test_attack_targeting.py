@@ -56,7 +56,7 @@ class 进攻目标选择测试(unittest.TestCase):
         self.assertEqual(结果[0]["类别名称"], "金库")
         self.assertLessEqual(len(结果), self.任务.最多集中目标数)
 
-    def test_资源模式先选择高价值储存建筑再处理外围采集器(self):
+    def test_资源模式先选择可达边缘目标再补充内圈储存建筑(self):
         结果 = self.任务.选择集中进攻目标(
             self.上下文,
             [
@@ -65,7 +65,7 @@ class 进攻目标选择测试(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(结果[0]["类别名称"], "金库")
+        self.assertEqual(结果[0]["类别名称"], "金矿")
         self.assertIn("覆盖全部2个资源目标", self.上下文.状态[-1])
 
     def test_资源模式覆盖全部已识别资源目标(self):
@@ -82,7 +82,7 @@ class 进攻目标选择测试(unittest.TestCase):
         self.assertEqual(len(结果), len(目标列表))
         self.assertIn("覆盖全部6个资源目标", self.上下文.状态[-1])
 
-    def test_资源模式兵力有限时储存建筑排在采集器之前(self):
+    def test_资源模式兵力有限时可达边缘目标排在内圈储存建筑之前(self):
         目标列表 = [
             {
                 "类别名称": "金矿",
@@ -105,8 +105,37 @@ class 进攻目标选择测试(unittest.TestCase):
 
         self.assertEqual(
             [目标["类别名称"] for 目标 in 结果[:3]],
-            ["金库", "金库", "金库"],
+            ["金矿", "金矿", "金矿"],
         )
+
+    def test_实机形态目标聚焦时优先覆盖可达边缘资源(self):
+        """高分阵营也不能把兵力先耗在 9 个内圈储存建筑。"""
+        self.上下文.当前兵栏清单 = [
+            {"类别": "兵种", "数量": 117},
+        ]
+        目标列表 = [
+            {
+                "类别名称": "金矿" if 索引 % 2 else "圣水采集器",
+                "置信度": 0.9,
+                "中心坐标": 坐标(80 + (索引 % 7) * 100, 80 + (索引 // 7) * 180),
+                "靠近边缘": True,
+            }
+            for 索引 in range(13)
+        ] + [
+            {
+                "类别名称": "金库" if 索引 % 2 else "圣水瓶",
+                "置信度": 0.95,
+                "中心坐标": 坐标(350 + 索引 * 30, 285 + 索引 * 12),
+                "靠近边缘": False,
+            }
+            for 索引 in range(9)
+        ]
+
+        结果 = self.任务.选择集中进攻目标(self.上下文, 目标列表)
+
+        self.assertEqual(len(结果), 10)
+        self.assertTrue(all(目标["靠近边缘"] for 目标 in 结果))
+        self.assertTrue(any("优先可达边缘资源" in 状态 for 状态 in self.上下文.状态))
 
     def test_资源模式首场有兵栏数据时立即按兵力收敛目标(self):
         self.上下文.设置 = type(
@@ -272,7 +301,7 @@ class 进攻目标选择测试(unittest.TestCase):
 
         self.assertEqual(结果[0]["类别名称"], "金库")
 
-    def test_分散探索也必须先交错储存建筑再处理采集器(self):
+    def test_分散探索也必须先交错可达边缘资源再处理内圈目标(self):
         self.上下文.设置 = type(
             "设置",
             (),
@@ -310,7 +339,7 @@ class 进攻目标选择测试(unittest.TestCase):
 
         self.assertEqual(
             set(目标["类别名称"] for 目标 in 结果[:2]),
-            {"圣水瓶", "金库"},
+            {"金矿", "圣水采集器"},
         )
 
 if __name__ == "__main__":
