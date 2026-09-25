@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import importlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -57,6 +58,33 @@ class ADB设备测试(unittest.TestCase):
             with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", exe路径):
                 数据库路径 = 任务数据库.默认数据库路径()
             self.assertEqual(Path(数据库路径), Path(临时目录) / "数据库" / "任务系统.db")
+
+    def test_单文件模式优先复用EXE上级的共享数据库(self):
+        with tempfile.TemporaryDirectory() as 临时目录:
+            根目录 = Path(临时目录)
+            exe路径 = 根目录 / "coc_robot" / "部落冲突.exe"
+            共享路径 = 根目录 / "数据库" / "任务系统.db"
+            共享路径.parent.mkdir(parents=True)
+            共享路径.touch()
+            with patch.object(sys, "frozen", True, create=True), \
+                    patch.object(sys, "executable", str(exe路径)):
+                数据库路径 = 任务数据库.默认数据库路径()
+            self.assertEqual(Path(数据库路径), 共享路径)
+
+    def test_源码模式优先复用项目上级的共享数据库(self):
+        数据库模块 = importlib.import_module("数据库.任务数据库")
+        with tempfile.TemporaryDirectory() as 临时目录:
+            根目录 = Path(临时目录)
+            假文件 = 根目录 / "coc_robot" / "数据库" / "任务数据库.py"
+            共享路径 = 根目录 / "数据库" / "任务系统.db"
+            假文件.parent.mkdir(parents=True)
+            共享路径.parent.mkdir(parents=True)
+            共享路径.touch()
+            with patch.object(数据库模块, "__file__", str(假文件)), \
+                    patch.object(sys, "frozen", False, create=True), \
+                    patch.dict("os.environ", {"COCAUTO_DB_PATH": ""}, clear=False):
+                数据库路径 = 任务数据库.默认数据库路径()
+            self.assertEqual(Path(数据库路径), 共享路径)
 
     def test_源码模式也遵守共享数据库环境变量(self):
         with tempfile.TemporaryDirectory() as 临时目录:

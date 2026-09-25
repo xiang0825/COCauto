@@ -451,13 +451,25 @@ class 任务数据库:
             os.makedirs(os.path.dirname(共享数据库), exist_ok=True)
             return 共享数据库
         if getattr(sys, "frozen", False):
-            # 单文件 EXE 的 _MEIPASS 是临时解包目录；数据库必须放在 EXE 旁边才能持久保存。
-            # 维护/升级界面时可通过环境变量临时接入正在运行的任务引擎数据库，
-            # 这样新版界面仍能实时观察当前任务，而不会复制正在写入的 SQLite 文件。
-            数据目录 = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "数据库")
+            # 单文件 EXE 的 _MEIPASS 是临时解包目录；数据库不能放进临时目录。
+            # 当前发布目录位于 ``项目/仓库``，正式数据库位于上一级的
+            # ``项目/数据库``。优先复用已经存在的上级共享库，避免 EXE
+            # 悄悄创建 ``仓库/数据库/任务系统.db``，造成日志和配置分叉。
+            EXE目录 = os.path.dirname(os.path.abspath(sys.executable))
+            共享目录 = os.path.join(os.path.dirname(EXE目录), "数据库")
+            共享路径 = os.path.join(共享目录, "任务系统.db")
+            if os.path.isfile(共享路径):
+                return 共享路径
+            # 独立分发时没有上级共享库，才在 EXE 旁创建持久化数据库。
+            数据目录 = os.path.join(EXE目录, "数据库")
             os.makedirs(数据目录, exist_ok=True)
             return os.path.join(数据目录, "任务系统.db")
-        return os.path.join(os.path.dirname(__file__), "任务系统.db")
+        源码目录 = os.path.dirname(os.path.abspath(__file__))
+        共享目录 = os.path.join(os.path.dirname(os.path.dirname(源码目录)), "数据库")
+        共享路径 = os.path.join(共享目录, "任务系统.db")
+        if os.path.isfile(共享路径):
+            return 共享路径
+        return os.path.join(源码目录, "任务系统.db")
 
     def __init__(self, 文件路径=None):
         self.文件路径 = 文件路径 or self.默认数据库路径()
