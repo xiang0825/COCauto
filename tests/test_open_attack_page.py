@@ -339,6 +339,37 @@ class 打开进攻页面测试(unittest.TestCase):
             705, 535, 延时=700, 是否精确点击=True
         )
 
+    def test_攻击点击后护栏短暂返回False但已进入战斗仍继续(self):
+        """真实点击已切入战斗时，不能因结算跨帧把任务链提前终止。"""
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        页面状态 = iter((
+            SimpleNamespace(页面="战斗结算"),
+            SimpleNamespace(页面="战斗中"),
+        ))
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=self.军队配置画面())
+            ),
+            点击=Mock(return_value=False),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            识别点击画面=Mock(side_effect=lambda **_: next(页面状态)),
+        )
+        任务._识别已存在的战斗页面 = Mock(side_effect=[None, "战斗中"])
+        任务._检测攻击按钮 = Mock(side_effect=[(705, 535), None, None])
+        任务._检测寻找目标按钮 = Mock(return_value=None)
+        任务._是否出现下一个 = Mock(return_value=False)
+
+        self.assertTrue(任务._等待并点击攻击按钮(上下文))
+        self.assertTrue(上下文._入口已进入战斗)
+        self.assertTrue(any(
+            "按已进入攻击流程继续复核" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+        上下文.点击.assert_called_once_with(
+            705, 535, 延时=700, 是否精确点击=True
+        )
+
     def test_入口超时边界仍在战斗时交给下兵流程(self):
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
         上下文 = SimpleNamespace(
