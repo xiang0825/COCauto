@@ -458,6 +458,22 @@ class 回营状态机测试(unittest.TestCase):
         self.assertEqual(上下文.点击记录, [(120, 130)])
         self.assertIn("已确认回到主界面，可进入下一场", 上下文.状态)
 
+    def test_回营使用已确认安全按钮绕过结算页普通点击护栏(self):
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = _匹配器()
+        任务.记录战斗结果 = lambda *_参数, **_关键字: True
+        上下文 = _上下文()
+        上下文.点击 = unittest.mock.Mock(
+            side_effect=AssertionError("结算页不应使用普通点击")
+        )
+        上下文.点击已确认安全按钮 = unittest.mock.Mock(return_value=True)
+
+        结果 = 任务.等待回营地按钮出现(上下文)
+
+        self.assertTrue(结果)
+        上下文.点击已确认安全按钮.assert_called_once_with(120, 130)
+        上下文.点击.assert_not_called()
+
     def test_主世界左下回营卡片模板失配时走视觉回营回退(self):
         """真实主世界结算布局没有中央模板时仍必须安全回营。"""
         结算图 = np.full((600, 800, 3), (35, 35, 35), dtype=np.uint8)
