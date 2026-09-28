@@ -16,16 +16,54 @@ class 任务日志:
     下次超时: float
 
 
-默认任务计划顺序 = [
-    "eagle",
-    "main_resource",
-    "night_resource",
-    "wall",
-    "building",
-    "hero",
-    "pet",
-    "research",
-]
+@dataclass(frozen=True)
+class 任务计划定义:
+    """任务计划的唯一元数据来源。
+
+    UI、配置迁移和机器人调度都必须基于这里的键，避免添加任务时只改了
+    某一层，造成“界面能选但机器人不会执行”的隐性故障。
+    """
+
+    键: str
+    名称: str
+    开关字段: str
+    类型: str
+    说明: str
+
+
+任务计划定义列表 = (
+    任务计划定义("main_resource", "主世界刷资源", "是否刷主世界", "bool", "按资源阈值搜索并进攻"),
+    任务计划定义("night_resource", "夜世界刷资源", "是否刷夜世界", "bool", "执行夜世界搜索、下兵和回营流程"),
+    任务计划定义("wall", "刷墙", "开启刷墙", "bool", "达到金币或圣水阈值后执行刷墙"),
+    任务计划定义("building", "建议建筑升级", "是否升级建议升级的建筑", "bool", "按游戏建议选择可升级建筑"),
+    任务计划定义("hero", "英雄或建筑升级", "欲升级的英雄或建筑", "list", "升级已配置的英雄或建筑目标"),
+    任务计划定义("pet", "战宠升级", "欲升级的战宠", "string", "升级已配置的战宠目标"),
+    任务计划定义("research", "兵种或法术研究", "欲升级的兵种或法术", "string", "升级已配置的研究目标"),
+)
+任务计划定义映射 = {定义.键: 定义 for 定义 in 任务计划定义列表}
+默认任务计划顺序 = [定义.键 for 定义 in 任务计划定义列表]
+
+
+def 规范化任务计划顺序(任务顺序) -> list[str]:
+    """过滤未知键、去重并补齐新增任务，保证旧配置可安全迁移。"""
+    if not isinstance(任务顺序, list) or not 任务顺序:
+        return 默认任务计划顺序.copy()
+    当前顺序 = []
+    for 任务键 in 任务顺序:
+        if 任务键 in 任务计划定义映射 and 任务键 not in 当前顺序:
+            当前顺序.append(任务键)
+    return 当前顺序 + [
+        任务键 for 任务键 in 默认任务计划顺序 if 任务键 not in 当前顺序
+    ]
+
+
+def 任务计划是否启用(设置, 任务键: str) -> bool:
+    """按集中定义判断任务是否具备执行条件。"""
+    定义 = 任务计划定义映射.get(任务键)
+    if 定义 is None:
+        return False
+    值 = getattr(设置, 定义.开关字段, None)
+    return bool(值 if 定义.类型 != "list" else (值 or []))
 
 
 @dataclass
@@ -151,14 +189,6 @@ class 机器人设置:
         }
     )
 
-    是否刷天鹰火炮: bool = field(
-        default=False,
-        metadata={
-            "显示名称": "是否刷天鹰火炮",
-            "描述": "开启后会自动搜索天鹰火炮并使用雷电法术攻击，用于刷成就",
-            "UI类型": "bool"
-        }
-    )
     是否快速刷资源: bool = field(
         default=False,
         metadata={
@@ -400,16 +430,8 @@ class 机器人设置:
             self.下兵间隔毫秒 = max(5, min(300, int(self.下兵间隔毫秒)))
         except (TypeError, ValueError):
             self.下兵间隔毫秒 = 25
-        if not isinstance(self.任务计划顺序, list) or not self.任务计划顺序:
-            self.任务计划顺序 = 默认任务计划顺序.copy()
-        else:
-            # 兼容旧配置，同时丢弃未来版本中可能残留的未知任务键。
-            已知任务 = set(默认任务计划顺序)
-            当前顺序 = []
-            for 项 in self.任务计划顺序:
-                if 项 in 已知任务 and 项 not in 当前顺序:
-                    当前顺序.append(项)
-            self.任务计划顺序 = 当前顺序 + [项 for 项 in 默认任务计划顺序 if 项 not in 当前顺序]
+        # 兼容旧配置，同时丢弃未知任务键并补齐新增任务。
+        self.任务计划顺序 = 规范化任务计划顺序(self.任务计划顺序)
                         # "com.tencent.tmgp.supercell.clashofclans")
 
 @dataclass

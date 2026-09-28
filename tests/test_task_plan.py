@@ -1,9 +1,18 @@
 import unittest
 import threading
+import sys
+from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from 数据库.任务数据库 import 机器人设置
+import numpy as np
+import cv2
+
+from 数据库.任务数据库 import (
+    机器人设置,
+    默认任务计划顺序,
+    任务计划定义列表,
+)
 from 界面.日志面板 import 日志面板
 from 界面.任务计划面板 import 生成任务计划
 from 任务流程.主世界打鱼.搜索敌人 import 搜索目标敌人任务
@@ -297,6 +306,133 @@ class 任务计划测试(unittest.TestCase):
         self.assertEqual(设置.任务计划顺序.count("night_resource"), 1)
         self.assertIn("main_resource", 设置.任务计划顺序)
 
+    def test_旧天鹰任务键会被迁移掉(self):
+        设置 = 机器人设置(任务计划顺序=["eagle", "main_resource", "eagle"])
+
+        self.assertNotIn("eagle", 默认任务计划顺序)
+        self.assertNotIn("eagle", 设置.任务计划顺序)
+
+    def test_所有可选任务都有对应的计划入口(self):
+        设置 = 机器人设置(
+            是否刷主世界=True,
+            是否刷夜世界=True,
+            开启刷墙=True,
+            是否升级建议升级的建筑=True,
+            欲升级的英雄或建筑=["野蛮人之王"],
+            欲升级的战宠="莱希",
+            欲升级的兵种或法术="雷电法术",
+        )
+        机器人 = 自动化机器人.__new__(自动化机器人)
+
+        self.assertEqual(
+            set(机器人._任务计划顺序(设置)),
+            {"main_resource", "night_resource", "wall", "building", "hero", "pet", "research"},
+        )
+
+    def test_任务注册表同时覆盖默认顺序和实际分派(self):
+        注册表键 = {定义.键 for 定义 in 任务计划定义列表}
+        self.assertEqual(注册表键, set(默认任务计划顺序))
+
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人._执行主世界刷资源计划 = Mock(return_value=True)
+        机器人._执行夜世界刷资源计划 = Mock(return_value=True)
+        机器人._执行刷墙计划 = Mock(return_value=True)
+        机器人._执行升级计划 = Mock(return_value=True)
+        上下文 = SimpleNamespace(
+            _资源计划已打满=False,
+            置脚本状态=Mock(),
+        )
+        for 任务键 in 注册表键:
+            结果, 资源打满 = 机器人._执行任务计划项(任务键, 上下文, object())
+            self.assertTrue(结果, 任务键)
+            self.assertFalse(资源打满, 任务键)
+
+        未知结果 = 机器人._执行任务计划项("unknown", 上下文, object())
+        self.assertEqual(未知结果, (False, False))
+
+    def test_注册表每个任务都有可导入的实际执行入口(self):
+        入口 = {
+            "main_resource": ("任务流程.主世界打鱼", "主世界打鱼任务"),
+            "night_resource": ("任务流程.夜世界.夜世界打鱼", "夜世界打鱼任务"),
+            "wall": ("任务流程.升级城墙", "城墙升级任务"),
+            "building": ("任务流程.建筑升级", "建筑升级任务"),
+            "hero": ("任务流程.建筑升级", "建筑升级任务"),
+            "pet": ("任务流程.战宠升级", "战宠升级任务"),
+            "research": ("任务流程.兵种或法术升级", "兵种或法术升级任务"),
+        }
+        for 定义 in 任务计划定义列表:
+            模块名, 对象名 = 入口[定义.键]
+            执行入口 = getattr(import_module(模块名), 对象名)
+            self.assertTrue(callable(执行入口), 定义.键)
+            self.assertTrue(callable(getattr(执行入口, "执行", None)), 定义.键)
+
+    def test_ADB初始化失败会安全停止并留下错误日志(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.机器人标志 = "测试机器人"
+        机器人.停止事件 = threading.Event()
+        机器人.数据库 = SimpleNamespace(
+            获取机器人设置=Mock(
+                return_value=机器人设置(
+                    ADB已确认模拟器=True,
+                    ADB设备序列号="127.0.0.1:16416",
+                )
+            )
+        )
+        机器人.记录日志 = Mock()
+
+        with patch(
+            "线程.自动化机器人.ADB设备操作类",
+            side_effect=RuntimeError("模拟 ADB 初始化失败"),
+        ):
+            机器人._任务流程()
+
+        self.assertTrue(机器人.停止事件.is_set())
+        self.assertIn("初始化失败", 机器人.停止原因)
+        机器人.记录日志.assert_called_once()
+
+    def test_通知器创建后上下文初始化失败会关闭通知器(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.机器人标志 = "测试机器人"
+        机器人.停止事件 = threading.Event()
+        机器人.数据库 = SimpleNamespace(
+            获取机器人设置=Mock(
+                return_value=机器人设置(
+                    ADB已确认模拟器=True,
+                    ADB设备序列号="127.0.0.1:16416",
+                    企业微信webhook="https://example.invalid/webhook",
+                )
+            )
+        )
+        机器人.记录日志 = Mock()
+
+        class 假设备:
+            def 设置目标包名(self, _包名):
+                return None
+
+        class 假通知器:
+            实例 = None
+
+            def __init__(self, _webhook):
+                type(self).实例 = self
+                self.关闭次数 = 0
+
+            def 关闭(self):
+                self.关闭次数 += 1
+
+        假通知模块 = SimpleNamespace(企业微信通知器=假通知器)
+        with patch(
+            "线程.自动化机器人.ADB设备操作类",
+            return_value=假设备(),
+        ), patch(
+            "线程.自动化机器人.鼠标控制器",
+            side_effect=RuntimeError("模拟输入控制器初始化失败"),
+        ), patch.dict(sys.modules, {"工具包.企业微信通知": 假通知模块}):
+            机器人._任务流程()
+
+        self.assertIsNotNone(假通知器.实例)
+        self.assertEqual(假通知器.实例.关闭次数, 1)
+        self.assertTrue(机器人.停止事件.is_set())
+
     def test_战利品优先级和自动配兵配置有安全默认值(self):
         设置 = 机器人设置(
             战利品优先级="未知",
@@ -348,25 +484,36 @@ class 任务计划测试(unittest.TestCase):
         回主世界.assert_not_called()
         self.assertFalse(机器人.停止事件.is_set())
 
-    def test_天鹰任务无法回到主世界时不继续点击(self):
+    def test_未选中主世界刷资源时刷墙不会越权调用(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
         机器人.停止事件 = threading.Event()
         上下文 = SimpleNamespace(
+            刷墙需要资源=False,
             页面恢复失败=False,
+            _启用任务键集合=frozenset({"wall"}),
             置脚本状态=Mock(),
+            请求任务计划等待=Mock(),
         )
-        检测登录 = Mock()
 
-        with patch("线程.自动化机器人.到主世界任务") as 回主世界, \
-                patch("任务流程.天鹰火炮成就.刷天鹰火炮任务") as 刷天鹰:
-            回主世界.return_value.执行.return_value = False
+        def 模拟刷墙(_任务键, 当前上下文, _检测登录):
+            当前上下文.刷墙需要资源 = True
+            return False
 
-            结果 = 机器人._执行天鹰计划(上下文, 检测登录)
+        机器人._执行升级计划 = Mock(side_effect=模拟刷墙)
+        机器人._执行主世界刷资源计划 = Mock(return_value=True)
 
-        self.assertFalse(结果)
-        self.assertTrue(上下文.页面恢复失败)
-        刷天鹰.assert_not_called()
-        检测登录.assert_not_called()
+        结果, _ = 机器人._执行任务计划项("wall", 上下文, object())
+
+        self.assertTrue(结果)
+        机器人._执行主世界刷资源计划.assert_not_called()
+        机器人._执行升级计划.assert_called_once_with("wall", 上下文, unittest.mock.ANY)
+        上下文.请求任务计划等待.assert_called_once_with(
+            60, "刷墙资源不足且主世界刷资源未选中"
+        )
+        self.assertTrue(any(
+            "主世界刷资源未选中" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
 
     def test_夜世界圣水车未完成时禁止继续下一场战斗(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
@@ -884,6 +1031,27 @@ class 任务计划测试(unittest.TestCase):
         键盘.按字符按压.assert_not_called()
         self.assertFalse(上下文.页面恢复失败)
 
+    def test_哥布林宝石提示露出主页锚点仍安全停止(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(画面, (365, 100), (740, 412), (220, 220, 220), -1)
+        cv2.rectangle(画面, (700, 108), (730, 150), (20, 20, 210), -1)
+        cv2.rectangle(画面, (490, 326), (613, 398), (60, 210, 80), -1)
+        上下文 = SimpleNamespace(
+            键盘=Mock(),
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=画面)),
+            停止事件=threading.Event(),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        with patch("线程.自动化机器人.模板匹配引擎") as 引擎工厂:
+            引擎工厂.return_value.执行匹配.return_value = (True, (0, 0), None)
+            self.assertFalse(机器人._确保主世界主页面(上下文))
+            引擎工厂.return_value.执行匹配.assert_not_called()
+        self.assertTrue(上下文.页面恢复失败)
+        self.assertTrue(上下文.停止事件.is_set())
+        上下文.键盘.按字符按压.assert_not_called()
+
     def test_世界转场后页级主页确认会跳过ESC(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
         键盘 = Mock()
@@ -973,6 +1141,31 @@ class 任务计划测试(unittest.TestCase):
         机器人._执行升级计划.assert_called_once_with("wall", 上下文, unittest.mock.ANY)
         self.assertTrue(any(
             "禁止继续其他任务和点击" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_刷墙补资源失败返回明确失败而不是隐式None(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = threading.Event()
+
+        def 模拟刷墙(_任务键, 上下文, _检测登录):
+            上下文.刷墙需要资源 = True
+            return False
+
+        机器人._执行升级计划 = Mock(side_effect=模拟刷墙)
+        机器人._执行主世界刷资源计划 = Mock(return_value=False)
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            刷墙需要资源=False,
+            置脚本状态=Mock(),
+        )
+
+        结果 = 机器人._执行刷墙计划(上下文, Mock())
+
+        self.assertFalse(结果)
+        机器人._执行主世界刷资源计划.assert_called_once()
+        self.assertTrue(any(
+            "禁止重新打开城墙面板" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 

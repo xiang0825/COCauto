@@ -244,6 +244,17 @@ class ADB设备测试(unittest.TestCase):
         设备 = ADB设备信息("emulator-5556", "device", "product:a55x model:SM_A5560 device:a55x")
         self.assertFalse(设备.疑似实体设备)
 
+    def test_MuMu显示服务识别emulator别名并启用多显示截图(self):
+        runner = 假Runner(结果(
+            b"DisplayDeviceInfo{mumuscreen001: uniqueId=local:4619827767814508545}"
+        ))
+        设备 = ADB设备操作类(r"C:\adb\adb.exe", "emulator-5556", runner=runner)
+        self.assertTrue(设备._是MuMu连接())
+        self.assertEqual(
+            runner.命令[0][1:],
+            ["-s", "emulator-5556", "shell", "dumpsys", "display"],
+        )
+
     def test_保存序列号失效时自动切换唯一CoC模拟器(self):
         class 失效序列号Runner:
             def __init__(自身):
@@ -370,35 +381,7 @@ mViewports=[DisplayViewport{type=EXTERNAL, valid=true, displayId=6, uniqueId='lo
         )
 
     def test_MuMu触控命令明确发送到游戏display(self):
-        窗口输出 = b"""
-  Display: mDisplayId=0
-    mCurrentFocus=Window{u0 app.lawnchair/app.lawnchair.LawnchairLauncher}
-    mFocusedApp=ActivityRecord{launcher app.lawnchair/.LawnchairLauncher}
-  Display: mDisplayId=7
-    mCurrentFocus=Window{u0 com.supercell.clashofclans/com.supercell.titan.GameApp}
-    mFocusedApp=ActivityRecord{game com.supercell.clashofclans/com.supercell.titan.GameApp}
-"""
-        runner = 假Runner(
-            结果(b"List of devices attached\n127.0.0.1:16416 device product:a55x model:SM_A5560\n"),
-            结果(b"topResumedActivity=ActivityRecord{1 u0 com.supercell.clashofclans/com.supercell.titan.GameApp t15}\n"),
-            结果(窗口输出),
-            结果(b"""Event Hub State:
-    27: Xiaomi Touchscreen
-      Path: /dev/input/event16
-Input Reader State:
-  Device 28: Xiaomi Touchscreen
-    EventHub Devices: [ 27 ]
-      Viewport INTERNAL: displayId=7, uniqueId=local:test
-"""),
-            结果(b"""ABS_MT_POSITION_X : value 0, min 0, max 720
-ABS_MT_POSITION_Y : value 0, min 0, max 1280
-"""),
-            结果(b"""Display: mDisplayId=7 (organized)
-  cur=1280x720 app=1280x720 rng=720x720-1280x1280
-"""),
-            结果(b"Physical size: 1280x720"),
-            结果(),
-        )
+        runner = 假Runner()
         设备 = ADB设备操作类(
             r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
             "127.0.0.1:16416",
@@ -406,12 +389,15 @@ ABS_MT_POSITION_Y : value 0, min 0, max 1280
             自动检测路径=False,
         )
         设备.设置目标包名("com.supercell.clashofclans")
-        self.assertTrue(设备.触控(12, 34))
-        self.assertEqual(runner.命令[-1][1:4], ["-s", "127.0.0.1:16416", "shell"])
-        self.assertEqual(runner.命令[-1][4:6], ["sh", "-c"])
-        self.assertIn("sendevent /dev/input/event16", runner.命令[-1][-1])
-        self.assertIn("sendevent /dev/input/event16 3 53 679", runner.命令[-1][-1])
-        self.assertIn("sendevent /dev/input/event16 3 54 19", runner.命令[-1][-1])
+        with patch.object(设备, "_验证目标"), \
+                patch.object(设备, "_验证输入前台"), \
+                patch.object(设备, "_输入显示参数", return_value=["-d", "7"]), \
+                patch.object(设备, "参考坐标转设备坐标", return_value=(19, 41)):
+            self.assertTrue(设备.触控(12, 34))
+        self.assertEqual(
+            runner.命令[-1][1:],
+            ["-s", "127.0.0.1:16416", "shell", "input", "-d", "7", "tap", "19", "41"],
+        )
 
     def test_MuMu地图滑动使用input_display而不是旋转事件轴(self):
         """organized display 的单指拖动必须沿用截图方向，不能误点 HUD。"""

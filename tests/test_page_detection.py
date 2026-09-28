@@ -28,6 +28,17 @@ class 页面识别测试(unittest.TestCase):
         数据 = np.fromfile(路径, dtype=np.uint8)
         return cv2.imdecode(数据, cv2.IMREAD_COLOR)
 
+    def test_哥布林宝石提示覆盖主页时优先拦截(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (365, 100), (740, 412), (220, 220, 220), -1)
+        cv2.rectangle(图像, (700, 108), (730, 150), (20, 20, 210), -1)
+        cv2.rectangle(图像, (490, 326), (613, 398), (60, 210, 80), -1)
+        识别器 = 页面识别器(Mock())
+        self.assertEqual(识别器.定位哥布林宝石提示关闭按钮(图像), (716, 128))
+        self.assertEqual(识别器.识别(图像).页面, "哥布林宝石提示")
+        图像[325:400, 490:614] = (220, 220, 220)
+        self.assertIsNone(识别器.定位哥布林宝石提示关闭按钮(图像))
+
     def test_顶号等待按毫秒单位为200秒(self):
         self.assertEqual(检测游戏登录状态任务.顶号等待毫秒, 200_000)
 

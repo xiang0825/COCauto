@@ -5,7 +5,11 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Callable, Optional
 
-from 数据库.任务数据库 import 默认任务计划顺序, 机器人设置
+from 数据库.任务数据库 import (
+    默认任务计划顺序,
+    任务计划定义列表,
+    机器人设置,
+)
 
 
 def 生成任务计划(设置) -> list[dict[str, str]]:
@@ -16,21 +20,25 @@ def 生成任务计划(设置) -> list[dict[str, str]]:
     def 布尔字段(字段名: str, 默认值: bool = False) -> bool:
         return bool(getattr(设置, 字段名, 默认值))
 
-    英雄建筑 = getattr(设置, "欲升级的英雄或建筑", None) or []
-    战宠 = getattr(设置, "欲升级的战宠", "") or ""
-    研究 = getattr(设置, "欲升级的兵种或法术", "") or ""
+    任务状态 = []
+    for 定义 in 任务计划定义列表:
+        值 = getattr(设置, 定义.开关字段, None)
+        已启用 = bool(值 if 定义.类型 != "list" else (值 or []))
+        说明 = 定义.说明
+        if 定义.类型 == "list":
+            说明 += "；目标：" + ("、".join(map(str, 值)) if 值 else "未设置目标")
+        elif 定义.类型 == "string":
+            说明 += "；目标：" + (str(值) if 值 else "未设置目标")
+        任务状态.append({
+            "名称": 定义.名称,
+            "状态": "已启用" if 已启用 else "未启用",
+            "说明": 说明,
+        })
     return [
         {"名称": "启动游戏与登录检查", "状态": "固定步骤", "说明": "启动客户端并确认进入可操作的主界面"},
         {"名称": "收集已有资源", "状态": "固定步骤", "说明": "读取并收集可领取资源"},
-        {"名称": "主世界刷资源", "状态": "已启用" if 布尔字段("是否刷主世界") else "未启用", "说明": "按资源阈值搜索并进攻"},
-        {"名称": "夜世界刷资源", "状态": "已启用" if 布尔字段("是否刷夜世界") else "未启用", "说明": "执行夜世界搜索、下兵和回营流程"},
+        *任务状态,
         {"名称": "速刷资源", "状态": "已启用" if 布尔字段("是否快速刷资源") else "未启用", "说明": "下兵后快速结束战斗"},
-        {"名称": "天鹰火炮成就", "状态": "已启用" if 布尔字段("是否刷天鹰火炮") else "未启用", "说明": "搜索目标并执行成就战斗流程"},
-        {"名称": "刷墙", "状态": "已启用" if 布尔字段("开启刷墙") else "未启用", "说明": "达到金币或圣水阈值后执行刷墙"},
-        {"名称": "建议建筑升级", "状态": "已启用" if 布尔字段("是否升级建议升级的建筑") else "未启用", "说明": "按游戏建议选择可升级建筑"},
-        {"名称": "英雄或建筑升级", "状态": "已启用" if 英雄建筑 else "未启用", "说明": "目标：" + ("、".join(map(str, 英雄建筑)) if 英雄建筑 else "未设置目标")},
-        {"名称": "战宠升级", "状态": "已启用" if 战宠 else "未启用", "说明": "目标：" + (战宠 or "未设置目标")},
-        {"名称": "兵种或法术研究", "状态": "已启用" if 研究 else "未启用", "说明": "目标：" + (研究 or "未设置目标")},
         {"名称": "资源打满后的行为", "状态": getattr(设置, "资源打满后动作", "退出"), "说明": "资源达到目标后退出任务或保持待机"},
         {"名称": "升级完成弹窗确认", "状态": "已启用" if 布尔字段("是否自动确认升级完成") else "未启用", "说明": "仅在明确识别升级完成文字和确认按钮后自动确认"},
     ]
@@ -39,16 +47,6 @@ def 生成任务计划(设置) -> list[dict[str, str]]:
 class 任务计划面板(ttk.Frame):
     """左侧勾选并排序任务，右侧修改参数，修改后自动保存。"""
 
-    _任务定义 = (
-        ("main_resource", "主世界刷资源", "是否刷主世界", "bool"),
-        ("night_resource", "夜世界刷资源", "是否刷夜世界", "bool"),
-        ("eagle", "天鹰火炮成就", "是否刷天鹰火炮", "bool"),
-        ("wall", "刷墙", "开启刷墙", "bool"),
-        ("building", "建议建筑升级", "是否升级建议升级的建筑", "bool"),
-        ("hero", "英雄或建筑升级", "欲升级的英雄或建筑", "list"),
-        ("pet", "战宠升级", "欲升级的战宠", "string"),
-        ("research", "兵种或法术研究", "欲升级的兵种或法术", "string"),
-    )
     _配置任务 = {
         "resource_policy": "资源打满后的行为",
         "combat_options": "进攻选项",
@@ -71,11 +69,6 @@ class 任务计划面板(ttk.Frame):
         self._创建界面()
 
     def _创建界面(self):
-        标题栏 = ttk.Frame(self)
-        标题栏.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(标题栏, text="任务计划", font=("Microsoft YaHei UI", 16, "bold")).pack(side=tk.LEFT)
-        ttk.Label(标题栏, text="勾选、排序后立即生效；配置修改会自动保存。", foreground="#6b7280").pack(side=tk.LEFT, padx=(12, 0), pady=(4, 0))
-
         顶部 = ttk.Frame(self)
         顶部.pack(fill=tk.X, pady=(0, 8))
         self.当前配置 = tk.StringVar(value="未选择机器人")
@@ -90,8 +83,26 @@ class 任务计划面板(ttk.Frame):
         主体.pack(fill=tk.BOTH, expand=True)
         任务区 = ttk.LabelFrame(主体, text="任务计划（↑ ↓ 调整执行顺序）", padding=8)
         任务区.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
-        self._任务行容器 = ttk.Frame(任务区)
-        self._任务行容器.pack(fill=tk.Y, expand=True)
+        滚动区 = ttk.Frame(任务区)
+        滚动区.pack(fill=tk.BOTH, expand=True)
+        任务画布 = tk.Canvas(滚动区, width=340, highlightthickness=0,
+                           bg="#f7f8fa", bd=0)
+        任务滚动条 = ttk.Scrollbar(滚动区, orient=tk.VERTICAL, command=任务画布.yview)
+        任务画布.configure(yscrollcommand=任务滚动条.set)
+        任务画布.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        任务滚动条.pack(side=tk.RIGHT, fill=tk.Y)
+        self._任务行容器 = ttk.Frame(任务画布)
+        内部窗口 = 任务画布.create_window((0, 0), window=self._任务行容器, anchor=tk.NW)
+        self._任务行容器.bind(
+            "<Configure>",
+            lambda _事件: 任务画布.configure(scrollregion=任务画布.bbox("all")),
+        )
+        任务画布.bind(
+            "<Configure>",
+            lambda 事件: 任务画布.itemconfigure(内部窗口, width=事件.width),
+        )
+        任务画布.bind("<MouseWheel>",
+                    lambda 事件: 任务画布.yview_scroll(-int(事件.delta / 120), "units"))
         ttk.Label(任务区, text="启动、登录和资源收集为固定步骤。", foreground="#6b7280", wraplength=250).pack(anchor=tk.W, pady=(10, 0))
 
         参数区 = ttk.LabelFrame(主体, text="当前任务配置", padding=10)
@@ -159,16 +170,17 @@ class 任务计划面板(ttk.Frame):
         self._任务变量.clear()
         if not self._设置:
             return
-        定义 = {键: (名称, 字段, 类型) for 键, 名称, 字段, 类型 in self._任务定义}
+        定义 = {项.键: 项 for 项 in 任务计划定义列表}
         顺序 = list(getattr(self._设置, "任务计划顺序", []) or 默认任务计划顺序)
-        顺序 += [键 for 键, *_ in self._任务定义 if 键 not in 顺序]
+        顺序 += [项.键 for 项 in 任务计划定义列表 if 项.键 not in 顺序]
         for 序号, 键 in enumerate(顺序, 1):
             if 键 not in 定义:
                 continue
-            名称, 字段, 类型 = 定义[键]
+            任务定义 = 定义[键]
+            名称 = 任务定义.名称
             行 = ttk.Frame(self._任务行容器)
             行.pack(fill=tk.X, pady=2)
-            变量 = tk.BooleanVar(value=self._任务状态(字段, 类型))
+            变量 = tk.BooleanVar(value=self._任务状态(任务定义.开关字段, 任务定义.类型))
             self._任务变量[名称] = 变量
             ttk.Checkbutton(行, text=f"{序号:02d} {名称}", variable=变量, command=self._任务开关改变).pack(side=tk.LEFT, fill=tk.X, expand=True)
             ttk.Button(行, text="↑", width=3, command=lambda 键=键: self._移动任务(键, -1)).pack(side=tk.RIGHT, padx=(2, 0))
@@ -346,7 +358,8 @@ class 任务计划面板(ttk.Frame):
             return
         if self._自动保存计时器:
             self.after_cancel(self._自动保存计时器)
-        self._自动保存计时器 = self.after(250, self._自动保存)
+        # 键入配置时不要每几个字符就打开一次数据库连接，降低卡顿和磁盘写入。
+        self._自动保存计时器 = self.after(600, self._自动保存)
 
     def _自动保存(self):
         self._自动保存计时器 = None
@@ -358,14 +371,14 @@ class 任务计划面板(ttk.Frame):
         try:
             self._从编辑器写回设置()
             self._设置.服务器 = self.服务器变量.get() or "国际服"
-            for _, 名称, 字段, 类型 in self._任务定义:
-                变量值 = self._任务变量.get(名称, tk.BooleanVar(value=False)).get()
-                if 类型 == "bool":
-                    setattr(self._设置, 字段, bool(变量值))
-                elif 类型 == "list" and not 变量值:
-                    setattr(self._设置, 字段, [])
-                elif 类型 == "string" and not 变量值:
-                    setattr(self._设置, 字段, "")
+            for 任务定义 in 任务计划定义列表:
+                变量值 = self._任务变量.get(任务定义.名称, tk.BooleanVar(value=False)).get()
+                if 任务定义.类型 == "bool":
+                    setattr(self._设置, 任务定义.开关字段, bool(变量值))
+                elif 任务定义.类型 == "list" and not 变量值:
+                    setattr(self._设置, 任务定义.开关字段, [])
+                elif 任务定义.类型 == "string" and not 变量值:
+                    setattr(self._设置, 任务定义.开关字段, "")
             self._设置.__post_init__()
             self.数据库.保存机器人设置(self.当前机器人ID, self._设置)
             self.状态.set("已自动保存")

@@ -20,7 +20,7 @@ def 获取简洁版本号():
                 stderr=subprocess.DEVNULL, encoding="utf-8"
             ).strip().split("-")[0]
         except Exception:
-            版本号 = "unknown"
+            版本号 = "本地版"
     return 版本号
 
 def 写入版本文件():

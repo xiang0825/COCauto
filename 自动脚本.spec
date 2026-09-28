@@ -10,6 +10,11 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 项目根 = os.path.abspath(SPECPATH)
 版本号文件 = os.path.join(项目根, "版本号.txt")
 
+# collect_submodules() 在 Analysis() 执行前不会自动使用 pathex；如果
+# 不先加入项目根目录，它会返回空列表，导致延迟导入的任务在 EXE 中缺失。
+if 项目根 not in sys.path:
+    sys.path.insert(0, 项目根)
+
 环境变量 = os.environ.copy()
 环境变量["PYTHONIOENCODING"] = "utf-8"
 subprocess.run(
@@ -41,12 +46,11 @@ def 收集数据文件(目录, 扩展名=None):
      "模块/检测/OCR识别器/rapidocr_onnxruntime"),
     (os.path.join(项目根, "模块", "检测", "YOLO检测器", "模型", "best.onnx"),
      "模块/检测/YOLO检测器/模型"),
-    (os.path.join(项目根, "任务流程", "天鹰火炮成就", "模型", "best.onnx"),
-     "任务流程/天鹰火炮成就/模型"),
     (os.path.join(项目根, "任务流程", "战宠升级", "模型", "战宠小屋检测模块.onnx"),
      "任务流程/战宠升级/模型"),
     (os.path.join(项目根, "任务流程", "战宠升级", "img.png"), "任务流程/战宠升级"),
     (版本号文件, "."),
+    (os.path.join(项目根, "界面", "城控.ico"), "."),
 ]
 数据文件 += 收集数据文件(
     "模块",
@@ -79,6 +83,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="部落冲突",
+    icon=os.path.join(项目根, "界面", "城控.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

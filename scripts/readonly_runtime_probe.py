@@ -28,6 +28,8 @@ def readonly_runner(argv, **kwargs):
     args = list(argv[1:])
     if args[:1] == ['-s']:
         args = args[2:]
+    if args[:1] == ['connect']:
+        raise RuntimeError("目标设备不在线；只读探针不会执行 adb connect")
     allowed = (
         args in (['devices'], ['devices', '-l'], ['get-state'])
         or (args[:2] == ['shell', 'getprop'] and len(args) in (2, 3))
@@ -124,10 +126,21 @@ def main():
             "foreground": device.获取当前前台包名(),
             "system_available_mb": round(win32api.GlobalMemoryStatusEx()['AvailPhys'] / 1048576),
         }, ensure_ascii=False), flush=True)
+    except RuntimeError as error:
+        # 离线设备、只读护栏等预期环境问题不应吐出长 traceback，
+        # 让自动化检查和用户都能直接看到可行动的结构化结果。
+        print(json.dumps({
+            "summary": False,
+            "samples": len(samples),
+            "seconds": round(time.monotonic() - started, 1),
+            "error": str(error),
+            "read_only": True,
+        }, ensure_ascii=False), flush=True)
+        return 2
     finally:
         ocr.释放模型()
         screen.安全清理()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main() or 0)

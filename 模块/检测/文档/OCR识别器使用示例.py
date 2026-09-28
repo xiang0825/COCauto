@@ -21,7 +21,7 @@ def draw_ocr_results(image_path, result):
 
     try:
         font = ImageFont.truetype("simhei.ttf", 20)
-    except:
+    except Exception:
         font = ImageFont.load_default()
 
     for item in result:

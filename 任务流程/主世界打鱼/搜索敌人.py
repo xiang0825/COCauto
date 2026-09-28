@@ -608,7 +608,7 @@ class 搜索目标敌人任务(基础任务):
             # 处理常见OCR错误字符
             清理文本 = 文本.replace('O', '0').replace('o', '0').replace(' ', '')
             return int(''.join(filter(str.isdigit, 清理文本)))
-        except:
+        except Exception:
             return 0  # 确保始终返回数值
 
     def 调整搜索目标(self, 上下文, 原始目标: int, 当前次数: int) -> int:

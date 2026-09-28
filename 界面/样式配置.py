@@ -1,54 +1,49 @@
-"""
-样式配置模块 - 配置全局 ttk 样式
-"""
+"""统一的浅色桌面工作台样式。"""
 from tkinter import ttk
 
 
+背景 = "#f7f8fa"
+白色 = "#ffffff"
+文字 = "#253142"
+次要 = "#697788"
+边框 = "#e4e8ed"
+强调 = "#bd6536"
+
+
 def 配置现代化样式():
-    """配置现代化控件样式"""
-    style = ttk.Style()
-
-    # 统一的浅色工作台配色：顶部为蓝色状态条，内容区保持高对比度。
-    style.configure("Header.TFrame", background="#eef4ff")
-    style.configure("Title.TLabel", background="#eef4ff", foreground="#173b6c",
-                    font=("Segoe UI", 20, "bold"))
-    style.configure("Subtitle.TLabel", background="#eef4ff", foreground="#607089",
-                    font=("Segoe UI", 9))
-    style.configure("Status.TLabel", background="#eef4ff", foreground="#16724a",
-                    font=("Segoe UI", 10, "bold"))
-
-    # 配置圆角按钮
-    style.configure("TButton", padding=(8, 6), relief="flat",
-                    font=("Segoe UI", 10))
-    style.map("TButton",
-              relief=[("active", "sunken"), ("!active", "flat")],
-              background=[("active", "#e5e5e5"), ("!active", "white")]
-              )
-
-    # 状态按钮颜色
-    style.configure("success.TButton", foreground="white", background="#2ea44f")
-    style.map("success.TButton",
-              background=[("active", "#22863a"), ("!active", "#2ea44f")])
-    style.configure("danger.TButton", foreground="white", background="#cb2431")
-    style.map("danger.TButton",
-              background=[("active", "#9f1c23"), ("!active", "#cb2431")])
-    style.configure("primary.TButton", foreground="white", background="#0366d6")
-    style.map("primary.TButton",
-              background=[("active", "#0256b5"), ("!active", "#0366d6")])
-
-    # 列表样式
-    style.configure("TListbox", font=("Segoe UI", 10), relief="flat")
-
-    # 标签框样式
-    style.configure("TLabelframe", font=("Segoe UI", 10, "bold"))
-    style.configure("TLabelframe.Label", font=("Segoe UI", 10, "bold"))
-
-    # 输入控件
-    style.configure("TEntry", padding=5, relief="flat")
-
-    # 机器人管理专用列表样式
-    style.configure("Robot.Treeview", rowheight=36, font=("Segoe UI", 10))
-    style.configure("TNotebook", tabmargins=(4, 4, 4, 0))
-    style.configure("TNotebook.Tab", padding=(14, 8), font=("Segoe UI", 10))
-    style.configure("TPanedwindow", background="#e7edf6")
-
+    样式 = ttk.Style()
+    样式.configure("TFrame", background=背景)
+    样式.configure("TLabel", background=背景, foreground=文字,
+                   font=("Microsoft YaHei UI", 10))
+    样式.configure("TButton", padding=(12, 7),
+                   font=("Microsoft YaHei UI", 10))
+    样式.configure("TCheckbutton", background=背景,
+                   font=("Microsoft YaHei UI", 10))
+    样式.configure("TLabelframe", background=背景, bordercolor=边框, padding=8)
+    样式.configure("TLabelframe.Label", background=背景, foreground=文字,
+                   font=("Microsoft YaHei UI", 10, "bold"))
+    样式.configure("TEntry", padding=6)
+    样式.configure("TCombobox", padding=5)
+    样式.configure("Treeview", rowheight=33, font=("Microsoft YaHei UI", 10),
+                   background=白色, fieldbackground=白色, foreground=文字,
+                   borderwidth=0)
+    样式.configure("Treeview.Heading", padding=8,
+                   font=("Microsoft YaHei UI", 10, "bold"))
+    样式.map("Treeview", background=[("selected", "#fbe7d9")],
+              foreground=[("selected", 文字)])
+    样式.configure("App.TFrame", background=背景)
+    样式.configure("Bar.TFrame", background=白色)
+    样式.configure("Bar.TLabel", background=白色, foreground=文字,
+                   font=("Microsoft YaHei UI", 10))
+    样式.configure("PageTitle.TLabel", background=背景, foreground=文字,
+                   font=("Microsoft YaHei UI", 19, "bold"))
+    样式.configure("PageHint.TLabel", background=背景, foreground=次要,
+                   font=("Microsoft YaHei UI", 10))
+    样式.configure("Card.TFrame", background=白色, relief="solid", borderwidth=1)
+    样式.configure("CardBody.TFrame", background=白色)
+    样式.configure("Card.TLabel", background=白色, foreground=文字,
+                   font=("Microsoft YaHei UI", 11))
+    样式.configure("CardMuted.TLabel", background=白色, foreground=次要,
+                   font=("Microsoft YaHei UI", 9))
+    样式.configure("Status.TLabel", background=白色, foreground=强调,
+                   font=("Microsoft YaHei UI", 10, "bold"))

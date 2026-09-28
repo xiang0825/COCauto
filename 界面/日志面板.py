@@ -73,9 +73,17 @@ class 日志面板(ttk.Frame):
         self._隐藏历史截止时间 = 0.0
         self._筛选模式 = None
         self._自动滚动 = None
+        self._可见 = True
 
         self._创建界面()
         self._定时刷新日志()
+
+    def 设置可见(self, 可见: bool) -> None:
+        """切换日志页时再刷新数据库历史，后台仍轻量消费实时队列。"""
+        self._可见 = bool(可见)
+        if self._可见:
+            self._历史日志有变化 = True
+            self._渲染日志()
 
     def _创建界面(self):
         顶栏 = ttk.Frame(self)
@@ -152,7 +160,7 @@ class 日志面板(ttk.Frame):
         有变化 = False
         # 每次 UI tick 最多消费固定数量；即使生产者短时集中写日志，
         # 也不让 Tk 主线程一次性渲染几千条消息而假死。
-        for _ in range(250):
+        for _ in range(120):
             try:
                 日志消息 = self.日志队列.get_nowait()
             except queue.Empty:
@@ -175,16 +183,16 @@ class 日志面板(ttk.Frame):
                 pass
             有变化 = True
         # 长时间运行只保留近期实时消息，历史仍由数据库按需读取。
-        self._实时日志 = self._实时日志[-3000:]
+        self._实时日志 = self._实时日志[-1200:]
 
-        if time.time() - self._上次数据库同步 >= 1.0:
+        if self._可见 and time.time() - self._上次数据库同步 >= 3.0:
             self._历史日志有变化 = False
             self._获取历史日志()
             self._上次数据库同步 = time.time()
             有变化 = 有变化 or self._历史日志有变化
-        if 有变化:
+        if 有变化 and self._可见:
             self._渲染日志()
-        self.after(500, self._定时刷新日志)
+        self.after(800, self._定时刷新日志)
 
     def _获取历史日志(self):
         try:
@@ -205,7 +213,7 @@ class 日志面板(ttk.Frame):
                     )
                     self.日志缓存内容.setdefault(标志, []).extend(日志列表)
                     # 防止长时间运行时 GUI 历史缓存无限增长。
-                    self.日志缓存内容[标志] = self.日志缓存内容[标志][-4000:]
+                    self.日志缓存内容[标志] = self.日志缓存内容[标志][-1800:]
             except Exception:
                 continue
 

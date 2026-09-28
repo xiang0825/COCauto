@@ -33,7 +33,7 @@ def 显示检测结果(图片路径, 检测结果, 字体路径="msyh.ttc", 字�
     # 加载字体
     try:
         字体 = ImageFont.truetype(字体路径, 字体大小)
-    except:
+    except Exception:
         print(f"警告：无法加载字体{字体路径}，使用默认字体")
         字体 = ImageFont.load_default()
 

@@ -5,22 +5,54 @@ import random
 import threading
 import time
 import gc
+import importlib
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Tuple, Any, Optional
 
-import cv2
-import numpy as np
-
-from 工具包.工具函数 import 生成贝塞尔轨迹
 from 数据库.任务数据库 import 任务数据库, 机器人设置
 from 核心.ADB屏幕 import ADB屏幕
 
 from 核心.键盘操作 import 键盘控制器
 from 核心.鼠标操作 import 鼠标控制器
-from 模块.检测.模板匹配器 import 模板匹配引擎
-from 模块.检测.OCR识别器 import 安全OCR引擎
-from 模块.检测.YOLO检测器 import 线程安全YOLO检测器
+
+
+class _延迟模块:
+    """只在首次访问 OpenCV/Numpy 时载入 native 模块。"""
+
+    def __init__(self, 模块名: str):
+        self.模块名 = 模块名
+        self._模块 = None
+
+    def _解析(self):
+        if self._模块 is None:
+            self._模块 = importlib.import_module(self.模块名)
+        return self._模块
+
+    def __getattr__(self, 名称):
+        return getattr(self._解析(), 名称)
+
+
+class _延迟导入对象:
+    def __init__(self, 模块名: str, 对象名: str):
+        self.模块名 = 模块名
+        self.对象名 = 对象名
+        self._对象 = None
+
+    def _解析(self):
+        if self._对象 is None:
+            模块 = importlib.import_module(self.模块名)
+            self._对象 = getattr(模块, self.对象名)
+        return self._对象
+
+    def __call__(self, *参数, **关键字):
+        return self._解析()(*参数, **关键字)
+
+
+cv2 = _延迟模块("cv2")
+np = _延迟模块("numpy")
+模板匹配引擎 = _延迟导入对象("模块.检测.模板匹配器", "模板匹配引擎")
+生成贝塞尔轨迹 = _延迟导入对象("工具包.工具函数", "生成贝塞尔轨迹")
 
 @dataclass
 class 任务上下文:
@@ -74,6 +106,10 @@ class 任务上下文:
         """延迟创建并复用 OCR 引擎，避免任务循环重复触碰 native 模型。"""
         引擎 = getattr(self, "_共享OCR引擎", None)
         if 引擎 is None:
+            # OCR 依赖 ONNX Runtime，只有资源/升级任务真正需要文字识别时
+            # 才导入，避免打开 GUI 或只配置任务就占用一大块常驻内存。
+            from 模块.检测.OCR识别器 import 安全OCR引擎
+
             引擎 = 安全OCR引擎()
             self._共享OCR引擎 = 引擎
         return 引擎
@@ -82,6 +118,9 @@ class 任务上下文:
         """延迟创建并复用默认 YOLO 检测器。"""
         检测器 = getattr(self, "_共享YOLO检测器", None)
         if 检测器 is None:
+            # 与 OCR 一样，检测器只在实际执行目标检测任务时载入。
+            from 模块.检测.YOLO检测器 import 线程安全YOLO检测器
+
             检测器 = 线程安全YOLO检测器()
             self._共享YOLO检测器 = 检测器
         return 检测器
@@ -2260,6 +2299,19 @@ class 任务上下文:
                 页面置信度 = float(getattr(页面结果, "可信度", 0.0) or 0.0)
             except (TypeError, ValueError):
                 页面置信度 = 0.0
+            if 页面名称 == "哥布林宝石提示":
+                self.页面恢复失败 = True
+                if not getattr(self, "_哥布林宝石提示已记录", False):
+                    self.置脚本状态(
+                        "检测到哥布林10宝石提示覆盖主世界，禁止把底层资源栏当作主页；"
+                        "不点击宝石，关闭弹窗后再启动任务"
+                    )
+                    self._哥布林宝石提示已记录 = True
+                try:
+                    self.停止事件.set()
+                except (AttributeError, TypeError):
+                    pass
+                return True
             if 页面名称 in {"战斗结算", "战斗奖励选择", "战斗星级奖励"}:
                 if 页面名称 == "战斗结算":
                     self._最近结算视觉时间 = time.monotonic()
@@ -2972,12 +3024,18 @@ class 基础任务(ABC):
         self.模板识别 = (
             获取模板识别器() if callable(获取模板识别器) else 模板匹配引擎()
         )
-        self.ocr引擎 = (
-            获取OCR引擎() if callable(获取OCR引擎) else 安全OCR引擎()
-        )
-        self.检测器 = (
-            获取YOLO检测器() if callable(获取YOLO检测器) else 线程安全YOLO检测器()
-        )
+        if callable(获取OCR引擎):
+            self.ocr引擎 = 获取OCR引擎()
+        else:
+            from 模块.检测.OCR识别器 import 安全OCR引擎
+
+            self.ocr引擎 = 安全OCR引擎()
+        if callable(获取YOLO检测器):
+            self.检测器 = 获取YOLO检测器()
+        else:
+            from 模块.检测.YOLO检测器 import 线程安全YOLO检测器
+
+            self.检测器 = 线程安全YOLO检测器()
         # 便捷属性
         self.数据库 = 上下文.数据库
         self.机器人标志 = 上下文.机器人标志

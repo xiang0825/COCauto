@@ -35,6 +35,21 @@ def 创建上下文(屏幕图像: np.ndarray):
 
 
 class 宝石安全保护测试(unittest.TestCase):
+    def test_哥布林宝石提示不发送ESC或购买点击(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文 = 创建上下文(屏幕)
+        上下文._获取点击页面识别器 = Mock()
+        上下文._获取点击页面识别器.return_value.识别.return_value = SimpleNamespace(
+            页面="哥布林宝石提示", 世界=None, 可信度=0.98,
+            依据=("白色对话框+红X+宝石按钮",), 摘要=lambda: "哥布林宝石提示",
+        )
+
+        self.assertTrue(上下文.检查宝石商店危险页面(强制=True))
+        self.assertTrue(上下文.页面恢复失败)
+        上下文.停止事件.set.assert_called_once()
+        上下文.键盘.按字符按压.assert_not_called()
+        上下文.鼠标.左键点击.assert_not_called()
+
     def test_统一页面识别确认结算后立即登记跨流程保护(self):
         """结算先被其他流程识别时，下一次宝石护栏不能误扫结算纹理。"""
         模板 = 读取模板("宝石.bmp")

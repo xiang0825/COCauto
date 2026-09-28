@@ -148,6 +148,12 @@ class ADB设备操作类:
         # 复用同一份 window displays 输出，避免重复 ADB 查询和状态错位。
         self._MuMu窗口状态缓存 = ""
         self._MuMu窗口状态缓存时间 = 0.0
+        # 某些 MuMu 版本会把同一实例暴露为 emulator-* serial，不能只按
+        # 本机端口判断；识别结果短时缓存，避免每帧截图重复 dumpsys。
+        self._MuMu连接判定: bool | None = None
+        self._MuMu连接判定序列号 = ""
+        self._MuMu连接判定时间 = 0.0
+        self._MuMu连接判定缓存秒数 = 30.0
         self._最近有效输入显示ID: str | None = None
         self._最近有效输入显示ID时间 = 0.0
         self._显示层缓存有效秒数 = 30.0
@@ -856,6 +862,9 @@ class ADB设备操作类:
                 新设备 = None
             if 新设备 is not None:
                 self.设备序列号 = 新设备.序列号
+                self._MuMu连接判定 = None
+                self._MuMu连接判定序列号 = ""
+                self._MuMu连接判定时间 = 0.0
                 self._最近有效截图显示ID = None
                 self._最近有效截图显示ID时间 = 0.0
                 self._最近有效输入显示ID = None
@@ -919,15 +928,44 @@ class ADB设备操作类:
     def _是MuMu连接(self) -> bool:
         """识别 MuMu ADB；不把普通网络/USB Android 设备当成模拟器。"""
         路径 = str(self.adb路径 or "").lower().replace("\\", "/")
+        序列号 = str(self.设备序列号 or "").strip()
         if "mumuplayer" in 路径:
             return True
-        if self.设备序列号.startswith(("127.0.0.1:", "localhost:")):
+        if 序列号.startswith(("127.0.0.1:", "localhost:")):
             try:
-                端口 = int(self.设备序列号.rsplit(":", 1)[1])
+                端口 = int(序列号.rsplit(":", 1)[1])
             except (ValueError, IndexError):
                 端口 = -1
-            return 16384 <= 端口 <= 16499
-        return False
+            if 16384 <= 端口 <= 16499:
+                return True
+
+        # MuMu Android 15 可能把网络 serial 别名成 emulator-5556；其
+        # dumpsys display 仍会暴露 mumuscreen 物理显示层。只对 emulator-*
+        # 查询，并缓存结果，避免把普通设备误判为 MuMu 或拖慢截图循环。
+        if (
+            not 路径.endswith("/adb.exe")
+            or not re.fullmatch(r"emulator-\d+", 序列号, flags=re.IGNORECASE)
+        ):
+            return False
+        当前时间 = time.monotonic()
+        if (
+            self._MuMu连接判定序列号 == 序列号
+            and self._MuMu连接判定 is not None
+            and 当前时间 - self._MuMu连接判定时间 < self._MuMu连接判定缓存秒数
+        ):
+            return bool(self._MuMu连接判定)
+        判定 = False
+        try:
+            输出 = self.执行(["shell", "dumpsys", "display"], timeout=8)
+            if isinstance(输出, bytes):
+                输出 = 输出.decode("utf-8", errors="replace")
+            判定 = "mumuscreen" in str(输出).lower()
+        except (ADB错误, OSError, subprocess.TimeoutExpired):
+            判定 = False
+        self._MuMu连接判定序列号 = 序列号
+        self._MuMu连接判定 = 判定
+        self._MuMu连接判定时间 = 当前时间
+        return 判定
 
     @staticmethod
     def _解析MuMu物理显示ID(显示输出: str, 逻辑显示ID: str) -> str | None:
@@ -1601,21 +1639,10 @@ class ADB设备操作类:
     def 触控(self, x: int, y: int) -> bool:
         self._验证目标()
         self._验证输入前台()
-        if self._是MuMu连接():
-            事件设备, 原始宽度, 原始高度 = self._获取MuMu触摸事件设备() or (None, 0, 0)
-            if not 事件设备:
-                raise ADB错误(
-                    "无法定位 CoC display 对应的 MuMu 触摸设备；"
-                    "已拒绝发送无 display 目标的点击输入。"
-                )
-            屏幕宽度, 屏幕高度 = self.取屏幕尺寸()
-            设备x, 设备y = self.参考坐标转设备坐标(x, y)
-            脚本 = self._生成MuMu单指触控脚本(
-                事件设备, 原始宽度, 原始高度, 屏幕宽度, 屏幕高度,
-                [(设备x, 设备y)]
-            )
-            self._执行MuMu触控脚本(脚本)
-            return True
+        # MuMu organized display 的单指点击实际支持 ``input -d``；实机
+        # 验证表明 protocol-B sendevent 在 Android 15 多显示层上会返回
+        # 成功但游戏不响应。直接绑定当前 CoC 逻辑 display 也更接近 MAA
+        # 的通用 ADB 输入路径，并省掉 dumpsys input/getevent 的额外开销。
         x, y = self.参考坐标转设备坐标(x, y)
         self.执行(["shell", "input", *self._输入显示参数(), "tap", str(x), str(y)], timeout=8)
         return True
@@ -1639,24 +1666,6 @@ class ADB设备操作类:
         间隔毫秒 = max(0, min(80, int(间隔毫秒)))
         if len(点位) > 1:
             间隔毫秒 = max(40, 间隔毫秒)
-        if self._是MuMu连接():
-            事件信息 = self._获取MuMu触摸事件设备()
-            if not 事件信息:
-                raise ADB错误(
-                    "无法定位 CoC display 对应的 MuMu 触摸设备；"
-                    "已拒绝发送无 display 目标的连续点击输入。"
-                )
-            事件设备, 原始宽度, 原始高度 = 事件信息
-            屏幕宽度, 屏幕高度 = self.取屏幕尺寸()
-            设备点位 = [self.参考坐标转设备坐标(x, y) for x, y in 点位]
-            脚本 = self._生成MuMu单指触控脚本(
-                事件设备, 原始宽度, 原始高度, 屏幕宽度, 屏幕高度,
-                设备点位, 间隔毫秒=间隔毫秒,
-            )
-            self._执行MuMu触控脚本(
-                脚本, timeout=max(8, len(点位) * 2)
-            )
-            return True
         点位 = [self.参考坐标转设备坐标(x, y) for x, y in 点位]
         间隔命令 = f"; sleep {间隔毫秒 / 1000:.3f}" if 间隔毫秒 else ""
         显示参数 = " ".join(self._输入显示参数())
@@ -1673,22 +1682,6 @@ class ADB设备操作类:
         self._验证目标()
         self._验证输入前台()
         时长毫秒 = max(120, min(1500, int(时长毫秒)))
-        if self._是MuMu连接():
-            事件信息 = self._获取MuMu触摸事件设备()
-            if not 事件信息:
-                raise ADB错误(
-                    "无法定位 CoC display 对应的 MuMu 触摸设备；"
-                    "已拒绝发送无 display 目标的长按输入。"
-                )
-            事件设备, 原始宽度, 原始高度 = 事件信息
-            屏幕宽度, 屏幕高度 = self.取屏幕尺寸()
-            设备x, 设备y = self.参考坐标转设备坐标(x, y)
-            脚本 = self._生成MuMu单指触控脚本(
-                事件设备, 原始宽度, 原始高度, 屏幕宽度, 屏幕高度,
-                [(设备x, 设备y)], 长按毫秒=时长毫秒,
-            )
-            self._执行MuMu触控脚本(脚本, timeout=max(8, 时长毫秒 / 1000 + 5))
-            return True
         x, y = self.参考坐标转设备坐标(x, y)
         self.执行([
             "shell", "input", *self._输入显示参数(), "swipe", str(int(x)), str(int(y)),

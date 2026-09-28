@@ -37,33 +37,15 @@ class 自动启动界面(ttk.Frame):
         主容器 = ttk.Frame(self)
         主容器.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # 标题和说明
-        标题框架 = ttk.Frame(主容器)
-        标题框架.pack(fill=tk.X, pady=(0, 10))
-
-        ttk.Label(
-            标题框架,
-            text="自动启动设置",
-            font=("微软雅黑", 14, "bold")
-        ).pack(anchor=tk.W)
-
-        ttk.Label(
-            标题框架,
-            text="在这里设置机器人的每日自动启动时间，系统会自动创建Windows计划任务",
-            font=("微软雅黑", 9),
-            foreground="#666"
-        ).pack(anchor=tk.W, pady=(5, 0))
-
-        # 分隔线
-        ttk.Separator(主容器, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
-
         # 机器人列表区域（带滚动条）
         列表容器 = ttk.Frame(主容器)
-        列表容器.pack(fill=tk.BOTH, expand=True)
+        列表容器.pack(anchor=tk.W)
 
         # 创建Canvas和滚动条
-        self.画布 = tk.Canvas(列表容器, highlightthickness=0)
+        self.画布 = tk.Canvas(列表容器, width=540, height=230, bg="#f7f8fa",
+                            highlightthickness=0, bd=0)
         滚动条 = ttk.Scrollbar(列表容器, orient=tk.VERTICAL, command=self.画布.yview)
+        self._滚动条 = 滚动条
         self.机器人列表框架 = ttk.Frame(self.画布)
 
         self.机器人列表框架.bind(
@@ -74,11 +56,11 @@ class 自动启动界面(ttk.Frame):
         self.画布.create_window((0, 0), window=self.机器人列表框架, anchor=tk.NW)
         self.画布.configure(yscrollcommand=滚动条.set)
 
-        self.画布.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.画布.pack(side=tk.LEFT)
         滚动条.pack(side=tk.RIGHT, fill=tk.Y)
 
         # 鼠标滚轮支持
-        self.画布.bind_all("<MouseWheel>", self._鼠标滚轮)
+        self.画布.bind("<MouseWheel>", self._鼠标滚轮)
 
         # 底部按钮区
         按钮框架 = ttk.Frame(主容器)
@@ -333,9 +315,9 @@ class 自动启动界面(ttk.Frame):
 
     def _刷新机器人列表(self):
         """刷新机器人列表"""
-        # 清空现有配置项
-        for 配置项 in self.机器人配置项.values():
-            配置项["外框"].destroy()
+        # 初始化阶段可能曾显示“暂无机器人”，刷新时也必须一并清除。
+        for 控件 in self.机器人列表框架.winfo_children():
+            控件.destroy()
         self.机器人配置项.clear()
 
         # 重新加载
@@ -355,6 +337,7 @@ class 自动启动界面(ttk.Frame):
             机器人列表 = list(所有配置.keys())
 
         if not 机器人列表:
+            self._滚动条.pack_forget()
             # 显示提示信息
             提示标签 = ttk.Label(
                 self.机器人列表框架,
@@ -364,6 +347,11 @@ class 自动启动界面(ttk.Frame):
             )
             提示标签.grid(row=0, column=0, pady=50)
             return
+
+        if len(机器人列表) <= 1:
+            self._滚动条.pack_forget()
+        elif not self._滚动条.winfo_manager():
+            self._滚动条.pack(side=tk.RIGHT, fill=tk.Y)
 
         # 获取现有配置
         所有配置 = self.管理器.获取所有自动启动配置()

@@ -62,7 +62,7 @@ def _启动或唤醒已有窗口():
 
 
 class 增强型机器人控制界面:
-    """简洁的三栏控制台：控制、任务、日志同时可见。"""
+    """浅色工作台：顶部导航、横向运行控制、单页面内容。"""
 
     def __init__(self, master, 监控中心):
         self.master = master
@@ -75,95 +75,140 @@ class 增强型机器人控制界面:
 
         master.title("部落冲突")
         master.protocol("WM_DELETE_WINDOW", self._窗口关闭处理)
-        self._设置窗口尺寸(1360, 820)
-        self._创建菜单栏()
+        self._设置窗口尺寸(1320, 790)
         self._创建面板()
         self._加载保存的配置()
         self._定时刷新顶部状态()
 
     def _创建面板(self):
-        主框架 = ttk.Frame(self.master, padding=(12, 10, 12, 12))
-        主框架.pack(fill=tk.BOTH, expand=True)
+        self.master.configure(bg="#f7f8fa")
+        外框 = ttk.Frame(self.master, style="App.TFrame")
+        外框.pack(fill=tk.BOTH, expand=True)
 
-        self._创建页眉(主框架)
+        顶栏 = ttk.Frame(外框, style="Bar.TFrame", padding=(26, 14, 28, 12))
+        顶栏.pack(fill=tk.X)
+        品牌 = ttk.Frame(顶栏, style="Bar.TFrame")
+        品牌.pack(side=tk.LEFT)
+        创建CoC标识(品牌, 48, 背景="#ffffff").pack(side=tk.LEFT, padx=(0, 11))
+        品牌字 = ttk.Frame(品牌, style="Bar.TFrame")
+        品牌字.pack(side=tk.LEFT)
+        tk.Label(品牌字, text="城控", bg="#ffffff", fg="#253142",
+                 font=("Microsoft YaHei UI", 17, "bold")).pack(anchor=tk.W)
+        tk.Label(品牌字, text="部落冲突控制台", bg="#ffffff", fg="#697788",
+                 font=("Microsoft YaHei UI", 9)).pack(anchor=tk.W)
+        状态区 = ttk.Frame(顶栏, style="Bar.TFrame")
+        状态区.pack(side=tk.RIGHT)
+        self.顶部状态标签 = ttk.Label(状态区, text="● 未运行", style="Status.TLabel")
+        self.顶部状态标签.pack(anchor=tk.E)
+        self.顶部连接标签 = ttk.Label(状态区, text="未选择机器人", style="Bar.TLabel")
+        self.顶部连接标签.pack(anchor=tk.E, pady=(3, 0))
 
-        内容区 = ttk.PanedWindow(主框架, orient=tk.HORIZONTAL)
-        内容区.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
+        导航 = ttk.Frame(外框, style="Bar.TFrame", padding=(23, 0, 23, 9))
+        导航.pack(fill=tk.X)
+        self._导航按钮 = {}
+        for 名称 in ("首页", "任务计划", "模拟器连接", "运行日志", "自动启动"):
+            按钮 = tk.Button(
+                导航, text=名称, command=lambda 页面=名称: self._显示页面(页面),
+                relief=tk.FLAT, bd=0, padx=18, pady=7,
+                bg="#ffffff", fg="#647386", activebackground="#fff0e1",
+                activeforeground="#a7562b", font=("Microsoft YaHei UI", 10),
+                cursor="hand2",
+            )
+            按钮.pack(side=tk.LEFT, padx=(0, 5))
+            self._导航按钮[名称] = 按钮
+        tk.Frame(外框, bg="#e4e8ed", height=1).pack(fill=tk.X)
 
-        # 左栏：选择机器人并控制启动/暂停/停止。
-        左栏 = ttk.Frame(内容区, width=285)
-        左栏.pack_propagate(False)
+        控制栏 = ttk.Frame(外框, style="Bar.TFrame", padding=(28, 12))
+        控制栏.pack(fill=tk.X)
         self.机器人管理 = 机器人管理面板(
-            父容器=左栏,
+            父容器=控制栏,
             监控中心=self.监控中心,
             选择变化回调=self._处理机器人选择变化,
         )
-        self.机器人管理.pack(fill=tk.BOTH, expand=True)
-        内容区.add(左栏, weight=1)
+        self.机器人管理.pack(fill=tk.X)
+        tk.Frame(外框, bg="#e4e8ed", height=1).pack(fill=tk.X)
 
-        # 中栏：任务计划置于首位，连接与自动启动收进同一工作区。
-        中栏 = ttk.LabelFrame(内容区, text="任务与连接", padding=8)
-        内容区.add(中栏, weight=3)
-        选项卡 = ttk.Notebook(中栏)
-        选项卡.pack(fill=tk.BOTH, expand=True)
-        选项卡.bind("<<NotebookTabChanged>>", self._选项卡切换回调)
-        self.选项卡 = 选项卡
+        工作区 = ttk.Frame(外框, style="App.TFrame")
+        工作区.pack(fill=tk.BOTH, expand=True)
+        self._创建页眉(工作区)
+        self._页面容器 = ttk.Frame(工作区, style="App.TFrame")
+        self._页面容器.pack(fill=tk.BOTH, expand=True, padx=24, pady=(4, 16))
+        self._页面容器.columnconfigure(0, weight=1)
+        self._页面容器.rowconfigure(0, weight=1)
 
-        self.任务计划面板 = 任务计划面板(
-            父容器=选项卡,
-            数据库=self.数据库,
-            获取机器人回调=lambda: self.机器人管理.当前机器人ID,
-            操作日志回调=lambda 内容: self.日志面板.记录操作日志(内容),
-        )
-        选项卡.add(self.任务计划面板, text="任务计划")
-
-        self.设备连接面板 = 设备连接面板(
-            父容器=选项卡,
-            数据库=self.数据库,
-            获取机器人回调=lambda: self.机器人管理.当前机器人ID,
-        )
-        选项卡.add(self.设备连接面板, text="模拟器连接")
-
-        自动启动 = 自动启动界面(选项卡, self.监控中心)
-        选项卡.add(自动启动, text="自动启动")
-
-        # 右栏：日志常驻显示，拖动分隔条即可扩大，不再挤在窗口底部。
-        日志框 = ttk.LabelFrame(内容区, text="运行日志 · 实时", padding=6, width=560)
-        内容区.add(日志框, weight=2)
+        日志页 = ttk.Frame(self._页面容器)
         self.日志面板 = 日志面板(
-            父容器=日志框,
+            父容器=日志页,
             日志队列=self.日志队列,
             获取当前机器人回调=lambda: self.机器人管理.获取当前机器人(),
             获取所有机器人回调=lambda: self.监控中心.机器人池,
         )
         self.日志面板.pack(fill=tk.BOTH, expand=True)
 
+        self.任务计划面板 = 任务计划面板(
+            父容器=self._页面容器,
+            数据库=self.数据库,
+            获取机器人回调=lambda: self.机器人管理.当前机器人ID,
+            操作日志回调=lambda 内容: self.日志面板.记录操作日志(内容),
+        )
+        self.概览面板 = 概览面板(
+            父容器=self._页面容器,
+            监控中心=self.监控中心,
+            数据库=self.数据库,
+            获取当前机器人回调=lambda: self.机器人管理.获取当前机器人(),
+            打开页面=self._显示页面,
+        )
+        self.设备连接面板 = 设备连接面板(
+            父容器=self._页面容器,
+            数据库=self.数据库,
+            获取机器人回调=lambda: self.机器人管理.当前机器人ID,
+        )
+        self.自动启动面板 = 自动启动界面(self._页面容器, self.监控中心)
+        self._页面 = {
+            "首页": self.概览面板,
+            "任务计划": self.任务计划面板,
+            "模拟器连接": self.设备连接面板,
+            "运行日志": 日志页,
+            "自动启动": self.自动启动面板,
+        }
+        for 页面 in self._页面.values():
+            页面.grid(row=0, column=0, sticky="nsew")
+        self.日志面板.设置可见(False)
+        self._显示页面("首页")
+
     def _创建页眉(self, 父容器):
-        页眉 = ttk.Frame(父容器, style="Header.TFrame", padding=(12, 10))
+        页眉 = ttk.Frame(父容器, style="App.TFrame", padding=(28, 18, 28, 7))
         页眉.pack(fill=tk.X)
-
-        标识 = 创建CoC标识(页眉, 58)
-        标识.pack(side=tk.LEFT, padx=(0, 12))
-
-        标题区 = ttk.Frame(页眉, style="Header.TFrame")
+        标题区 = ttk.Frame(页眉, style="App.TFrame")
         标题区.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Label(标题区, text="部落冲突", style="Title.TLabel").pack(anchor=tk.W)
-        ttk.Label(
-            标题区,
-            text=f"CoC 模拟器控制台  ·  版本 {获取本地版本号()}",
-            style="Subtitle.TLabel",
-        ).pack(anchor=tk.W, pady=(3, 0))
+        self._页面标题 = ttk.Label(标题区, text="首页", style="PageTitle.TLabel")
+        self._页面标题.pack(anchor=tk.W)
+        self._页面提示 = ttk.Label(标题区, text="清楚查看状态，只运行你选择的任务。",
+                                 style="PageHint.TLabel")
+        self._页面提示.pack(anchor=tk.W, pady=(3, 0))
 
-        状态区 = ttk.Frame(页眉, style="Header.TFrame")
-        状态区.pack(side=tk.RIGHT, padx=(12, 0))
-        self.顶部状态标签 = ttk.Label(
-            状态区, text="● 未运行", style="Status.TLabel", anchor=tk.E
-        )
-        self.顶部状态标签.pack(anchor=tk.E)
-        self.顶部连接标签 = ttk.Label(
-            状态区, text="未选择机器人", style="Subtitle.TLabel", anchor=tk.E
-        )
-        self.顶部连接标签.pack(anchor=tk.E, pady=(3, 0))
+    def _显示页面(self, 名称):
+        页面 = self._页面[名称]
+        页面.tkraise()
+        self._页面标题.configure(text=名称)
+        self._页面提示.configure(text={
+            "首页": "清楚查看状态，只运行你选择的任务。",
+            "任务计划": "勾选任务并设置参数，修改会自动保存。",
+            "模拟器连接": "确认目标设备，测试实时截图。",
+            "运行日志": "查看执行记录和错误信息。",
+            "自动启动": "配置需要时自动启动的条件。",
+        }[名称])
+        for 标题, 按钮 in self._导航按钮.items():
+            选中 = 标题 == 名称
+            按钮.configure(bg="#fff0e1" if 选中 else "#ffffff",
+                        fg="#a7562b" if 选中 else "#647386")
+        self.日志面板.设置可见(名称 == "运行日志")
+        if 名称 == "首页":
+            self.概览面板.刷新()
+        elif 名称 == "任务计划":
+            self.任务计划面板.刷新()
+        elif 名称 == "自动启动":
+            self.自动启动面板._刷新机器人列表()
 
     def _定时刷新顶部状态(self):
         """只读取内存状态，保持窗口缩放和日志滚动顺畅。"""
@@ -196,13 +241,9 @@ class 增强型机器人控制界面:
         else:
             self.设备连接面板.载入机器人(机器人ID)
             self.任务计划面板.载入机器人(机器人ID)
+            self.概览面板.刷新()
             self.日志面板.通知机器人切换()
             self.机器人管理.更新状态显示()
-
-    def _选项卡切换回调(self, event):
-        当前标签 = event.widget.tab(event.widget.select(), "text")
-        if 当前标签 == "任务计划":
-            self.任务计划面板.刷新()
 
     def _设置窗口尺寸(self, 宽度, 高度):
         屏幕宽度 = self.master.winfo_screenwidth()
@@ -212,7 +253,7 @@ class 增强型机器人控制界面:
         x = max(0, (屏幕宽度 - 宽度) // 2)
         y = max(0, (屏幕高度 - 高度) // 2)
         self.master.geometry(f"{宽度}x{高度}+{x}+{y}")
-        self.master.minsize(1040, 660)
+        self.master.minsize(920, 600)
 
     def _加载保存的配置(self):
         所有配置 = self.数据库.查询所有机器人设置()
@@ -228,13 +269,6 @@ class 增强型机器人控制界面:
                 messagebox.showerror("配置加载错误", f"加载{机器人标志}失败：{e}")
         if 所有配置:
             self.机器人管理.选中机器人(next(iter(所有配置)))
-
-    def _创建菜单栏(self):
-        菜单栏 = tk.Menu(self.master)
-        self.master.config(menu=菜单栏)
-        帮助菜单 = tk.Menu(菜单栏, tearoff=0)
-        菜单栏.add_cascade(label="帮助", menu=帮助菜单)
-        帮助菜单.add_command(label="关于部落冲突", command=self._显示关于)
 
     def _显示关于(self):
         messagebox.showinfo(
@@ -326,11 +360,17 @@ if __name__ == "__main__":
         # 必须先创建一个可见的窗口。即使后续数据库或后台服务初始化被
         # 外部程序拖慢，用户也不会遇到“进程存在但 EXE 打不开”的假象。
         root = tk.Tk()
+        图标路径 = os.path.join(
+            getattr(sys, "_MEIPASS", os.path.dirname(__file__)),
+            "城控.ico" if getattr(sys, "frozen", False) else os.path.join("界面", "城控.ico"),
+        )
+        if os.path.isfile(图标路径):
+            root.iconbitmap(default=图标路径)
         # 保持与单实例唤醒逻辑相同的标题；启动期间再次双击时可以准确
         # 找到并恢复这个早期窗口，而不会误判为“没有窗口”。
         root.title("部落冲突")
-        root.minsize(760, 460)
-        root.geometry("960x620")
+        root.minsize(920, 600)
+        root.geometry("1180x720")
         root.update_idletasks()
         root.deiconify()
         _启动窗口就绪事件.set()
@@ -348,6 +388,7 @@ if __name__ == "__main__":
         from 界面.CoC标识 import 创建CoC标识
         from 界面.样式配置 import 配置现代化样式
         from 界面.日志面板 import 日志面板
+        from 界面.概览面板 import 概览面板
         from 界面.机器人管理面板 import 机器人管理面板
         from 界面.设备连接面板 import 设备连接面板
         from 界面.任务计划面板 import 任务计划面板

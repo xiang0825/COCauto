@@ -3,9 +3,6 @@ import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-import cv2
-from PIL import Image, ImageTk
-
 from 模块.ADB设备操作类 import ADB设备操作类, ADB错误
 
 
@@ -26,15 +23,6 @@ class 设备连接面板(ttk.Frame):
         self._创建界面()
 
     def _创建界面(self):
-        标题 = ttk.Frame(self)
-        标题.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(标题, text="模拟器连接", font=("Microsoft YaHei UI", 16, "bold")).pack(anchor=tk.W)
-        ttk.Label(
-            标题,
-            text="每台设备都通过 adb -s 序列号隔离；截图和触控不会占用 Windows 鼠标、键盘或模拟器窗口。",
-            wraplength=760,
-        ).pack(anchor=tk.W, pady=(4, 0))
-
         内容 = ttk.Frame(self)
         内容.pack(fill=tk.BOTH, expand=True)
         左侧 = ttk.Frame(内容)
@@ -84,20 +72,9 @@ class 设备连接面板(ttk.Frame):
         ttk.Button(按钮区, text="保存连接", command=self.保存连接).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(按钮区, text="测试连接并截图", command=self.测试截图).pack(side=tk.LEFT)
 
-        ttk.Separator(左侧).pack(fill=tk.X, pady=9)
-        ttk.Label(左侧, text="脚本自动识别模拟器分辨率。", font=("Microsoft YaHei UI", 10, "bold")).pack(anchor=tk.W)
-        ttk.Label(
-            左侧,
-            text="测试截图时读取当前真实显示尺寸；任务坐标会自动映射，支持不同分辨率和旋转显示，不会修改模拟器设置。",
-            wraplength=330,
-        ).pack(anchor=tk.W, pady=(3, 7))
-        ttk.Label(
-            左侧,
-            text="提示：点击“测试连接并截图”即可刷新自动识别结果。",
-            wraplength=330,
-        ).pack(anchor=tk.W)
-
-        ttk.Label(左侧, textvariable=self.状态, wraplength=340, justify=tk.LEFT).pack(anchor=tk.W, pady=(12, 0))
+        ttk.Label(左侧, textvariable=self.状态, wraplength=340,
+                  justify=tk.LEFT, foreground="#697788").pack(
+                      anchor=tk.W, pady=(6, 0))
 
         self.预览 = ttk.Label(右侧, text="连接后点击“测试连接并截图”显示画面。", anchor=tk.CENTER)
         self.预览.pack(fill=tk.BOTH, expand=True)
@@ -248,6 +225,11 @@ class 设备连接面板(ttk.Frame):
     def 测试截图(self):
         self.状态.set("正在验证 ADB 连接并获取截图…")
         def 完成(结果):
+            # 截图页不是首页必需功能；只有用户真正点击测试截图时才载入
+            # OpenCV/Pillow，避免打开控制台就占用图像处理内存。
+            import cv2
+            from PIL import Image, ImageTk
+
             图像, 尺寸 = 结果
             画面 = Image.fromarray(cv2.cvtColor(图像, cv2.COLOR_BGR2RGB))
             画面.thumbnail((850, 600), Image.Resampling.LANCZOS)
