@@ -6,7 +6,9 @@
 
 ## 下载与启动
 
-从 [GitHub Releases](https://github.com/xiang0825/COCauto/releases) 下载 Windows 压缩包，**完整解压**后运行 `部落冲突.exe`。`_internal` 文件夹必须与 EXE 放在同一目录；只下载或移动单个 EXE 无法正常运行。
+**[下载 Windows 版（2026-09-28）](https://github.com/xiang0825/COCauto/releases/download/v2026.09.28/COCauto-Windows-2026-09-28.zip)** · [查看全部版本](https://github.com/xiang0825/COCauto/releases)
+
+**完整解压**后运行文件夹首页的 `部落冲突.exe`。`_internal` 文件夹必须与 EXE 放在同一目录；只下载或移动单个 EXE 无法正常运行。
 
 打开程序后：
 
