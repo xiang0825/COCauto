@@ -2976,11 +2976,11 @@ class 任务上下文:
         """仅在两张新帧均确认搜索页右下按钮时绕过误报的结算锁。"""
         from 任务流程.主世界打鱼.搜索页面识别 import 搜索页面识别器
 
+        停止事件 = getattr(self, "停止事件", None)
         if (
             getattr(self, "页面恢复失败", False)
             or getattr(self, "_内存保护已触发", False)
-            or getattr(self, "停止事件", None) is not None
-            and self.停止事件.is_set()
+            or (停止事件 is not None and 停止事件.is_set())
         ):
             return False
         for 序号 in range(2):
@@ -3001,17 +3001,19 @@ class 任务上下文:
                     f"搜索按钮复核遇到{结果.页面}，拒绝点击下一场"
                 )
                 return False
-            命中, 坐标, _, 分数 = 搜索页面识别器.查找下一个按钮(
+            命中, 坐标, 依据, 分数 = 搜索页面识别器.查找下一个按钮(
                 画面, self.获取模板识别器()
             )
             if (
                 not 命中
-                or 分数 < 0.90
+                or not 搜索页面识别器.按钮证据可信(依据, 分数)
+                or int(坐标[0]) < 搜索页面识别器.点击安全最左x
                 or abs(int(坐标[0]) - int(x)) > 24
                 or abs(int(坐标[1]) - int(y)) > 24
             ):
                 self.置脚本状态(
-                    "搜索按钮未在两张新帧的同一区域高置信出现，拒绝点击下一场"
+                    f"搜索按钮复核未通过：{依据}，评分{分数:.2f}，"
+                    "未在两张新帧的同一区域可信出现；拒绝点击下一场"
                 )
                 return False
         if not self.点击已确认安全按钮(坐标[0], 坐标[1], 延时=500):
