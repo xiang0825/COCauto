@@ -2972,6 +2972,60 @@ class 任务上下文:
             if hasattr(self.鼠标, "_安全点击检查回调"):
                 self.鼠标._安全点击检查回调 = 原安全回调
 
+    def 点击已确认搜索按钮(self, x, y) -> bool:
+        """仅在两张新帧均确认搜索页右下按钮时绕过误报的结算锁。"""
+        from 任务流程.主世界打鱼.搜索页面识别 import 搜索页面识别器
+
+        if (
+            getattr(self, "页面恢复失败", False)
+            or getattr(self, "_内存保护已触发", False)
+            or getattr(self, "停止事件", None) is not None
+            and self.停止事件.is_set()
+        ):
+            return False
+        for 序号 in range(2):
+            if 序号:
+                self.脚本延时(350)
+            try:
+                画面 = self.op.获取屏幕图像cv(
+                    0, 0, 800, 600, 强制刷新=True
+                )
+            except TypeError:
+                画面 = self.op.获取屏幕图像cv(0, 0, 800, 600)
+            结果 = self._获取点击页面识别器().识别(画面, 战斗中=False)
+            if getattr(结果, "页面", "") in {
+                "断线弹窗", "多按钮弹窗", "系统维护", "升级详情弹窗",
+                "战斗奖励选择", "战斗星级奖励",
+            }:
+                self.置脚本状态(
+                    f"搜索按钮复核遇到{结果.页面}，拒绝点击下一场"
+                )
+                return False
+            命中, 坐标, _, 分数 = 搜索页面识别器.查找下一个按钮(
+                画面, self.获取模板识别器()
+            )
+            if (
+                not 命中
+                or 分数 < 0.90
+                or abs(int(坐标[0]) - int(x)) > 24
+                or abs(int(坐标[1]) - int(y)) > 24
+            ):
+                self.置脚本状态(
+                    "搜索按钮未在两张新帧的同一区域高置信出现，拒绝点击下一场"
+                )
+                return False
+        if not self.点击已确认安全按钮(坐标[0], 坐标[1], 延时=500):
+            return False
+        # 两次独立画面确认了搜索按钮，之前的“结算页”只是过渡误报。
+        # 只清除这次误报的缓存，下一次输入仍会完整重新识别页面。
+        self._最近结算视觉时间 = 0.0
+        self._战斗结束已确认 = False
+        self._最近点击页面结果 = None
+        self._点击识别截图 = None
+        self._点击识别截图时间 = 0.0
+        self.置脚本状态("搜索按钮跨帧确认，已清除过渡帧结算误报")
+        return True
+
     def 滑动屏幕(self, 起点坐标, 终点坐标):
         """使用贝塞尔曲线模拟人类滑动操作"""
         起点x, 起点y = 起点坐标

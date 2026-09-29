@@ -48,6 +48,24 @@ class _上下文:
 
 
 class 回营状态机测试(unittest.TestCase):
+    def test_长时间等待结算会续报心跳(self):
+        class 未命中匹配器:
+            def 执行匹配(self, *_参数, **_关键字):
+                return False, (0, 0), None
+
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = 未命中匹配器()
+        上下文 = _上下文()
+        with unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.time.time",
+            side_effect=[0, 1, 181],
+        ), unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.time.monotonic",
+            side_effect=[0, 21],
+        ):
+            self.assertFalse(任务.等待回营地按钮出现(上下文))
+        self.assertIn("仍在等待战斗结算及回营按钮", 上下文.状态)
+
     def test_结果截图使用中文目录仍能写入(self):
         任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
         上下文 = SimpleNamespace(
@@ -292,6 +310,20 @@ class 回营状态机测试(unittest.TestCase):
         self.assertIn("按规则确认3星", 说明)
         self.assertNotIn("矛盾", 说明)
 
+    def test_零摧毁率却识别到星数时不写入战果(self):
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.识别结算帧 = unittest.mock.Mock(return_value=([], "胜利", "胜利", 0))
+        任务.识别星数 = unittest.mock.Mock(return_value=3)
+        任务.保存战斗结果截图 = unittest.mock.Mock()
+        上下文 = SimpleNamespace(
+            数据库=unittest.mock.Mock(),
+            置脚本状态=unittest.mock.Mock(),
+        )
+
+        self.assertFalse(任务.记录战斗结果(上下文, np.zeros((600, 800, 3), dtype=np.uint8)))
+        上下文.数据库.获取最新完整状态.assert_not_called()
+        self.assertIn("结果矛盾", " ".join(调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list))
+
     def test_低摧毁率诊断使用本场下兵证据(self):
         上下文 = SimpleNamespace(
             本场进攻目标数量=18,
@@ -490,7 +522,7 @@ class 回营状态机测试(unittest.TestCase):
 
             def 识别(自身, _图像, **_参数):
                 自身.次数 += 1
-                页面 = "战斗结算" if 自身.次数 == 1 else "主世界主页"
+                页面 = "战斗结算" if 自身.次数 <= 2 else "主世界主页"
                 return type("结果", (), {"页面": 页面, "可信度": 0.92})()
 
             def 定位结算回营按钮(自身, _图像):
@@ -530,6 +562,46 @@ class 回营状态机测试(unittest.TestCase):
         self.assertTrue(任务.等待回营地按钮出现(上下文实例))
         self.assertEqual(上下文实例.点击记录, [(52, 530)])
         self.assertIn("视觉确认结算页回营按钮", " ".join(上下文实例.状态))
+
+    def test_单帧误判结算随后仍是战斗时不点击(self):
+        class 低分匹配器:
+            def 执行匹配(self, *_参数, **_关键字参数):
+                return False, (0, 0), None
+
+        class 页面识别器:
+            def __init__(自身):
+                自身.次数 = 0
+
+            def 识别(自身, _图像, **_参数):
+                自身.次数 += 1
+                return SimpleNamespace(
+                    页面="战斗结算" if 自身.次数 == 1 else "战斗中",
+                    可信度=0.96,
+                )
+
+            def 定位结算回营按钮(自身, _图像):
+                return (80, 522)
+
+        class 屏幕:
+            def 获取屏幕图像cv(self, *_区域, **_参数):
+                return np.zeros((600, 800, 3), dtype=np.uint8)
+
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = 低分匹配器()
+        任务.记录战斗结果 = unittest.mock.Mock(return_value=True)
+        上下文 = _上下文()
+        上下文.op = 屏幕()
+        上下文._获取点击页面识别器 = lambda: 页面识别器实例
+        页面识别器实例 = 页面识别器()
+
+        with unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.time.time",
+            side_effect=[0, 1, 181],
+        ):
+            self.assertFalse(任务.等待回营地按钮出现(上下文))
+        self.assertEqual(上下文.点击记录, [])
+        任务.记录战斗结果.assert_not_called()
+        self.assertIn("单帧", " ".join(上下文.状态))
 
     def test_主世界页级识别低于模板阈值仍可确认回营(self):
         class 页级识别器:

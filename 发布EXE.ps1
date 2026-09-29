@@ -21,8 +21,22 @@ $sourceInternal = Join-Path $source "_internal"
 $targetExe = Join-Path $target "部落冲突.exe"
 $targetInternal = Join-Path $target "_internal"
 
+$pythonCandidates = @(
+    (Join-Path $脚本目录 ".venv311\Scripts\python.exe"),
+    (Join-Path $脚本目录 ".venv\Scripts\python.exe")
+)
+$pythonExe = $pythonCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+    Select-Object -First 1
+if (-not $pythonExe) {
+    throw "发布前校验需要项目虚拟环境中的 Python（.venv311 或 .venv）"
+}
+
 if (-not (Test-Path -LiteralPath $sourceExe -PathType Leaf)) {
     throw "发布包不完整：缺少部落冲突.exe"
+}
+& $pythonExe (Join-Path $脚本目录 "scripts\verify_packaged_modules.py") $sourceExe
+if ($LASTEXITCODE -ne 0) {
+    throw "发布包缺少任务模块，已停止发布；原有 EXE 未改动"
 }
 $sourcePythonDll = Get-ChildItem -LiteralPath $sourceInternal -File -Filter "python3*.dll" |
     Where-Object { $_.Length -ge 5000000 } |
