@@ -1185,6 +1185,23 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertEqual(任务.等待战斗画面确认(上下文, 超时秒=2), "战斗中")
         self.assertTrue(any("开始下兵" in 文本 for 文本 in 日志))
 
+    def test_侦察倒计时超过十五秒仍继续等战斗画面(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        上下文 = SimpleNamespace(
+            停止事件=SimpleNamespace(is_set=lambda: False, wait=lambda timeout: None),
+            识别点击画面=Mock(side_effect=[
+                SimpleNamespace(页面="选择卡片弹窗"),
+                SimpleNamespace(页面="战斗过渡"),
+                SimpleNamespace(页面="战斗中"),
+            ]),
+            置脚本状态=Mock(),
+        )
+        with patch(
+            "任务流程.主世界打鱼.进攻.time.monotonic",
+            side_effect=[0, 0, 0, 25, 25, 30],
+        ):
+            self.assertEqual(任务.等待战斗画面确认(上下文), "战斗中")
+
 
 if __name__ == "__main__":
     unittest.main()

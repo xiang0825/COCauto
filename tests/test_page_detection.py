@@ -660,6 +660,22 @@ class 页面识别测试(unittest.TestCase):
         self.assertIsNotNone(关闭点)
         self.assertAlmostEqual(关闭点[0], 678, delta=8)
         self.assertAlmostEqual(关闭点[1], 53, delta=8)
+        # 战斗标志可能在过渡期尚未清除；没有战斗 HUD 时真实卡片仍须拦截。
+        self.assertEqual(self.识别器.识别(图像, 战斗中=True).页面, "选择卡片弹窗")
+
+    def test_战场底部兵栏不应伪装成选择卡片弹窗(self):
+        """实机搜索后持续误报卡片弹窗，导致整场 0% 不下兵。"""
+        图像 = np.full((600, 800, 3), (30, 40, 50), dtype=np.uint8)
+        for x in (120, 280, 440, 600):
+            cv2.rectangle(图像, (x, 400), (x + 90, 530), (0, 0, 220), -1)
+        cv2.rectangle(图像, (650, 25), (705, 80), (0, 0, 220), -1)
+        cv2.line(图像, (662, 37), (693, 68), (255, 255, 255), 5)
+        cv2.line(图像, (693, 37), (662, 68), (255, 255, 255), 5)
+        cv2.rectangle(图像, (12, 430), (105, 467), (0, 0, 220), -1)
+        cv2.putText(图像, "27", (346, 80), cv2.FONT_HERSHEY_SIMPLEX,
+                    1.8, (255, 255, 255), 4)
+
+        self.assertEqual(self.识别器.识别(图像, 战斗中=True).页面, "战斗中")
 
     def test_升级详情弹窗优先于主世界HUD(self):
         """升级面板露出主页徽章时不能继续读取资源或点击入口。"""

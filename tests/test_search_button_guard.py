@@ -147,6 +147,23 @@ class 搜索按钮护栏测试(unittest.TestCase):
         上下文.点击已确认安全按钮.assert_not_called()
         self.assertEqual(上下文._最近结算视觉时间, 123.0)
 
+    def test_搜索按钮上覆盖真实卡片弹窗时绝不点击(self):
+        画面 = 搜索画面()
+        坐标 = 搜索页面识别器.查找下一个按钮(画面)[1]
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=画面)),
+            _获取点击页面识别器=lambda: SimpleNamespace(
+                识别=lambda *_参数, **_关键字: SimpleNamespace(页面="选择卡片弹窗")
+            ),
+            获取模板识别器=lambda: None,
+            点击已确认安全按钮=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+
+        self.assertFalse(任务上下文.点击已确认搜索按钮(上下文, *坐标))
+        上下文.点击已确认安全按钮.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
