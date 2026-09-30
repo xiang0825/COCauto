@@ -74,6 +74,8 @@ class 日志面板(ttk.Frame):
         self._筛选模式 = None
         self._自动滚动 = None
         self._可见 = True
+        self._悬浮窗口 = None
+        self._悬浮日志文本框 = None
 
         self._创建界面()
         self._定时刷新日志()
@@ -117,6 +119,12 @@ class 日志面板(ttk.Frame):
             text="跟随",
             variable=self._自动滚动,
         ).pack(side=tk.LEFT, padx=(6, 0))
+        self._悬浮按钮 = ttk.Button(
+            右侧,
+            text="悬浮半透明",
+            command=self._切换悬浮窗,
+        )
+        self._悬浮按钮.pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(
             右侧,
             text="清空显示",
@@ -155,6 +163,60 @@ class 日志面板(ttk.Frame):
         self.日志文本框.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
         self.日志文本框.configure(state="disabled")
 
+    def _悬浮窗已打开(self) -> bool:
+        return self._悬浮窗口 is not None and bool(self._悬浮窗口.winfo_exists())
+
+    def _切换悬浮窗(self):
+        if self._悬浮窗已打开():
+            self._关闭悬浮窗()
+            return
+        窗口 = tk.Toplevel(self)
+        窗口.title("运行日志 · 悬浮半透明")
+        窗口.configure(background="#1c2636")
+        窗口.minsize(480, 240)
+        宽度, 高度 = 760, 390
+        x = max(0, 窗口.winfo_screenwidth() - 宽度 - 30)
+        窗口.geometry(f"{宽度}x{高度}+{x}+75")
+        窗口.attributes("-alpha", 0.80)
+        窗口.attributes("-topmost", True)
+        窗口.protocol("WM_DELETE_WINDOW", self._关闭悬浮窗)
+        self._悬浮窗口 = 窗口
+
+        顶栏 = tk.Frame(窗口, bg="#1c2636")
+        顶栏.pack(fill=tk.X, padx=12, pady=(9, 5))
+        tk.Label(
+            顶栏, text="运行日志", bg="#1c2636", fg="#ffffff",
+            font=("Microsoft YaHei UI", 11, "bold"),
+        ).pack(side=tk.LEFT)
+        ttk.Button(顶栏, text="关闭悬浮", command=self._关闭悬浮窗).pack(side=tk.RIGHT)
+        ttk.Checkbutton(顶栏, text="跟随", variable=self._自动滚动).pack(
+            side=tk.RIGHT, padx=(0, 10)
+        )
+        悬浮模式选择 = ttk.Combobox(
+            顶栏, textvariable=self._筛选模式,
+            values=("重点", "全部", "异常"), state="readonly", width=6,
+        )
+        悬浮模式选择.pack(side=tk.RIGHT, padx=(0, 10))
+        悬浮模式选择.bind("<<ComboboxSelected>>", lambda _事件: self._渲染日志())
+        self._悬浮日志文本框 = scrolledtext.ScrolledText(
+            窗口, wrap=tk.NONE, font=("Consolas", 10),
+            background="#1c2636", foreground="#f1f5fa",
+            insertbackground="#f1f5fa", selectbackground="#43536b",
+            relief=tk.FLAT, borderwidth=0, padx=9, pady=7,
+        )
+        self._悬浮日志文本框.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        self._悬浮日志文本框.configure(state="disabled")
+        self._悬浮按钮.configure(text="关闭悬浮")
+        self._渲染日志()
+
+    def _关闭悬浮窗(self):
+        窗口 = self._悬浮窗口
+        self._悬浮窗口 = None
+        self._悬浮日志文本框 = None
+        if 窗口 is not None and 窗口.winfo_exists():
+            窗口.destroy()
+        self._悬浮按钮.configure(text="悬浮半透明")
+
     def _定时刷新日志(self):
         """持续消费实时队列，不因当前选中机器人而丢弃消息。"""
         有变化 = False
@@ -185,12 +247,13 @@ class 日志面板(ttk.Frame):
         # 长时间运行只保留近期实时消息，历史仍由数据库按需读取。
         self._实时日志 = self._实时日志[-1200:]
 
-        if self._可见 and time.time() - self._上次数据库同步 >= 3.0:
+        需要显示 = self._可见 or self._悬浮窗已打开()
+        if 需要显示 and time.time() - self._上次数据库同步 >= 3.0:
             self._历史日志有变化 = False
             self._获取历史日志()
             self._上次数据库同步 = time.time()
             有变化 = 有变化 or self._历史日志有变化
-        if 有变化 and self._可见:
+        if 有变化 and 需要显示:
             self._渲染日志()
         self.after(800, self._定时刷新日志)
 
@@ -319,35 +382,10 @@ class 日志面板(ttk.Frame):
         显示上限 = 180 if 当前模式 != "全部" else 260
         待显示 = 合并日志[-显示上限:]
 
-        当前视图 = self.日志文本框.yview()
-        self.日志文本框.configure(state="normal")
-        self.日志文本框.delete("1.0", tk.END)
-        self.日志文本框.tag_configure("正常", foreground="#263449", spacing3=3)
-        self.日志文本框.tag_configure("警告", foreground="#a15c00", spacing3=3)
-        self.日志文本框.tag_configure("错误", foreground="#b42318", spacing3=3)
-        self.日志文本框.tag_configure("时间", foreground="#8492a6")
-        self.日志文本框.tag_configure("机器人", foreground="#3b5b87")
-
-        if not 待显示:
-            提示 = {
-                "异常": "当前没有异常记录。",
-                "重点": "当前没有重点事件，任务运行后会在这里显示。",
-                "全部": "当前没有运行日志。",
-            }.get(当前模式, "当前没有运行日志。")
-            self.日志文本框.insert(tk.END, 提示 + "\n", "正常")
-        else:
-            for 时间戳, 机器人ID, 内容, 级别, 重复次数 in 待显示:
-                时间文本 = time.strftime("%H:%M:%S", time.localtime(时间戳))
-                图标 = {"正常": "●", "警告": "▲", "错误": "✖"}.get(级别, "●")
-                重复文本 = f"  ×{重复次数}" if 重复次数 > 1 else ""
-                self.日志文本框.insert(tk.END, f"{时间文本}  ", "时间")
-                self.日志文本框.insert(tk.END, f"{图标} ", 级别)
-                self.日志文本框.insert(tk.END, f"{机器人ID}  ", "机器人")
-                self.日志文本框.insert(
-                    tk.END,
-                    f"{内容}{重复文本}\n",
-                    级别,
-                )
+        if self._可见:
+            self._填充日志文本(self.日志文本框, 待显示, 当前模式)
+        if self._悬浮窗已打开():
+            self._填充日志文本(self._悬浮日志文本框, 待显示, 当前模式, 深色=True)
 
         异常数 = sum(
             1 for 项 in 全部日志
@@ -356,11 +394,41 @@ class 日志面板(ttk.Frame):
         self.状态标签.configure(
             text=f"{当前模式} · 显示 {len(待显示)}/{len(过滤日志)} 条 · 异常 {异常数} · 总计 {len(全部日志)}"
         )
-        self.日志文本框.configure(state="disabled")
+
+    def _填充日志文本(self, 文本框, 待显示, 当前模式, 深色=False):
+        当前视图 = 文本框.yview()
+        文本框.configure(state="normal")
+        文本框.delete("1.0", tk.END)
+        颜色 = (
+            {"正常": "#f1f5fa", "警告": "#ffd080", "错误": "#ff9992",
+             "时间": "#a9b8cc", "机器人": "#aaccff"}
+            if 深色 else
+            {"正常": "#263449", "警告": "#a15c00", "错误": "#b42318",
+             "时间": "#8492a6", "机器人": "#3b5b87"}
+        )
+        for 标签, 前景色 in 颜色.items():
+            文本框.tag_configure(标签, foreground=前景色, spacing3=3)
+        if not 待显示:
+            提示 = {
+                "异常": "当前没有异常记录。",
+                "重点": "当前没有重点事件，任务运行后会在这里显示。",
+                "全部": "当前没有运行日志。",
+            }.get(当前模式, "当前没有运行日志。")
+            文本框.insert(tk.END, 提示 + "\n", "正常")
+        else:
+            for 时间戳, 机器人ID, 内容, 级别, 重复次数 in 待显示:
+                时间文本 = time.strftime("%H:%M:%S", time.localtime(时间戳))
+                图标 = {"正常": "●", "警告": "▲", "错误": "✖"}.get(级别, "●")
+                重复文本 = f"  ×{重复次数}" if 重复次数 > 1 else ""
+                文本框.insert(tk.END, f"{时间文本}  ", "时间")
+                文本框.insert(tk.END, f"{图标} ", 级别)
+                文本框.insert(tk.END, f"{机器人ID}  ", "机器人")
+                文本框.insert(tk.END, f"{内容}{重复文本}\n", 级别)
+        文本框.configure(state="disabled")
         if self._自动滚动 is not None and self._自动滚动.get():
-            self.日志文本框.see(tk.END)
+            文本框.see(tk.END)
         elif 当前视图:
-            self.日志文本框.yview_moveto(当前视图[0])
+            文本框.yview_moveto(当前视图[0])
 
     def _清空显示(self):
         """只隐藏当前之前的记录，数据库和任务引擎不受影响。"""
