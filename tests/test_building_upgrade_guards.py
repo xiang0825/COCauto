@@ -200,7 +200,7 @@ class 建筑升级边界测试(unittest.TestCase):
 
         任务.打开建筑页面(划到底部=False)
 
-        点击.assert_called_once_with(262, 33, 延时=1000)
+        点击.assert_called_once_with(746, 538, 延时=1000)
 
     def test_关闭刷资源时寻找建筑滑动仍使用主世界坐标(self):
         鼠标 = SimpleNamespace(
@@ -253,6 +253,25 @@ class 建筑升级边界测试(unittest.TestCase):
         点击.assert_not_called()
         任务.上下文.置脚本状态.assert_called_once()
 
+    def test_新版建造和英雄侧栏凭标题与分区锚点识别(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.上下文 = SimpleNamespace()
+        任务.执行OCR识别 = Mock(return_value=[
+            ([[5, 5], [80, 5], [80, 25], [5, 25]], "建造和英雄", 0.99),
+            ([[5, 50], [80, 50], [80, 70], [5, 70]], "建造升级", 0.98),
+        ])
+
+        self.assertTrue(任务._建筑升级面板已打开())
+        任务.执行OCR识别.assert_called_once_with((585, 0, 800, 600))
+
+    def test_新版建筑坐标按右侧面板OCR裁切偏移(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+
+        self.assertEqual(
+            任务.解析坐标([[10, 20], [50, 20], [50, 40], [10, 40]]),
+            (595, 20, 635, 40),
+        )
+
     def test_主世界单个升级文字不能冒充建筑升级面板(self):
         任务 = 寻找建筑.__new__(寻找建筑)
         任务.上下文 = SimpleNamespace()
@@ -287,7 +306,7 @@ class 建筑升级边界测试(unittest.TestCase):
 
         self.assertFalse(任务.打开建筑页面(划到底部=False))
         self.assertTrue(任务.安全跳过)
-        任务.上下文.点击.assert_called_once_with(262, 33, 延时=1000)
+        任务.上下文.点击.assert_called_once_with(746, 538, 延时=1000)
         self.assertTrue(any(
             "未确认建筑升级面板" in 调用.args[0]
             for 调用 in 任务.上下文.置脚本状态.call_args_list
@@ -313,7 +332,7 @@ class 建筑升级边界测试(unittest.TestCase):
         self.assertFalse(任务.选中建筑(100, 100, 140, 140))
         self.assertTrue(任务.上下文.页面恢复失败)
 
-    def test_关闭英雄殿堂后清除主世界升级浮层(self):
+    def test_关闭英雄殿堂只点击新版面板外安全点一次(self):
         点击 = Mock(return_value=True)
         任务 = 寻找建筑.__new__(寻找建筑)
         任务.上下文 = SimpleNamespace(点击=点击, 脚本延时=Mock())
@@ -322,10 +341,7 @@ class 建筑升级边界测试(unittest.TestCase):
 
         self.assertEqual(
             点击.call_args_list,
-            [
-                unittest.mock.call(356, 33, 延时=700),
-                unittest.mock.call(700, 300, 延时=500, 是否精确点击=True),
-            ],
+            [unittest.mock.call(53, 528, 延时=700, 是否精确点击=True)],
         )
 
     def test_英雄目标首次可见时先OCR不做回顶部滑动(self):
@@ -346,7 +362,7 @@ class 建筑升级边界测试(unittest.TestCase):
         任务._重置英雄殿堂滚动位置.assert_not_called()
         任务._尝试选中指定英雄.assert_called_once()
 
-    def test_英雄入口未打开时精确重试且禁止地图滑动(self):
+    def test_新版建造菜单未确认英雄页时不重复切换且禁止地图滑动(self):
         点击 = Mock(return_value=True)
         任务 = 寻找建筑.__new__(寻找建筑)
         任务.上下文 = SimpleNamespace(
@@ -355,7 +371,7 @@ class 建筑升级边界测试(unittest.TestCase):
             置脚本状态=Mock(),
             页面恢复失败=False,
         )
-        任务._英雄殿堂已打开 = Mock(side_effect=[False, False])
+        任务._英雄殿堂已打开 = Mock(return_value=False)
         任务._重置英雄殿堂滚动位置 = Mock()
         任务._滑动英雄殿堂 = Mock()
 
@@ -363,10 +379,7 @@ class 建筑升级边界测试(unittest.TestCase):
         self.assertTrue(任务.上下文.页面恢复失败)
         self.assertEqual(
             点击.call_args_list,
-            [
-                unittest.mock.call(356, 33, 延时=1000),
-                unittest.mock.call(356, 33, 延时=700, 是否精确点击=True),
-            ],
+            [unittest.mock.call(746, 538, 延时=1000)],
         )
         任务._重置英雄殿堂滚动位置.assert_not_called()
         任务._滑动英雄殿堂.assert_not_called()
@@ -381,6 +394,20 @@ class 建筑升级边界测试(unittest.TestCase):
 
         self.assertFalse(任务.关闭建筑页面())
         self.assertTrue(任务.上下文.页面恢复失败)
+
+    def test_收起新版建筑面板只点击外侧安全点不点击被遮挡入口(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        点击 = Mock(return_value=True)
+        任务.上下文 = SimpleNamespace(
+            点击=点击,
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+        任务._建筑升级面板已打开 = Mock(return_value=False)
+
+        self.assertTrue(任务.关闭建筑页面())
+        点击.assert_called_once_with(53, 528, 延时=700, 是否精确点击=True)
 
     def test_英雄升级详情关闭被拒绝时不继续清除浮层(self):
         任务 = 升级英雄任务.__new__(升级英雄任务)
@@ -414,7 +441,7 @@ class 建筑升级边界测试(unittest.TestCase):
         self.assertTrue(任务.关闭英雄升级页面())
         任务.上下文.关闭升级详情弹窗.assert_called_once_with()
         点击.assert_called_once_with(
-            356, 33, 延时=700, 是否精确点击=True
+            53, 528, 延时=700, 是否精确点击=True
         )
         self.assertFalse(任务.上下文.页面恢复失败)
 
@@ -438,7 +465,7 @@ class 建筑升级边界测试(unittest.TestCase):
         self.assertTrue(任务.关闭英雄升级页面())
         任务.上下文.脚本延时.assert_any_call(250)
         点击.assert_called_once_with(
-            356, 33, 延时=700, 是否精确点击=True
+            53, 528, 延时=700, 是否精确点击=True
         )
 
     def test_建议列表跳过本轮已提交的项目(self):
@@ -700,7 +727,7 @@ class 建筑升级边界测试(unittest.TestCase):
 
         self.assertEqual(
             任务.解析坐标([[10, 20], [50, 20], [50, 40], [10, 40]]),
-            (229, 77, 269, 97),
+            (595, 20, 635, 40),
         )
 
     def test_空OCR坐标被拒绝(self):
@@ -779,7 +806,7 @@ class 工人状态容错测试(unittest.TestCase):
         任务.上下文 = SimpleNamespace(置脚本状态=Mock())
 
         self.assertTrue(任务.识别当前工人状态写入数据库())
-        任务.执行OCR识别.assert_called_once_with((285, 0, 335, 60))
+        任务.执行OCR识别.assert_called_once_with((735, 420, 795, 485))
         self.assertEqual(
             任务.数据库.更新状态.call_args.args[2]["工人总数"],
             2,
@@ -791,17 +818,17 @@ class 工人状态容错测试(unittest.TestCase):
         任务.执行OCR识别 = Mock(side_effect=[
             [],
             [
-                # 回退区域从 x=250 开始；全局中心约 305，属于工人栏。
-                ([[45, 10], [65, 10], [65, 34], [45, 34]], "1/2", 0.88),
-                # 右侧英雄栏 1/7 不得覆盖工人计数。
-                ([[150, 10], [170, 10], [170, 34], [150, 34]], "1/7", 0.99),
+                # 新版回退区域从 x=720 开始；全局中心约 765，属于工人栏。
+                ([[35, 10], [55, 10], [55, 34], [35, 34]], "1/2", 0.88),
+                # 工人 HUD 右侧边缘以外的计数不得覆盖工人状态。
+                ([[5, 10], [20, 10], [20, 34], [5, 34]], "1/7", 0.99),
             ],
         ])
         任务.数据库 = SimpleNamespace(更新状态=Mock())
         任务.上下文 = SimpleNamespace(置脚本状态=Mock())
 
         self.assertTrue(任务.识别当前工人状态写入数据库())
-        self.assertEqual(任务.执行OCR识别.call_args_list[1].args[0], (250, 0, 370, 85))
+        self.assertEqual(任务.执行OCR识别.call_args_list[1].args[0], (720, 410, 799, 510))
         self.assertEqual(
             任务.数据库.更新状态.call_args.args[2]["空闲工人"],
             1,

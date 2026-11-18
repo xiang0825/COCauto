@@ -95,6 +95,44 @@ class 升级面板关闭安全测试(unittest.TestCase):
 
         self.assertFalse(任务上下文._OCR确认升级详情页(OCR结果))
 
+    def test_详情几何和高置信度页面识别可弥补非标准升级标题(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        OCR返回 = (
+            [
+                (None, "6级炼金术士", 0.99),
+                (None, "可转换的资源数量上限", 0.96),
+                (None, "升级1500", 0.99),
+            ],
+            None,
+        )
+        页面识别器 = Mock()
+        页面识别器.识别.side_effect = [
+            SimpleNamespace(页面="升级详情弹窗", 世界="未知", 可信度=0.96),
+            SimpleNamespace(
+                页面="主世界主页", 世界="主世界", 可信度=0.70,
+                摘要=lambda: "页面=主世界主页",
+            ),
+        ]
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.op = SimpleNamespace(
+            获取屏幕图像cv=Mock(return_value=np.zeros_like(图像))
+        )
+        上下文.获取OCR引擎 = Mock(return_value=Mock(return_value=OCR返回))
+        上下文._检测升级详情弹窗关闭点 = Mock(side_effect=[(670, 46), None])
+        上下文._当前画面是英雄升级详情 = Mock(return_value=False)
+        上下文._获取点击页面识别器 = Mock(return_value=页面识别器)
+        上下文.点击已确认安全按钮 = Mock(return_value=True)
+        上下文.脚本延时 = Mock()
+        上下文.置脚本状态 = Mock()
+        上下文.页面恢复失败 = False
+
+        self.assertTrue(上下文.关闭升级详情弹窗(图像))
+
+        上下文.点击已确认安全按钮.assert_called_once_with(
+            670, 46, 延时=220
+        )
+        self.assertFalse(上下文.页面恢复失败)
+
     def test_OCR英雄详情不会被普通建筑护栏关闭(self):
         OCR结果 = [
             (None, "弓箭女皇", 0.99),
@@ -189,14 +227,15 @@ class 升级面板关闭安全测试(unittest.TestCase):
             "关闭英雄升级页面", 已确认可关闭面板=True
         )
 
-    def test_英雄面板优先点主世界空白区域不发送返回键(self):
+    def test_未知英雄面板不盲点地图也不发送返回键(self):
         点击 = Mock(return_value=True)
         返回 = Mock(return_value=True)
         任务 = 升级英雄任务.__new__(升级英雄任务)
         任务.上下文 = SimpleNamespace(点击=点击, 安全返回键=返回)
 
-        self.assertTrue(任务.关闭英雄升级页面())
-        点击.assert_called_once_with(700, 300, 延时=700, 是否精确点击=True)
+        self.assertFalse(任务.关闭英雄升级页面())
+        点击.assert_not_called()
+        self.assertTrue(任务.上下文.页面恢复失败)
         返回.assert_not_called()
 
     def test_研究面板关闭两次都授权已确认面板(self):

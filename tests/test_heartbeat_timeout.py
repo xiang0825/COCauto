@@ -13,6 +13,8 @@ class 心跳超时测试(unittest.TestCase):
         机器人 = 自动化机器人.__new__(自动化机器人)
         机器人.机器人标志 = "robot_1"
         机器人.停止事件 = threading.Event()
+        机器人.继续事件 = threading.Event()
+        机器人.继续事件.set()
         机器人.数据库 = SimpleNamespace(
             读取最后日志=Mock(
                 return_value=SimpleNamespace(
@@ -38,6 +40,72 @@ class 心跳超时测试(unittest.TestCase):
 
         self.assertTrue(超时)
         self.assertIn("含5秒宽限", 原因)
+
+    def test_战后主页确认容忍慢截图(self):
+        机器人 = self._创建机器人()
+        当前时间 = [0.0]
+        主页 = SimpleNamespace(
+            页面="主世界主页",
+            世界="主世界",
+            可信度=0.70,
+            依据=("主世界资源栏0.94", "新版战斗入口0.99"),
+        )
+
+        def 识别页面(**_参数):
+            if 上下文.识别点击画面.call_count == 1:
+                # 模拟 ADB 首帧在回营后卡顿 11 秒，仍应给第二帧确认机会。
+                当前时间[0] += 11.0
+            return 主页
+
+        上下文 = SimpleNamespace(
+            识别点击画面=Mock(side_effect=识别页面),
+            置脚本状态=Mock(),
+            脚本延时=Mock(
+                side_effect=lambda 毫秒: 当前时间.__setitem__(
+                    0, 当前时间[0] + 毫秒 / 1000
+                )
+            ),
+        )
+        with patch(
+            "线程.自动化机器人.time.monotonic",
+            side_effect=lambda: 当前时间[0],
+        ):
+            self.assertTrue(机器人._战后连续确认主世界主页(上下文))
+
+        self.assertEqual(上下文.识别点击画面.call_count, 2)
+
+    def test_用户暂停期间不以旧日志判定无心跳(self):
+        机器人 = self._创建机器人()
+        机器人.继续事件.clear()
+        with patch("线程.自动化机器人.time.time", return_value=10000.0):
+            self.assertEqual(机器人.检查超时()[0], False)
+
+    def test_暂停恢复先更新心跳再接受监控(self):
+        机器人 = self._创建机器人()
+        机器人.继续事件.clear()
+        机器人.记录日志 = Mock()
+        机器人.继续()
+        机器人.记录日志.assert_called_once_with(
+            "机器人已从暂停状态继续，等待下一条任务心跳", 120
+        )
+        self.assertTrue(机器人.继续事件.is_set())
+
+    def test_外部停止唤醒暂停线程但不写恢复心跳(self):
+        机器人 = self._创建机器人()
+        机器人.继续事件.clear()
+        机器人.记录日志 = Mock()
+        机器人.停止("测试停止", 等待=False)
+        self.assertTrue(机器人.停止事件.is_set())
+        self.assertTrue(机器人.继续事件.is_set())
+        self.assertEqual(机器人.记录日志.call_count, 1)
+
+    def test_重复关闭保留第一次停止原因并且不重复写日志(self):
+        机器人 = self._创建机器人()
+        机器人.记录日志 = Mock()
+        机器人.停止("界面停止按钮", 等待=False)
+        机器人.停止("控制台关闭", 等待=False)
+        self.assertEqual(机器人.停止原因, "界面停止按钮")
+        机器人.记录日志.assert_called_once()
 
     def test_战斗异常不会把游戏切到前台或重启(self):
         上下文 = 任务上下文.__new__(任务上下文)

@@ -1,6 +1,8 @@
 import unittest
 import unittest.mock
+import itertools
 import os
+import threading
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -9,6 +11,8 @@ import cv2
 import numpy as np
 
 from 任务流程.主世界打鱼.等待战斗结束并回营 import 等待战斗结束并回营任务
+from 任务流程.检测游戏登录状态 import 检测游戏登录状态任务
+from 模块.检测.页面识别器 import 页面识别器
 
 
 class _匹配器:
@@ -48,6 +52,387 @@ class _上下文:
 
 
 class 回营状态机测试(unittest.TestCase):
+    def test_战斗结束等待期间刷新摧毁率并只保留最高值(self):
+        上下文 = _上下文()
+        上下文.本场实时摧毁率 = 12
+        上下文.本场最高实时摧毁率 = 12
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.ocr引擎 = unittest.mock.Mock(
+            return_value=([(None, "摧毁率"), (None, "45%")], None)
+        )
+
+        self.assertEqual(
+            任务._等待中更新实时摧毁率(上下文, np.zeros((600, 800, 3), dtype=np.uint8)),
+            45,
+        )
+        区域 = 任务.ocr引擎.call_args.args[0]
+        self.assertEqual(区域.shape[:2], (120, 170))
+        self.assertEqual(上下文.本场最高实时摧毁率, 45)
+        self.assertIn("摧毁率进度：45%", 上下文.状态[-1])
+
+        任务.ocr引擎 = unittest.mock.Mock(return_value=([(None, "40%")], None))
+        self.assertEqual(
+            任务._等待中更新实时摧毁率(上下文, np.zeros((600, 800, 3), dtype=np.uint8)),
+            45,
+        )
+        self.assertEqual(上下文.本场实时摧毁率, 45)
+
+    def test_资源栏或徽章单独出现不是可接管主世界(self):
+        判定 = 等待战斗结束并回营任务._主世界主页可信
+        self.assertFalse(判定(SimpleNamespace(
+            页面="主世界主页", 可信度=0.78,
+            依据=("主世界资源栏0.98", "主世界蓝色等级徽章"),
+        )))
+        self.assertFalse(判定(SimpleNamespace(
+            页面="主世界主页", 可信度=0.50,
+            依据=("主世界资源栏0.98",),
+        )))
+        self.assertFalse(判定(SimpleNamespace(
+            页面="主世界主页", 可信度=0.70,
+            依据=("新版战斗入口0.99",),
+        )))
+        self.assertTrue(判定(SimpleNamespace(
+            页面="主世界主页", 可信度=0.57,
+            依据=("主世界资源栏0.98", "主世界入口0.90"),
+        )))
+        self.assertTrue(判定(SimpleNamespace(
+            页面="主世界主页", 可信度=0.70,
+            依据=("主世界资源栏0.94", "新版战斗入口0.99"),
+        )))
+
+    def test_主页证据优先于残留战斗HUD(self):
+        """主城已确认时不能被旧战斗HUD特征拖到六分钟停机。"""
+        上下文 = _上下文()
+        上下文._已确认进入战斗 = True
+        上下文._战斗中 = True
+        上下文.清除战斗结算保护状态 = unittest.mock.Mock()
+        上下文._获取点击页面识别器 = lambda: SimpleNamespace(
+            识别=lambda _图像, **_参数: SimpleNamespace(
+                页面="主世界主页", 可信度=0.78,
+                依据=("主世界资源栏0.98", "主世界入口0.90", "主世界蓝色等级徽章"),
+            ),
+        )
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = _匹配器()
+        任务.等待主界面就绪 = unittest.mock.Mock(return_value=True)
+        任务._画面仍在战斗 = unittest.mock.Mock(return_value=True)
+        任务.记录战斗结果 = unittest.mock.Mock()
+
+        self.assertTrue(任务.等待回营地按钮出现(上下文))
+        任务._画面仍在战斗.assert_not_called()
+        任务.等待主界面就绪.assert_called_once_with(上下文)
+        任务.记录战斗结果.assert_not_called()
+        self.assertFalse(上下文._战斗中)
+        self.assertEqual(上下文.点击记录, [])
+
+    def test_单帧主页误报后新帧仍在战斗时继续等待结算(self):
+        主页 = object()
+        战斗画面 = object()
+
+        class 屏幕:
+            def __init__(自身):
+                自身.画面 = iter((主页, 战斗画面, 战斗画面))
+
+            def 获取屏幕图像cv(自身, *_区域, **_关键字):
+                return next(自身.画面)
+
+        class 停止事件:
+            def __init__(自身):
+                自身.检查次数 = 0
+
+            def is_set(自身):
+                自身.检查次数 += 1
+                return 自身.检查次数 >= 3
+
+        页面结果 = iter((
+            SimpleNamespace(
+                页面="主世界主页", 可信度=0.78,
+                依据=("主世界资源栏0.98", "主世界入口0.90"),
+            ),
+            SimpleNamespace(页面="战斗中", 可信度=0.96, 依据=("战斗中",)),
+            SimpleNamespace(页面="战斗中", 可信度=0.96, 依据=("战斗中",)),
+        ))
+        上下文 = _上下文()
+        上下文.op = 屏幕()
+        上下文._已确认进入战斗 = True
+        上下文.停止事件 = 停止事件()
+        上下文._获取点击页面识别器 = lambda: SimpleNamespace(
+            识别=lambda *_参数, **_关键字: next(页面结果)
+        )
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = _匹配器()
+        任务._画面仍在战斗 = unittest.mock.Mock(return_value=True)
+        任务._等待中更新实时摧毁率 = unittest.mock.Mock()
+        任务._确认无结算回城 = unittest.mock.Mock(return_value=True)
+
+        with unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.time.time",
+            return_value=100.0,
+        ), unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.time.monotonic",
+            return_value=10.0,
+        ), unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.检测游戏登录状态任务._检测断线弹窗",
+            return_value=(False, (0, 0)),
+        ):
+            self.assertFalse(任务.等待回营地按钮出现(上下文))
+
+        任务._确认无结算回城.assert_not_called()
+        self.assertEqual(任务._画面仍在战斗.call_count, 2)
+        任务._画面仍在战斗.assert_has_calls([
+            unittest.mock.call(上下文, 战斗画面),
+            unittest.mock.call(上下文, 战斗画面),
+        ])
+        self.assertTrue(
+            any("主世界候选" in 状态 and "战斗" in 状态 for 状态 in 上下文.状态),
+            repr(上下文.状态),
+        )
+
+    def test_仅弱主页候选仍须遵守战斗HUD(self):
+        上下文 = _上下文()
+        上下文._已确认进入战斗 = True
+        上下文._获取点击页面识别器 = lambda: SimpleNamespace(
+            识别=lambda _图像, **_参数: SimpleNamespace(
+                页面="主世界主页", 可信度=0.50
+            ),
+        )
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = _匹配器()
+        任务._画面仍在战斗 = unittest.mock.Mock(return_value=True)
+        任务.等待主界面就绪 = unittest.mock.Mock()
+        with unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.time.time",
+            side_effect=[0, 1, 2, 361],
+        ):
+            self.assertFalse(任务.等待回营地按钮出现(上下文))
+        任务._画面仍在战斗.assert_called_once()
+        任务.等待主界面就绪.assert_not_called()
+
+    def test_人工回营后连续确认主城可继续但不补造战果(self):
+        上下文 = _上下文()
+        上下文._已确认进入战斗 = True
+        上下文._战斗中 = True
+        上下文._战斗结束已确认 = True
+        上下文._战斗结束截图 = object()
+        上下文.清除战斗结算保护状态 = unittest.mock.Mock()
+        上下文._获取点击页面识别器 = lambda: SimpleNamespace(
+            _红色放弃按钮分数=lambda _图像: 0.0,
+            _战斗倒计时分数=lambda _图像: 0.0,
+            识别=lambda _图像, **_参数: SimpleNamespace(
+                页面="主世界主页", 可信度=0.78,
+                依据=("主世界资源栏0.98", "主世界入口0.90", "主世界蓝色等级徽章"),
+            ),
+        )
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = _匹配器()
+        任务.等待主界面就绪 = unittest.mock.Mock(return_value=True)
+        任务.记录战斗结果 = unittest.mock.Mock()
+
+        self.assertTrue(任务.等待回营地按钮出现(上下文))
+        任务.等待主界面就绪.assert_called_once_with(上下文)
+        任务.记录战斗结果.assert_not_called()
+        self.assertEqual(上下文.点击记录, [])
+        self.assertFalse(上下文._已确认进入战斗)
+        self.assertFalse(上下文._战斗中)
+        上下文.清除战斗结算保护状态.assert_called_once_with(
+            来源="人工或游戏自动回营后主世界"
+        )
+        self.assertIn("不计入学习胜率", " ".join(上下文.状态))
+
+    def test_人工回营仅单帧主城不允许继续(self):
+        上下文 = _上下文()
+        上下文._已确认进入战斗 = True
+        上下文._获取点击页面识别器 = lambda: SimpleNamespace(
+            _红色放弃按钮分数=lambda _图像: 0.0,
+            _战斗倒计时分数=lambda _图像: 0.0,
+            识别=lambda _图像, **_参数: SimpleNamespace(
+                页面="主世界主页", 可信度=0.78,
+                依据=("主世界资源栏0.98", "主世界入口0.90", "主世界蓝色等级徽章"),
+            ),
+        )
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = _匹配器()
+        任务.等待主界面就绪 = unittest.mock.Mock(return_value=False)
+        任务.记录战斗结果 = unittest.mock.Mock()
+
+        self.assertFalse(任务.等待回营地按钮出现(上下文))
+        任务.记录战斗结果.assert_not_called()
+        self.assertEqual(上下文.点击记录, [])
+        self.assertTrue(上下文._已确认进入战斗)
+
+    def test_战斗HUD下的断线弹窗必须先于底层战斗判定(self):
+        画面 = np.full((600, 800, 3), (10, 18, 22), dtype=np.uint8)
+        cv2.rectangle(画面, (20, 430), (150, 477), (0, 0, 210), -1)
+        cv2.rectangle(画面, (164, 180), (635, 423), (32, 26, 29), -1)
+        for 左, 上, 右, 下 in (
+            (201, 218, 304, 244), (201, 270, 580, 294),
+            (201, 306, 232, 328), (201, 368, 325, 389),
+        ):
+            cv2.rectangle(画面, (左, 上), (右, 下), (220, 220, 220), -1)
+        识别器 = 页面识别器(unittest.mock.Mock())
+        上下文 = SimpleNamespace(_获取点击页面识别器=lambda: 识别器)
+
+        self.assertTrue(等待战斗结束并回营任务._画面仍在战斗(上下文, 画面))
+        self.assertTrue(检测游戏登录状态任务._检测断线弹窗(画面)[0])
+
+    def test_回营等待断线重连回城不伪造战斗结果(self):
+        断线 = np.zeros((600, 800, 3), dtype=np.uint8)
+        断线[0, 0, 0] = 1
+        主页 = np.zeros_like(断线)
+        主页[0, 0, 0] = 2
+
+        class 屏幕:
+            def __init__(自身):
+                自身.画面 = iter((断线, 断线, 主页, 主页, 主页, 主页))
+
+            def 获取屏幕图像cv(自身, *_区域, **_参数):
+                return next(自身.画面)
+
+        class 识别器:
+            def _红色放弃按钮分数(自身, 图像):
+                # 重连主页残留战斗按钮特征，不能先用它排除主页。
+                return 0.93
+
+            def _战斗倒计时分数(自身, _图像):
+                return 0.0
+
+            def 识别(自身, 图像, **_参数):
+                return SimpleNamespace(
+                    页面="主世界主页" if 图像[0, 0, 0] == 2 else "断线弹窗",
+                    可信度=0.78,
+                    依据=("主世界资源栏0.98", "主世界入口0.90"),
+                )
+
+        class 不匹配:
+            def 执行匹配(自身, *_参数, **_关键字):
+                return False, (0, 0), None
+
+        上下文 = _上下文()
+        上下文.op = 屏幕()
+        上下文._获取点击页面识别器 = lambda: 识别器()
+        上下文._已确认进入战斗 = True
+        上下文._战斗中 = True
+        上下文._启动时已有战斗 = True
+        上下文.清除战斗结算保护状态 = unittest.mock.Mock()
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = 不匹配()
+        任务.记录战斗结果 = unittest.mock.Mock()
+
+        with unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.检测游戏登录状态任务"
+        ) as 登录类:
+            登录类._检测断线弹窗.side_effect = itertools.chain(
+                [(True, (250, 365)), (True, (250, 365))],
+                itertools.repeat((False, (0, 0))),
+            )
+            def 模拟重连清理战斗标志(**_参数):
+                上下文._已确认进入战斗 = False
+                return True
+
+            登录类.return_value.执行.side_effect = 模拟重连清理战斗标志
+            self.assertTrue(任务.等待回营地按钮出现(上下文))
+            登录类.return_value.执行.assert_called_once_with(
+                首次登录=False, 仅恢复连接=True
+            )
+
+        self.assertFalse(上下文._已确认进入战斗)
+        self.assertFalse(上下文._战斗中)
+        self.assertFalse(上下文._启动时已有战斗)
+        self.assertEqual(上下文.点击记录, [])
+        任务.记录战斗结果.assert_not_called()
+        上下文.清除战斗结算保护状态.assert_called_once_with(
+            来源="断线重连后主世界"
+        )
+        self.assertIn("本场战斗结果丢失", " ".join(上下文.状态))
+
+    def test_回营等待断线重连失败不继续点击(self):
+        上下文 = _上下文()
+        上下文.op = SimpleNamespace(
+            获取屏幕图像cv=unittest.mock.Mock(return_value=object())
+        )
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = unittest.mock.Mock()
+        with unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.检测游戏登录状态任务"
+        ) as 登录类:
+            登录类._检测断线弹窗.return_value = True, (250, 365)
+            登录类.return_value.执行.return_value = False
+            self.assertFalse(任务.等待回营地按钮出现(上下文))
+            登录类.return_value.执行.assert_called_once()
+        self.assertTrue(上下文.页面恢复失败)
+        self.assertEqual(上下文.点击记录, [])
+
+    def test_回营等待允许再次确认的短暂断线后回城(self):
+        断线 = np.zeros((600, 800, 3), dtype=np.uint8)
+        断线[0, 0, 0] = 1
+        主页 = np.zeros_like(断线)
+        主页[0, 0, 0] = 2
+        画面 = iter((断线, 断线, 断线, 断线, 主页, 主页, 主页, 主页))
+        上下文 = _上下文()
+        上下文.op = SimpleNamespace(
+            获取屏幕图像cv=lambda *_参数, **_关键字: next(画面)
+        )
+        上下文._获取点击页面识别器 = lambda: SimpleNamespace(
+            识别=lambda *_参数, **_关键字: SimpleNamespace(
+                页面="主世界主页", 可信度=0.78,
+                依据=("主世界资源栏0.98", "主世界入口0.90"),
+            )
+        )
+        上下文._已确认进入战斗 = True
+        上下文.清除战斗结算保护状态 = unittest.mock.Mock()
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = SimpleNamespace(
+            执行匹配=lambda *_参数, **_关键字: (False, (0, 0), None)
+        )
+        任务.记录战斗结果 = unittest.mock.Mock()
+
+        with unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.检测游戏登录状态任务"
+        ) as 登录类, unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.time.monotonic",
+            side_effect=(n * 3 for n in itertools.count()),
+        ), unittest.mock.patch.object(任务, "_画面仍在战斗", return_value=False):
+            登录类._检测断线弹窗.side_effect = itertools.chain(
+                [(True, (250, 365)) for _ in range(4)],
+                itertools.repeat((False, (0, 0))),
+            )
+            登录类.return_value.执行.return_value = True
+            self.assertTrue(任务.等待回营地按钮出现(上下文))
+            self.assertEqual(登录类.return_value.执行.call_count, 2)
+
+        self.assertEqual(上下文.点击记录, [])
+        任务.记录战斗结果.assert_not_called()
+        self.assertFalse(上下文._已确认进入战斗)
+
+    def test_单帧断线候选消失后不重连也不使用旧帧点击(self):
+        class 屏幕:
+            def __init__(自身):
+                自身.画面 = iter((object(), object()))
+
+            def 获取屏幕图像cv(自身, *_区域, **_参数):
+                return next(自身.画面)
+
+        class 不匹配:
+            def 执行匹配(自身, *_参数, **_关键字):
+                return False, (0, 0), None
+
+        上下文 = _上下文()
+        上下文.op = 屏幕()
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = 不匹配()
+        with unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.检测游戏登录状态任务"
+        ) as 登录类, unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.time.time",
+            side_effect=[0, 1, 2, 361],
+        ):
+            登录类._检测断线弹窗.side_effect = [
+                (True, (250, 365)), (False, (0, 0))
+            ]
+            self.assertFalse(任务.等待回营地按钮出现(上下文))
+            登录类.assert_not_called()
+        self.assertEqual(上下文.点击记录, [])
+
     def test_长时间等待结算会续报心跳(self):
         class 未命中匹配器:
             def 执行匹配(self, *_参数, **_关键字):
@@ -58,13 +443,78 @@ class 回营状态机测试(unittest.TestCase):
         上下文 = _上下文()
         with unittest.mock.patch(
             "任务流程.主世界打鱼.等待战斗结束并回营.time.time",
-            side_effect=[0, 1, 181],
+            side_effect=[0, 1, 2, 361],
         ), unittest.mock.patch(
             "任务流程.主世界打鱼.等待战斗结束并回营.time.monotonic",
             side_effect=[0, 21],
         ):
             self.assertFalse(任务.等待回营地按钮出现(上下文))
         self.assertIn("仍在等待战斗结算及回营按钮", 上下文.状态)
+
+    def test_超过六分钟后人工回营仍自动接续(self):
+        当前时间 = [0.0]
+
+        class 屏幕:
+            def 获取屏幕图像cv(自身, *_区域, **_参数):
+                return "主页" if 当前时间[0] >= 360 else "等待结算"
+
+        class 页面识别器:
+            def 识别(自身, 图像, **_参数):
+                if 图像 == "主页":
+                    return SimpleNamespace(
+                        页面="主世界主页",
+                        可信度=0.70,
+                        依据=("主世界资源栏0.94", "新版战斗入口0.99"),
+                    )
+                return SimpleNamespace(页面="战斗中", 可信度=0.96, 依据=("战斗中",))
+
+        上下文 = _上下文()
+        上下文._已确认进入战斗 = True
+        上下文.停止事件 = threading.Event()
+        上下文.op = 屏幕()
+        上下文._获取点击页面识别器 = lambda: 页面识别器()
+        上下文.脚本延时 = lambda _毫秒: 当前时间.__setitem__(
+            0, 当前时间[0] + 181
+        )
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = _匹配器()
+        任务._确认无结算回城 = unittest.mock.Mock(return_value=True)
+
+        with unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.time.time",
+            side_effect=lambda: 当前时间[0],
+        ), unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.time.monotonic",
+            side_effect=lambda: 当前时间[0],
+        ), unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.检测游戏登录状态任务._检测断线弹窗",
+            return_value=(False, (0, 0)),
+        ), unittest.mock.patch.object(
+            任务, "_画面仍在战斗", side_effect=lambda *_参数: 当前时间[0] < 360
+        ), unittest.mock.patch.object(
+            任务, "_等待中更新实时摧毁率"
+        ):
+            self.assertTrue(任务.等待回营地按钮出现(上下文))
+
+        任务._确认无结算回城.assert_called_once_with(
+            上下文, "人工或游戏自动回营", 结果已记录=False
+        )
+        self.assertIn("超过6分钟", " ".join(上下文.状态))
+        self.assertEqual(上下文.点击记录, [])
+
+    def test_三分钟后才出现真实结算仍能回营(self):
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = _匹配器()
+        任务.记录战斗结果 = unittest.mock.Mock(return_value=True)
+        任务.等待主界面就绪 = unittest.mock.Mock(return_value=True)
+        上下文 = _上下文()
+        with unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.time.time",
+            side_effect=[0, 181, 181],
+        ):
+            self.assertTrue(任务.等待回营地按钮出现(上下文))
+        self.assertEqual(上下文.点击记录, [(120, 130)])
+        self.assertTrue(any("超过3分钟" in 项 for 项 in 上下文.状态))
 
     def test_结果截图使用中文目录仍能写入(self):
         任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
@@ -283,7 +733,12 @@ class 回营状态机测试(unittest.TestCase):
         self.assertEqual(等待战斗结束并回营任务.从OCR文本提取摧毁率("摧毀率 67％"), 67)
         self.assertEqual(
             等待战斗结束并回营任务.合并本场摧毁率(0, 32),
-            32,
+            0,
+        )
+        # 结果页上的最终结算率必须胜过战斗中较早的实时读数。
+        self.assertEqual(
+            等待战斗结束并回营任务.合并本场摧毁率(22, 42),
+            22,
         )
         self.assertEqual(
             等待战斗结束并回营任务.合并本场摧毁率(67, 32),
@@ -309,6 +764,93 @@ class 回营状态机测试(unittest.TestCase):
         self.assertEqual(星数, 3)
         self.assertIn("按规则确认3星", 说明)
         self.assertNotIn("矛盾", 说明)
+
+    def test_三星胜利将单点实时进度误差校正为百分百(self):
+        self.assertEqual(
+            等待战斗结束并回营任务.校正三星摧毁率("胜利", 3, 99),
+            100,
+        )
+        self.assertEqual(
+            等待战斗结束并回营任务.校正三星摧毁率("胜利", 3, 98),
+            98,
+        )
+        self.assertEqual(
+            等待战斗结束并回营任务.校正三星摧毁率("胜利", 2, 99),
+            99,
+        )
+
+    def test_三星胜利与实时99进度仍可完整记录(self):
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务._画面仍在战斗 = unittest.mock.Mock(return_value=False)
+        任务.识别结算帧 = unittest.mock.Mock(
+            return_value=([], "胜利", "胜利", None)
+        )
+        任务.识别星数 = unittest.mock.Mock(return_value=3)
+        任务.保存战斗结果截图 = unittest.mock.Mock()
+        任务.更新战斗学习 = unittest.mock.Mock()
+        任务.生成战斗诊断 = unittest.mock.Mock(return_value="已确认三星")
+        数据库 = unittest.mock.Mock()
+        数据库.获取最新完整状态.return_value = SimpleNamespace(状态数据={})
+        上下文 = SimpleNamespace(
+            数据库=数据库,
+            机器人标志="测试机器人",
+            置脚本状态=unittest.mock.Mock(),
+            本场实时摧毁率=99,
+            本场最高实时摧毁率=99,
+            本场目标战利品={},
+            英雄技能状态={},
+        )
+
+        self.assertTrue(
+            任务.记录战斗结果(上下文, np.zeros((600, 800, 3), dtype=np.uint8))
+        )
+        统计 = 数据库.更新状态.call_args.args[2]
+        self.assertEqual(统计["最近星数"], 3)
+        self.assertEqual(统计["最近摧毁率"], 100)
+        self.assertTrue(
+            any("实时99%校正为最终100%" in call.args[0]
+                for call in 上下文.置脚本状态.call_args_list)
+        )
+
+    def test_胜利文字已识别但星数待定时刷新结算帧(self):
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务._画面仍在战斗 = unittest.mock.Mock(return_value=False)
+        任务.识别结算帧 = unittest.mock.Mock(side_effect=[
+            ([], "胜利", "胜利", 98),
+            ([], "胜利", "胜利", 100),
+        ])
+        任务.识别星数 = unittest.mock.Mock(side_effect=[None, 3])
+        任务.保存战斗结果截图 = unittest.mock.Mock()
+        任务.更新战斗学习 = unittest.mock.Mock()
+        任务.生成战斗诊断 = unittest.mock.Mock(return_value="已确认三星")
+        数据库 = unittest.mock.Mock()
+        数据库.获取最新完整状态.return_value = SimpleNamespace(状态数据={})
+        上下文 = SimpleNamespace(
+            数据库=数据库,
+            机器人标志="测试机器人",
+            置脚本状态=unittest.mock.Mock(),
+            脚本延时=unittest.mock.Mock(),
+            op=SimpleNamespace(
+                获取屏幕图像cv=unittest.mock.Mock(
+                    return_value=np.ones((600, 800, 3), dtype=np.uint8)
+                )
+            ),
+            本场实时摧毁率=98,
+            本场最高实时摧毁率=98,
+            本场目标战利品={},
+            英雄技能状态={},
+        )
+
+        self.assertTrue(
+            任务.记录战斗结果(
+                上下文, np.zeros((600, 800, 3), dtype=np.uint8)
+            )
+        )
+        self.assertEqual(任务.识别结算帧.call_count, 2)
+        上下文.脚本延时.assert_called_once_with(800)
+        统计 = 数据库.更新状态.call_args.args[2]
+        self.assertEqual(统计["最近星数"], 3)
+        self.assertEqual(统计["最近摧毁率"], 100)
 
     def test_零摧毁率却识别到星数时不写入战果(self):
         任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
@@ -346,6 +888,14 @@ class 回营状态机测试(unittest.TestCase):
             "失败", 0, 28, {}, 上下文
         )
         self.assertIn("资源目标或进攻入口不足", 诊断)
+
+    def test_低星胜利诊断只承诺当前支持的策略(self):
+        诊断 = 等待战斗结束并回营任务.生成战斗诊断(
+            "胜利", 1, 82, {}
+        )
+        self.assertIn("可达评分", 诊断)
+        self.assertIn("分散入口", 诊断)
+        self.assertNotIn("核心建筑", 诊断)
 
     def test_战斗学习保存目标证据并改变下一场建议(self):
         class 数据库:
@@ -389,9 +939,360 @@ class 回营状态机测试(unittest.TestCase):
         self.assertEqual(记录["目标数量"], 18)
         self.assertEqual(记录["边缘目标数量"], 14)
         self.assertEqual(记录["进攻方向数量"], 4)
+        self.assertEqual(数据库实例.保存状态["下一场建议"], "集中资源")
+        self.assertIn("评分不可用", 数据库实例.保存状态["建议依据"])
+
+    def test_高评分高可达低表现且已分散时下一场集中验证兵力密度(self):
+        class 数据库:
+            def __init__(自身):
+                自身.保存状态 = None
+
+            def 获取最新完整状态(自身, _机器人标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {"结果": "失败", "星数": 0, "摧毁率": 45},
+                            {"结果": "失败", "星数": 0, "摧毁率": 49},
+                        ]
+                    }
+                })
+
+            def 更新状态(自身, _机器人标志, _名称, 数据):
+                自身.保存状态 = 数据
+
+        数据库实例 = 数据库()
+        上下文 = SimpleNamespace(
+            数据库=数据库实例,
+            机器人标志="测试机器人",
+            本场进攻策略="稳健三星/自适应分散探索",
+            本场进攻方向=["右上", "右下"],
+            本场进攻目标数量=4,
+            本场边缘目标数量=4,
+            本场进攻方向数量=2,
+            英雄技能状态={},
+            置脚本状态=lambda _文本: None,
+        )
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.更新战斗学习(
+            上下文,
+            "失败",
+            0,
+            33,
+            {
+                "金币": 2_316_340,
+                "圣水": 2_316_326,
+                "黑油": 17_047,
+                "资源易窃取评分": 8.9,
+                "资源易窃取评分依据": {"高价值资源可达折算": 74.9},
+            },
+        )
+
+        学习 = 数据库实例.保存状态
+        self.assertEqual(学习["下一场建议"], "集中资源")
+        self.assertIn("集中主力方向", 学习["最近原因"])
+        self.assertIn("本场已完成双方向覆盖且仍低表现", 学习["建议依据"])
+        self.assertNotIn("临时收紧搜索门槛", 学习["建议依据"])
+
+    def test_近期有失败但本场两星集中胜利时保留有效策略(self):
+        class 数据库:
+            def __init__(自身):
+                自身.保存状态 = None
+
+            def 获取最新完整状态(自身, _机器人标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {"结果": "失败", "星数": 0, "摧毁率": 34},
+                            {"结果": "失败", "星数": 0, "摧毁率": 28},
+                        ]
+                    }
+                })
+
+            def 更新状态(自身, _机器人标志, _名称, 数据):
+                自身.保存状态 = 数据
+
+        数据库实例 = 数据库()
+        上下文 = SimpleNamespace(
+            数据库=数据库实例,
+            机器人标志="测试机器人",
+            本场进攻策略="稳健三星/集中左上",
+            本场进攻方向=["左上"],
+            本场进攻目标数量=4,
+            本场边缘目标数量=4,
+            本场进攻方向数量=1,
+            英雄技能状态={},
+            置脚本状态=lambda _文本: None,
+        )
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+
+        任务.更新战斗学习(
+            上下文,
+            "胜利",
+            2,
+            72,
+            {
+                "金币": 359_884,
+                "圣水": 543_600,
+                "黑油": 6_095,
+                "资源易窃取评分": 7.9,
+                "资源易窃取评分依据": {"储存建筑数": 1, "高价值资源可达折算": 50.5},
+            },
+        )
+
+        学习 = 数据库实例.保存状态
+        self.assertEqual(学习["下一场建议"], "集中资源")
+        self.assertIn("本场单方向集中取得2星", 学习["建议依据"])
+        self.assertIn("本场表现正常", 学习["最近原因"])
+
+    def test_本场已集中且高可达低表现时切换双方向(self):
+        class 数据库:
+            def __init__(自身):
+                自身.保存状态 = None
+
+            def 获取最新完整状态(自身, _机器人标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {"结果": "失败", "星数": 0, "摧毁率": 36},
+                            {"结果": "失败", "星数": 0, "摧毁率": 44},
+                        ]
+                    }
+                })
+
+            def 更新状态(自身, _机器人标志, _名称, 数据):
+                自身.保存状态 = 数据
+
+        数据库实例 = 数据库()
+        上下文 = SimpleNamespace(
+            数据库=数据库实例,
+            机器人标志="测试机器人",
+            本场进攻策略="稳健三星/集中左下",
+            本场进攻方向=["左下"],
+            本场进攻目标数量=4,
+            本场边缘目标数量=4,
+            本场进攻方向数量=1,
+            英雄技能状态={},
+            置脚本状态=lambda _文本: None,
+        )
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.生成战斗诊断 = lambda *_参数: (
+            "高评分且高可达资源目标仍低摧毁：可达评分已足够，"
+            "下一场集中主力方向、减少分兵并观察突破效果"
+        )
+
+        任务.更新战斗学习(
+            上下文,
+            "失败",
+            0,
+            36,
+            {"资源易窃取评分": 9.1, "资源易窃取评分依据": {"高价值资源可达折算": 80}},
+        )
+
+        学习 = 数据库实例.保存状态
+        self.assertEqual(学习["下一场建议"], "分散探索")
+        self.assertIn("下一场改为双方向探索", 学习["最近原因"])
+        self.assertIn("本场已集中单方向仍低表现", 学习["建议依据"])
+        self.assertNotIn("临时收紧搜索门槛", 学习["建议依据"])
+
+    def test_明确提高可达评分诊断覆盖旧的分散探索建议(self):
+        class 数据库:
+            def __init__(自身):
+                自身.保存状态 = None
+
+            def 获取最新完整状态(自身, _机器人标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {"结果": "失败", "星数": 0, "摧毁率": 40},
+                            {"结果": "失败", "星数": 0, "摧毁率": 44},
+                        ]
+                    }
+                })
+
+            def 更新状态(自身, _机器人标志, _名称, 数据):
+                自身.保存状态 = 数据
+
+        数据库实例 = 数据库()
+        上下文 = SimpleNamespace(
+            数据库=数据库实例,
+            机器人标志="测试机器人",
+            本场进攻策略="稳健三星/集中左上",
+            本场进攻方向=["左上"],
+            本场进攻目标数量=4,
+            本场边缘目标数量=4,
+            本场进攻方向数量=1,
+            英雄技能状态={},
+            置脚本状态=lambda _文本: None,
+        )
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.生成战斗诊断 = lambda *_参数: (
+            "已获胜但星数偏低：下一场提高目标可达评分，"
+            "并在有可靠目标时分散入口"
+        )
+
+        任务.更新战斗学习(
+            上下文,
+            "胜利",
+            1,
+            50,
+            {"资源易窃取评分": 8.2, "资源易窃取评分依据": {"高价值资源可达折算": 66.6}},
+        )
+
+        学习 = 数据库实例.保存状态
+        self.assertEqual(学习["下一场建议"], "提高目标可达评分")
+        self.assertIn("优先执行诊断", 学习["建议依据"])
+        self.assertIn("提高目标可达评分", 学习["最近原因"])
+
+    def test_最近已评分低表现目标可达偏低时继续筛选(self):
+        class 数据库:
+            def __init__(自身):
+                自身.保存状态 = None
+
+            def 获取最新完整状态(自身, _机器人标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {"结果": "失败", "星数": 0, "摧毁率": 45},
+                            {"结果": "失败", "星数": 0, "摧毁率": 49},
+                        ]
+                    }
+                })
+
+            def 更新状态(自身, _机器人标志, _名称, 数据):
+                自身.保存状态 = 数据
+
+        数据库实例 = 数据库()
+        上下文 = SimpleNamespace(
+            数据库=数据库实例,
+            机器人标志="测试机器人",
+            本场进攻策略="稳健三星/自适应分散探索",
+            本场进攻方向=["右上", "左下"],
+            本场进攻目标数量=4,
+            本场边缘目标数量=4,
+            本场进攻方向数量=2,
+            英雄技能状态={},
+            置脚本状态=lambda _文本: None,
+        )
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+
+        任务.更新战斗学习(
+            上下文,
+            "失败",
+            0,
+            30,
+            {
+                "资源易窃取评分": 7.4,
+                "资源易窃取评分依据": {"高价值资源可达折算": 55.2},
+            },
+        )
+
+        self.assertEqual(数据库实例.保存状态["下一场建议"], "提高目标可达评分")
+        self.assertIn("低于集中突破门槛", 数据库实例.保存状态["建议依据"])
+
+    def test_后续战斗无评分时沿用最近高可达失败证据(self):
+        class 数据库:
+            def __init__(自身):
+                自身.保存状态 = None
+
+            def 获取最新完整状态(自身, _机器人标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {
+                                "结果": "失败", "星数": 0, "摧毁率": 33,
+                                "资源易窃取评分": 8.9,
+                                "资源易窃取评分依据": {
+                                    "高价值资源可达折算": 74.9,
+                                },
+                                "目标数量": 4,
+                                "边缘目标数量": 4,
+                                "进攻方向数量": 2,
+                            },
+                            {
+                                "结果": "失败", "星数": 0, "摧毁率": 49,
+                                "资源易窃取评分": None,
+                                "资源易窃取评分依据": {"状态": "不可用"},
+                                "目标数量": 4,
+                                "边缘目标数量": 4,
+                                "进攻方向数量": 2,
+                            },
+                        ]
+                    }
+                })
+
+            def 更新状态(自身, _机器人标志, _名称, 数据):
+                自身.保存状态 = 数据
+
+        数据库实例 = 数据库()
+        上下文 = SimpleNamespace(
+            数据库=数据库实例,
+            机器人标志="测试机器人",
+            本场进攻策略="稳健三星/自适应分散探索",
+            本场进攻方向=["右上", "左下"],
+            本场进攻目标数量=4,
+            本场边缘目标数量=4,
+            本场进攻方向数量=2,
+            英雄技能状态={},
+            置脚本状态=lambda _文本: None,
+        )
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+
+        任务.更新战斗学习(
+            上下文,
+            "失败",
+            0,
+            30,
+            {
+                "金币": None,
+                "圣水": None,
+                "黑油": None,
+                "资源评分状态": "不可用",
+            },
+        )
+
+        self.assertEqual(数据库实例.保存状态["下一场建议"], "集中资源")
+        self.assertIn("8.9", 数据库实例.保存状态["建议依据"])
+
+    def test_一星胜利优先保留提高可达评分诊断(self):
+        class 数据库:
+            def __init__(自身):
+                自身.保存状态 = None
+
+            def 获取最新完整状态(自身, _机器人标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {"结果": "胜利", "星数": 1, "摧毁率": 73},
+                            {"结果": "胜利", "星数": 1, "摧毁率": 54},
+                        ]
+                    }
+                })
+
+            def 更新状态(自身, _机器人标志, _名称, 数据):
+               自身.保存状态 = 数据
+
+        数据库实例 = 数据库()
+        上下文 = SimpleNamespace(
+            数据库=数据库实例,
+            机器人标志="测试机器人",
+            本场进攻策略="稳健三星/集中左下",
+            本场进攻方向=["左下"],
+            本场进攻目标数量=4,
+            本场边缘目标数量=4,
+            本场进攻方向数量=1,
+            英雄技能状态={},
+            置脚本状态=lambda _文本: None,
+        )
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+
+        任务.更新战斗学习(
+            上下文, "胜利", 1, 54,
+            {"金币": 500_000, "圣水": 600_000, "黑油": 0},
+        )
+
         self.assertEqual(数据库实例.保存状态["下一场建议"], "提高目标可达评分")
 
-    def test_双方向分散覆盖也进入高可达目标聚焦(self):
+    def test_双方向分散覆盖且无评分时集中主力验证(self):
         class 数据库:
             def __init__(自身):
                 自身.保存状态 = None
@@ -429,7 +1330,49 @@ class 回营状态机测试(unittest.TestCase):
             20,
             {"金币": 0, "圣水": 100, "黑油": 200},
         )
-        self.assertEqual(数据库实例.保存状态["下一场建议"], "提高目标可达评分")
+        self.assertEqual(数据库实例.保存状态["下一场建议"], "集中资源")
+        self.assertIn("评分不可用", 数据库实例.保存状态["建议依据"])
+
+    def test_实战上限四目标无评分时低表现后切换为集中资源(self):
+        class 数据库:
+            def __init__(自身):
+                自身.保存状态 = None
+
+            def 获取最新完整状态(自身, _机器人标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {"结果": "失败", "摧毁率": 48},
+                            {"结果": "失败", "摧毁率": 38},
+                        ]
+                    }
+                })
+
+            def 更新状态(自身, _机器人标志, _名称, 数据):
+                自身.保存状态 = 数据
+
+        数据库实例 = 数据库()
+        上下文 = SimpleNamespace(
+            数据库=数据库实例,
+            机器人标志="测试机器人",
+            本场进攻策略="稳健三星/自适应分散探索",
+            本场进攻方向=["左上", "右上", "左下", "右下"],
+            本场进攻目标数量=4,
+            本场边缘目标数量=4,
+            本场进攻方向数量=4,
+            英雄技能状态={},
+            置脚本状态=lambda _文本: None,
+        )
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.更新战斗学习(
+            上下文,
+            "失败",
+            0,
+            38,
+            {"金币": 2048281, "圣水": 1943095, "黑油": 0},
+        )
+        self.assertEqual(数据库实例.保存状态["下一场建议"], "集中资源")
+        self.assertIn("评分不可用", 数据库实例.保存状态["建议依据"])
 
     def test_实机结算星形布局识别两星(self):
         图片 = Path(__file__).resolve().parents[1] / ".tmp" / "runtime_after_battle_wait.png"
@@ -523,7 +1466,11 @@ class 回营状态机测试(unittest.TestCase):
             def 识别(自身, _图像, **_参数):
                 自身.次数 += 1
                 页面 = "战斗结算" if 自身.次数 <= 2 else "主世界主页"
-                return type("结果", (), {"页面": 页面, "可信度": 0.92})()
+                return type("结果", (), {
+                    "页面": 页面, "可信度": 0.92,
+                    "依据": ("主世界资源栏0.98", "主世界入口0.90")
+                    if 页面 == "主世界主页" else (),
+                })()
 
             def 定位结算回营按钮(自身, _图像):
                 return (52, 530)
@@ -596,12 +1543,127 @@ class 回营状态机测试(unittest.TestCase):
 
         with unittest.mock.patch(
             "任务流程.主世界打鱼.等待战斗结束并回营.time.time",
-            side_effect=[0, 1, 181],
+            side_effect=[0, 1, 2, 361],
         ):
             self.assertFalse(任务.等待回营地按钮出现(上下文))
         self.assertEqual(上下文.点击记录, [])
         任务.记录战斗结果.assert_not_called()
         self.assertIn("单帧", " ".join(上下文.状态))
+
+    def test_两帧伪结算后新帧仍有放弃按钮不记录也不点击(self):
+        """实机第三场倒计时尚在，却连续误报结算并误记胜利。"""
+        class 低分匹配器:
+            def 执行匹配(self, *_参数, **_关键字参数):
+                return False, (0, 0), None
+
+        class 页面识别器:
+            def _红色放弃按钮分数(self, 图像):
+                return 0.93 if 图像[0, 0, 0] == 2 else 0.0
+
+            def _战斗倒计时分数(self, _图像):
+                return 0.0
+
+            def 识别(self, _图像, **_参数):
+                return SimpleNamespace(页面="战斗结算", 可信度=0.94)
+
+            def 定位结算回营按钮(self, _图像):
+                return (436, 553)
+
+        class 屏幕:
+            def __init__(self):
+                self.次数 = 0
+
+            def 获取屏幕图像cv(self, *_区域, **_参数):
+                图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+                图像[0, 0, 0] = min(self.次数, 2)
+                self.次数 += 1
+                return 图像
+
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = 低分匹配器()
+        任务.记录战斗结果 = unittest.mock.Mock(return_value=True)
+        上下文 = _上下文()
+        上下文.op = 屏幕()
+        上下文._获取点击页面识别器 = lambda: 页面识别器()
+        with unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.time.time",
+            side_effect=[0, 1, 2, 361],
+        ):
+            self.assertFalse(任务.等待回营地按钮出现(上下文))
+        任务.记录战斗结果.assert_not_called()
+        self.assertEqual(上下文.点击记录, [])
+        self.assertTrue(any("不记录结果、不点击回营" in 项 for 项 in 上下文.状态))
+
+    def test_第三帧单项战斗信号但结算页和回营按钮稳定时继续(self):
+        class 低分匹配器:
+            def 执行匹配(self, *_参数, **_关键字参数):
+                return False, (0, 0), None
+
+        class 页面识别器:
+            def _红色放弃按钮分数(self, _图像):
+                return 0.0
+
+            def _战斗倒计时分数(self, 图像):
+                return 0.96 if 图像[0, 0, 0] == 2 else 0.0
+
+            def _结算结果视觉分数(self, _图像):
+                return 0.94
+
+            def 识别(self, _图像, **_参数):
+                return SimpleNamespace(页面="战斗结算", 可信度=0.94)
+
+            def 定位结算回营按钮(self, 图像, 允许单帧战斗信号=False):
+                if 图像[0, 0, 0] == 2 and not 允许单帧战斗信号:
+                    return None
+                return (436, 553)
+
+        class 屏幕:
+            def __init__(self):
+                self.次数 = 0
+
+            def 获取屏幕图像cv(self, *_区域, **_参数):
+                图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+                图像[0, 0, 0] = min(self.次数, 2)
+                self.次数 += 1
+                return 图像
+
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = 低分匹配器()
+        任务.记录战斗结果 = unittest.mock.Mock(return_value=True)
+        任务.等待主界面就绪 = unittest.mock.Mock(return_value=True)
+        上下文 = _上下文()
+        上下文.op = 屏幕()
+        上下文._已确认进入战斗 = True
+        上下文.点击已确认安全按钮 = unittest.mock.Mock(return_value=True)
+        上下文.清除战斗结算保护状态 = unittest.mock.Mock()
+        页面 = 页面识别器()
+        上下文._获取点击页面识别器 = lambda: 页面
+
+        with unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.time.time",
+            side_effect=[0, 1, 2, 361],
+        ), unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.检测游戏登录状态任务._检测断线弹窗",
+            return_value=(False, None),
+        ):
+            self.assertTrue(任务.等待回营地按钮出现(上下文))
+
+        任务.记录战斗结果.assert_called_once()
+        上下文.点击已确认安全按钮.assert_called_once_with(436, 553)
+        self.assertTrue(any("单项残留战斗信号" in 项 for 项 in 上下文.状态))
+
+    def test_旧战斗结束标记不能覆盖当前放弃按钮(self):
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        识别器 = SimpleNamespace(
+            _红色放弃按钮分数=lambda _图像: 0.93,
+            _战斗倒计时分数=lambda _图像: 0.96,
+        )
+        上下文 = SimpleNamespace(
+            _战斗结束已确认=True,
+            _获取点击页面识别器=lambda: 识别器,
+        )
+        self.assertFalse(任务._结果页按钮可信(上下文, 画面))
 
     def test_主世界页级识别低于模板阈值仍可确认回营(self):
         class 页级识别器:
@@ -623,6 +1685,24 @@ class 回营状态机测试(unittest.TestCase):
 
         self.assertTrue(任务.等待主界面就绪(上下文))
         self.assertIn("页面识别连续确认已回到主世界", " ".join(上下文.状态))
+
+    def test_新版主页战斗入口证据可连续确认回营(self):
+        class 新版主页识别器:
+            def 识别(self, _图像, **_参数):
+                return SimpleNamespace(
+                    页面="主世界主页",
+                    可信度=0.70,
+                    依据=("主世界资源栏0.94", "新版战斗入口0.99"),
+                )
+
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = unittest.mock.Mock()
+        上下文 = _上下文()
+        上下文._获取点击页面识别器 = lambda: 新版主页识别器()
+
+        self.assertTrue(任务.等待主界面就绪(上下文))
+        self.assertIn("页面识别连续确认已回到主世界", " ".join(上下文.状态))
+        任务.模板识别.执行匹配.assert_not_called()
 
     def test_断线弹窗露出底层主世界图标时不能误判回营(self):
         class 页面识别器:
@@ -656,6 +1736,26 @@ class 回营状态机测试(unittest.TestCase):
         self.assertEqual(任务.模板识别.调用次数, 0)
         self.assertIn("断线弹窗", " ".join(上下文.状态))
 
+    def test_主世界页级识别被断线遮罩误导时不放行(self):
+        上下文 = _上下文()
+        上下文._获取点击页面识别器 = lambda: SimpleNamespace(
+            识别=lambda _图像, **_参数: SimpleNamespace(
+                页面="主世界主页", 可信度=0.78
+            )
+        )
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = unittest.mock.Mock()
+        with unittest.mock.patch.object(
+            检测游戏登录状态任务, "_检测断线弹窗",
+            return_value=(True, (250, 365)),
+        ), unittest.mock.patch(
+            "任务流程.主世界打鱼.等待战斗结束并回营.time.time",
+            side_effect=[0, 1, 31],
+        ):
+            self.assertFalse(任务.等待主界面就绪(上下文))
+        self.assertIn("断线弹窗", " ".join(上下文.状态))
+        self.assertEqual(上下文.点击记录, [])
+
     def test_实机零点八五分结算按钮会进入回营流程(self):
         class 评分匹配器:
             def 执行匹配(self, _图像, 模板路径, 相似度阈值=0.8, **_参数):
@@ -671,7 +1771,10 @@ class 回营状态机测试(unittest.TestCase):
 
             def 识别(self, _图像, **_参数):
                 self.调用次数 += 1
-                return SimpleNamespace(页面="主世界主页", 可信度=0.78)
+                return SimpleNamespace(
+                    页面="主世界主页", 可信度=0.78,
+                    依据=("主世界资源栏0.98", "主世界入口0.90"),
+                )
 
         任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
         任务.模板识别 = 评分匹配器()
@@ -686,6 +1789,29 @@ class 回营状态机测试(unittest.TestCase):
         self.assertTrue(结果)
         self.assertEqual(上下文.点击记录, [(409, 520)])
         self.assertIn("检测到回营按钮，点击返回主界面", 上下文.状态)
+
+    def test_回营点击未生效后复核按钮再试一次(self):
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = _匹配器()
+        任务.记录战斗结果 = unittest.mock.Mock(return_value=True)
+        任务.等待主界面就绪 = unittest.mock.Mock(side_effect=[False, True])
+        上下文 = _上下文()
+        上下文._战斗结束已确认 = True
+
+        self.assertTrue(任务.等待回营地按钮出现(上下文))
+        self.assertEqual(上下文.点击记录, [(120, 130), (120, 130)])
+        任务.记录战斗结果.assert_called_once()
+
+    def test_两次回营点击仍未确认主世界则停止(self):
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = _匹配器()
+        任务.记录战斗结果 = unittest.mock.Mock(return_value=True)
+        任务.等待主界面就绪 = unittest.mock.Mock(side_effect=[False, False])
+        上下文 = _上下文()
+        上下文._战斗结束已确认 = True
+
+        self.assertFalse(任务.等待回营地按钮出现(上下文))
+        self.assertEqual(len(上下文.点击记录), 2)
 
     def test_战斗统计不完整时不点击回营也不开启下一场(self):
         class 评分匹配器:

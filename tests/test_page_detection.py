@@ -71,6 +71,81 @@ class 页面识别测试(unittest.TestCase):
         )
         上下文.置脚本状态.assert_not_called()
 
+    def test_登录页级识别接受已登录的主世界多人战斗选择页(self):
+        上下文 = SimpleNamespace(置脚本状态=Mock())
+        任务 = 检测游戏登录状态任务.__new__(检测游戏登录状态任务)
+        任务.上下文 = 上下文
+        页面识别 = Mock()
+        页面识别.识别.return_value = SimpleNamespace(
+            页面="主世界战斗模式选择", 世界="主世界", 可信度=0.96
+        )
+
+        self.assertTrue(
+            任务._登录主页已确认(np.zeros((600, 800, 3), dtype=np.uint8), 页面识别)
+        )
+        上下文.置脚本状态.assert_not_called()
+
+    def test_启动登录两帧确认模式选择页后不做主页缩放(self):
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=画面),
+                设备=SimpleNamespace(
+                    获取当前前台包名=Mock(return_value="com.supercell.clashofclans")
+                ),
+            ),
+            设置=SimpleNamespace(部落冲突包名="com.supercell.clashofclans"),
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            游戏内拉远视距=Mock(),
+        )
+        任务 = 检测游戏登录状态任务.__new__(检测游戏登录状态任务)
+        任务.上下文 = 上下文
+        任务.第一次检测游戏登录 = True
+        模式页 = SimpleNamespace(
+            页面="主世界战斗模式选择", 世界="主世界", 可信度=0.96
+        )
+
+        with patch("任务流程.检测游戏登录状态.模板匹配引擎"), \
+                patch("任务流程.检测游戏登录状态.页面识别器") as 页面工厂, \
+                patch.object(任务, "_启动阶段处理英雄升级详情", return_value=False), \
+                patch.object(任务, "_启动阶段处理研究目标页", return_value=False), \
+                patch.object(任务, "_启动阶段处理主世界活动弹窗", return_value=False), \
+                patch.object(
+                    检测游戏登录状态任务,
+                    "_检测断线弹窗",
+                    return_value=(False, (0, 0)),
+                ):
+            页面工厂.return_value.识别.return_value = 模式页
+            self.assertTrue(任务.执行())
+
+        self.assertTrue(上下文._主世界战斗模式选择页)
+        上下文.游戏内拉远视距.assert_not_called()
+        self.assertFalse(上下文.停止事件.is_set())
+
+    def test_多人战斗模式页必须同时看到普通与排位按钮(self):
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(画面, (46, 409), (227, 482), (44, 173, 249), -1)
+        cv2.rectangle(画面, (345, 409), (526, 482), (255, 126, 35), -1)
+
+        结果 = self.识别器.识别(画面)
+
+        self.assertEqual(结果.页面, "主世界战斗模式选择")
+        self.assertEqual(结果.世界, "主世界")
+        self.assertGreaterEqual(结果.可信度, 0.90)
+        self.assertEqual(
+            页面识别器.定位主世界战斗模式普通按钮(画面), (137, 446)
+        )
+
+    def test_只有橙色按钮不能确认多人战斗模式页(self):
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(画面, (46, 409), (227, 482), (44, 173, 249), -1)
+
+        self.assertIsNone(页面识别器.定位主世界战斗模式普通按钮(画面))
+        self.assertNotEqual(self.识别器.识别(画面).页面, "主世界战斗模式选择")
+
     def test_每次登录重连都重新确认CoC前台(self):
         """重连任务不能复用上一次执行的前台确认结果。"""
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
@@ -185,26 +260,44 @@ class 页面识别测试(unittest.TestCase):
         self.assertTrue(any("活动/奖励面板" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list))
 
     def test_启动时战斗阶段明确为开始时要求接管下兵(self):
-        任务 = 检测游戏登录状态任务(
-            SimpleNamespace(数据库=Mock(), 机器人标志="robot_test")
-        )
-        任务._启动时战斗OCR = Mock(return_value=(
+        上下文 = SimpleNamespace(
+            数据库=Mock(),
+            机器人标志="robot_test",
+            获取模板识别器=Mock(return_value=Mock()),
+            获取OCR引擎=Mock(return_value=Mock(return_value=(
             [([[350, 10], [430, 10], [430, 30], [350, 30]], "離戰鬥開始剩下", 0.95)],
             None,
-        ))
+            ))),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
-        self.assertFalse(任务._识别启动时战斗阶段(屏幕))
+        with patch(
+            "任务流程.检测游戏登录状态.安全OCR引擎",
+            side_effect=AssertionError("启动OCR应来自任务上下文"),
+            create=True,
+        ):
+            self.assertIs(任务._识别启动时战斗阶段(屏幕), False)
+        上下文.获取OCR引擎.assert_called_once_with()
 
     def test_启动时战斗阶段明确为结束时只等待回营(self):
-        任务 = 检测游戏登录状态任务(
-            SimpleNamespace(数据库=Mock(), 机器人标志="robot_test")
-        )
-        任务._启动时战斗OCR = Mock(return_value=(
+        上下文 = SimpleNamespace(
+            数据库=Mock(),
+            机器人标志="robot_test",
+            获取模板识别器=Mock(return_value=Mock()),
+            获取OCR引擎=Mock(return_value=Mock(return_value=(
             [([[350, 10], [430, 10], [430, 30], [350, 30]], "離戰鬥結束剩下", 0.95)],
             None,
-        ))
+            ))),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
-        self.assertTrue(任务._识别启动时战斗阶段(屏幕))
+        with patch(
+            "任务流程.检测游戏登录状态.安全OCR引擎",
+            side_effect=AssertionError("启动OCR应来自任务上下文"),
+            create=True,
+        ):
+            self.assertIs(任务._识别启动时战斗阶段(屏幕), True)
+        上下文.获取OCR引擎.assert_called_once_with()
 
     def test_实机战斗截图识别为战斗中(self):
         图像 = self._读取截图("runtime_world_after_fix.png")
@@ -212,6 +305,17 @@ class 页面识别测试(unittest.TestCase):
             self.skipTest("没有维护观察截图")
         结果 = self.识别器.识别(图像)
         self.assertEqual(结果.页面, "战斗中")
+
+    def test_战斗HUD与配置页误候选同时存在时优先识别战斗(self):
+        """新 UI 的战场绿色区域不能让军队页候选压过战斗 HUD。"""
+        图像 = self._读取截图("runtime_world_after_fix.png")
+        if 图像 is None:
+            self.skipTest("没有维护观察截图")
+        with patch.object(
+            self.识别器, "定位军队配置页攻击按钮", return_value=(570, 479)
+        ):
+            结果 = self.识别器.识别(图像, 战斗中=True)
+        self.assertEqual(结果.页面, "战斗中", 结果.摘要())
 
     def test_红色放弃按钮兜底识别战斗页(self):
         """模板文字变化时仍能用左下角红色按钮识别战斗页。"""
@@ -473,8 +577,8 @@ class 页面识别测试(unittest.TestCase):
         self.assertEqual(结果.页面, "战斗奖励选择")
         self.assertTrue(any("奖励选择红色横幅" in 依据 for 依据 in 结果.依据))
 
-    def test_战斗倒计时存在时不误判奖励选择(self):
-        """战场顶部倒计时比地图上的伪卡片结构更强，必须保留战斗页。"""
+    def test_战斗倒计时存在时仍识别奖励遮罩(self):
+        """实机活动奖励卡出现时倒计时仍继续，不能放行下兵点击。"""
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
         cv2.rectangle(图像, (10, 430), (105, 470), (0, 0, 220), -1)
@@ -489,11 +593,11 @@ class 页面识别测试(unittest.TestCase):
             1.4, (255, 255, 255), 3, cv2.LINE_AA,
         )
         结果 = self.识别器.识别(图像, 战斗中=True)
-        self.assertEqual(结果.页面, "战斗中")
-        self.assertTrue(any("战斗倒计时" in 依据 for 依据 in 结果.依据))
+        self.assertEqual(结果.页面, "战斗奖励选择")
+        self.assertTrue(any("奖励选择红色横幅" in 依据 for 依据 in 结果.依据))
 
-    def test_红色最后倒计时存在时不误判奖励选择(self):
-        """最后几秒倒计时变红时，仍不能把战场结构误判为奖励页。"""
+    def test_红色最后倒计时存在时仍识别奖励遮罩(self):
+        """即使最后几秒倒计时变红，覆盖地图的卡片也要阻断点击。"""
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
         cv2.rectangle(图像, (10, 430), (105, 470), (0, 0, 220), -1)
@@ -512,8 +616,8 @@ class 页面识别测试(unittest.TestCase):
             1.8, (0, 0, 220), 4, cv2.LINE_AA,
         )
         结果 = self.识别器.识别(图像, 战斗中=True)
-        self.assertEqual(结果.页面, "战斗中")
-        self.assertTrue(any("战斗倒计时" in 依据 for 依据 in 结果.依据))
+        self.assertEqual(结果.页面, "战斗奖励选择")
+        self.assertTrue(any("奖励选择红色横幅" in 依据 for 依据 in 结果.依据))
 
     def test_结果横幅和底部回营按钮优先识别结算页(self):
         """回营模板失配时，真实结算画面的视觉结构仍优先于奖励页。"""
@@ -540,6 +644,27 @@ class 页面识别测试(unittest.TestCase):
         结果 = self.识别器.识别(图像, 战斗中=True)
         self.assertEqual(结果.页面, "战斗结算")
         self.assertEqual(self.识别器.定位结算回营按钮(图像), (400, 525))
+
+    def test_三帧复核时单个残留战斗信号可由结算结构与回营按钮覆盖(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        识别器 = 页面识别器(Mock())
+        识别器._结算结果视觉分数 = Mock(return_value=0.94)
+        识别器._定位绿色回营按钮 = Mock(return_value=(400, 525))
+        识别器._红色放弃按钮分数 = Mock(return_value=0.0)
+        识别器._战斗倒计时分数 = Mock(return_value=0.96)
+
+        # 默认页面复核仍拒绝战斗倒计时；只有回营状态机已完成前两帧
+        # 结算复核后，才可请求此单帧残留信号的受限回退。
+        self.assertIsNone(识别器.定位结算回营按钮(图像))
+        self.assertEqual(
+            识别器.定位结算回营按钮(图像, 允许单帧战斗信号=True),
+            (400, 525),
+        )
+
+        识别器._红色放弃按钮分数 = Mock(return_value=0.93)
+        self.assertIsNone(
+            识别器.定位结算回营按钮(图像, 允许单帧战斗信号=True)
+        )
 
     def test_夜世界暗色结果遮罩仍可识别结算页(self):
         """实机暗色结算动画中亮色星级结构不足时仍必须能回营。"""
@@ -695,6 +820,50 @@ class 页面识别测试(unittest.TestCase):
         self.assertAlmostEqual(关闭点[0], 710, delta=5)
         self.assertAlmostEqual(关闭点[1], 45, delta=5)
 
+    def test_战斗双重证据不被升级详情几何误判挡住(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        with patch.object(self.识别器, "_升级详情弹窗分数", return_value=0.96), \
+             patch.object(self.识别器, "_红色放弃按钮分数", return_value=0.93), \
+             patch.object(self.识别器, "_战斗倒计时分数", return_value=0.96), \
+             patch.object(self.识别器, "_最佳分数", return_value=0.0), \
+             patch.object(self.识别器, "_结算结果视觉分数", return_value=0.0), \
+             patch.object(self.识别器, "_奖励选择横幅分数", return_value=0.0):
+            self.assertEqual(self.识别器.识别(图像, 战斗中=True).页面, "战斗中")
+            self.assertEqual(self.识别器.识别(图像, 战斗中=False).页面, "升级详情弹窗")
+
+    def test_升级详情只有单一战斗证据仍须拦截(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        with patch.object(self.识别器, "_升级详情弹窗分数", return_value=0.96), \
+             patch.object(self.识别器, "_红色放弃按钮分数", return_value=0.93), \
+             patch.object(self.识别器, "_战斗倒计时分数", return_value=0.0):
+            self.assertEqual(self.识别器.识别(图像, 战斗中=True).页面, "升级详情弹窗")
+
+    def test_实机结算摧毁率区域不会误报战斗倒计时(self):
+        区域路径 = self.根目录 / "tests" / "fixtures" / "page_detection" / "settlement_counter_header.png"
+        区域 = cv2.imread(str(区域路径))
+        self.assertIsNotNone(区域)
+        高, 宽 = 580, 1023
+        图像 = np.zeros((高, 宽, 3), dtype=np.uint8)
+        左 = int(宽 * 0.32)
+        图像[:区域.shape[0], 左:左 + 区域.shape[1]] = 区域
+
+        with patch.object(self.识别器, "_结算结果视觉分数", return_value=0.96), \
+             patch.object(self.识别器, "_红色放弃按钮分数", return_value=0.0), \
+             patch.object(self.识别器, "_最佳分数", return_value=0.0), \
+             patch.object(self.识别器, "_奖励选择横幅分数", return_value=0.0):
+            结果 = self.识别器.识别(图像, 战斗中=True)
+
+        self.assertEqual(结果.页面, "战斗结算")
+
+    def test_战斗放弃按钮仍可阻止伪结算(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        with patch.object(self.识别器, "_结算结果视觉分数", return_value=0.96), \
+             patch.object(self.识别器, "_战斗倒计时分数", return_value=0.96), \
+             patch.object(self.识别器, "_红色放弃按钮分数", return_value=0.93), \
+             patch.object(self.识别器, "_最佳分数", return_value=0.0), \
+             patch.object(self.识别器, "_奖励选择横幅分数", return_value=0.0):
+            self.assertEqual(self.识别器.识别(图像, 战斗中=True).页面, "战斗中")
+
     def test_升级详情弹窗点击护栏阻断原始输入(self):
         上下文 = 任务上下文.__new__(任务上下文)
         上下文.检查宝石商店危险页面 = Mock(return_value=False)
@@ -849,15 +1018,31 @@ class 页面识别测试(unittest.TestCase):
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         图像[:18, :] = (20, 210, 245)
         cv2.rectangle(图像, (195, 190), (635, 430), (32, 26, 29), -1)
+        cv2.rectangle(图像, (250, 220), (500, 235), (235, 235, 235), -1)
+        cv2.rectangle(图像, (250, 280), (580, 296), (225, 225, 225), -1)
+        cv2.rectangle(图像, (260, 380), (420, 398), (240, 240, 240), -1)
 
         结果 = self.识别器.识别(图像)
 
         self.assertEqual(结果.页面, "系统维护")
         self.assertTrue(any("黄黑维护警示带" in 依据 for 依据 in 结果.依据))
 
+    def test_战斗顶部黄色HUD条单独出现不应识别为系统维护(self):
+        """黄条可能来自战斗HUD；维护页还必须有中央维护弹窗证据。"""
+        图像 = np.full((600, 800, 3), (70, 100, 55), dtype=np.uint8)
+        图像[:18, :] = (20, 210, 245)
+
+        结果 = self.识别器.识别(图像, 战斗中=True)
+
+        self.assertNotEqual(结果.页面, "系统维护")
+
     def test_维护页登录任务安全停止不点击(self):
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
         屏幕[:18, :] = (20, 210, 245)
+        cv2.rectangle(屏幕, (195, 190), (635, 430), (32, 26, 29), -1)
+        cv2.rectangle(屏幕, (250, 220), (500, 235), (235, 235, 235), -1)
+        cv2.rectangle(屏幕, (250, 280), (580, 296), (225, 225, 225), -1)
+        cv2.rectangle(屏幕, (260, 380), (420, 398), (240, 240, 240), -1)
         上下文 = SimpleNamespace(
             op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=屏幕)),
             数据库=Mock(),
@@ -935,6 +1120,35 @@ class 页面识别测试(unittest.TestCase):
         结果 = 识别器.识别(np.zeros((600, 800, 3), dtype=np.uint8), 战斗中=True)
         self.assertEqual(结果.页面, "战斗中")
         self.assertTrue(any("战斗倒计时" in 依据 for 依据 in 结果.依据))
+
+    def test_伪结算视觉不能覆盖仍在运行的战斗倒计时(self):
+        """实战里的回营/横幅误报不得压过仍在运行的倒计时。"""
+        识别器 = 页面识别器(Mock())
+        识别器._最佳分数 = Mock(return_value=0.0)
+        识别器._红色放弃按钮分数 = Mock(return_value=0.0)
+        识别器._结算结果视觉分数 = Mock(return_value=0.92)
+        识别器._战斗倒计时分数 = Mock(return_value=0.96)
+        识别器._奖励选择横幅分数 = Mock(return_value=0.0)
+        识别器.世界识别 = SimpleNamespace(
+            识别=Mock(return_value=SimpleNamespace(当前世界=None))
+        )
+
+        结果 = 识别器.识别(
+            np.zeros((600, 800, 3), dtype=np.uint8), 战斗中=True
+        )
+
+        self.assertEqual(结果.页面, "战斗中")
+        self.assertIn("战斗倒计时0.96", " ".join(结果.依据))
+
+    def test_红色放弃按钮在倒计时漏检时优先于伪结算(self):
+        """实战红字倒计时偶尔漏检，仍可见的放弃按钮不能被伪结算覆盖。"""
+        识别器 = 页面识别器(Mock())
+        识别器._最佳分数 = Mock(return_value=0.85)
+        识别器._红色放弃按钮分数 = Mock(return_value=0.93)
+        识别器._战斗倒计时分数 = Mock(return_value=0.0)
+        结果 = 识别器.识别(np.zeros((600, 800, 3), dtype=np.uint8), 战斗中=True)
+        self.assertEqual(结果.页面, "战斗中")
+        self.assertTrue(any("红色放弃按钮" in 依据 for 依据 in 结果.依据))
 
     def test_奖励过渡复核结算页不会停止任务(self):
         上下文 = 任务上下文.__new__(任务上下文)
@@ -1220,6 +1434,178 @@ class 页面识别测试(unittest.TestCase):
         self.assertFalse(上下文.页面恢复失败)
         self.assertFalse(上下文.停止事件.is_set())
         self.assertTrue(any("重新载入游戏" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
+    def test_战斗中重连只确认页面不执行首次缩放(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=屏幕)),
+            数据库=Mock(),
+            机器人标志="robot_test",
+            停止事件=threading.Event(),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            游戏内拉远视距=Mock(side_effect=AssertionError("重连时不得缩放")),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
+        任务._检测断线弹窗 = Mock(return_value=(False, (0, 0)))
+        for 方法名 in (
+            "_启动阶段处理英雄升级详情", "_启动阶段处理研究目标页",
+            "_启动阶段处理结算页", "_启动阶段处理军队配置页",
+            "_启动阶段处理主世界活动弹窗",
+        ):
+            setattr(任务, 方法名, Mock(return_value=False))
+
+        class 假引擎:
+            def 执行匹配(self, _图像, _模板路径, **_参数):
+                return False, (0, 0), 0.0
+
+        class 假页面识别器:
+            def 识别(self, _图像, **_参数):
+                return SimpleNamespace(页面="战斗中", 世界=None, 可信度=0.96)
+
+        with patch("任务流程.检测游戏登录状态.模板匹配引擎", return_value=假引擎()), \
+             patch("任务流程.检测游戏登录状态.页面识别器", return_value=假页面识别器()):
+            self.assertTrue(任务.执行(首次登录=False, 仅恢复连接=True))
+
+        上下文.游戏内拉远视距.assert_not_called()
+        self.assertTrue(上下文._启动时已有战斗)
+
+    def test_再次登录遇到英雄详情也绝不拉远视距(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=屏幕)),
+            数据库=Mock(),
+            机器人标志="robot_test",
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            游戏内拉远视距=Mock(side_effect=AssertionError("英雄详情上不得缩放")),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
+        任务.第一次检测游戏登录 = False
+        任务._检测断线弹窗 = Mock(return_value=(False, (0, 0)))
+        任务._启动阶段处理英雄升级详情 = Mock(side_effect=[True, False])
+
+        def 匹配(_图像, 模板路径, **_参数):
+            命中 = "家乡进攻图标" in 模板路径 or "不用拉远视距" in 模板路径
+            return 命中, (0, 0), 0.9 if 命中 else 0.0
+
+        with patch("任务流程.检测游戏登录状态.模板匹配引擎") as 模板类, \
+             patch("任务流程.检测游戏登录状态.页面识别器") as 页面类:
+            模板类.return_value.执行匹配.side_effect = 匹配
+            详情 = SimpleNamespace(页面="升级详情弹窗")
+            主页 = SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.78)
+            页面调用 = iter((详情, 主页))
+            页面类.return_value.识别.side_effect = (
+                lambda *_参数, **_关键字: next(页面调用, 主页)
+            )
+            self.assertTrue(任务.执行(首次登录=False))
+
+        上下文.游戏内拉远视距.assert_not_called()
+        self.assertEqual(任务._启动阶段处理英雄升级详情.call_count, 2)
+
+    def test_断线盖住英雄详情时先恢复最上层弹窗(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=屏幕)),
+            数据库=Mock(),
+            机器人标志="robot_test",
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            游戏内拉远视距=Mock(side_effect=AssertionError("遮挡页上不得缩放")),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
+        任务.第一次检测游戏登录 = False
+        任务._检测断线弹窗 = Mock(side_effect=[
+            (True, (256, 365)), (False, (0, 0)), (False, (0, 0))
+        ])
+        任务._执行断线恢复点击 = Mock(return_value=True)
+        任务._启动阶段处理英雄升级详情 = Mock(side_effect=[True, False])
+
+        def 匹配(_图像, 模板路径, **_参数):
+            命中 = "家乡进攻图标" in 模板路径 or "不用拉远视距" in 模板路径
+            return 命中, (0, 0), 0.9 if 命中 else 0.0
+
+        with patch("任务流程.检测游戏登录状态.模板匹配引擎") as 模板类, \
+             patch("任务流程.检测游戏登录状态.页面识别器") as 页面类:
+            模板类.return_value.执行匹配.side_effect = 匹配
+            详情 = SimpleNamespace(页面="升级详情弹窗")
+            主页 = SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.78)
+            页面调用 = iter((详情, 详情, 主页))
+            页面类.return_value.识别.side_effect = (
+                lambda *_参数, **_关键字: next(页面调用, 主页)
+            )
+            self.assertTrue(任务.执行(首次登录=False))
+
+        任务._执行断线恢复点击.assert_called_once_with(256, 365)
+        self.assertEqual(任务._启动阶段处理英雄升级详情.call_count, 2)
+        上下文.游戏内拉远视距.assert_not_called()
+
+    def test_欢迎回来战报必须有标题和绿色确定按钮(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        屏幕[475:530, 365:455] = (0, 210, 110)
+        OCR项 = [
+            ([[328, 64], [468, 64], [468, 91], [328, 91]], "首領，歡迎回來！"),
+            ([[398, 492], [423, 492], [423, 511], [398, 511]], "确定"),
+        ]
+        OCR = Mock(return_value=(OCR项, None))
+        任务 = 检测游戏登录状态任务.__new__(检测游戏登录状态任务)
+        任务.上下文 = SimpleNamespace(获取OCR引擎=lambda: OCR)
+
+        self.assertEqual(任务._定位欢迎回来确定按钮(屏幕), (410, 501))
+        OCR.return_value = ([
+            (OCR项[0][0], "其他弹窗"), OCR项[1]
+        ], None)
+        self.assertIsNone(任务._定位欢迎回来确定按钮(屏幕))
+        OCR.return_value = (OCR项, None)
+        self.assertIsNone(任务._定位欢迎回来确定按钮(np.zeros_like(屏幕)))
+
+    def test_欢迎回来战报双帧确认后关闭并继续登录(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=屏幕)),
+            数据库=Mock(),
+            机器人标志="robot_test",
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            点击已确认安全按钮=Mock(return_value=True),
+            游戏内拉远视距=Mock(side_effect=AssertionError("不应在战报上缩放")),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
+        任务.第一次检测游戏登录 = False
+        任务._检测断线弹窗 = Mock(return_value=(False, (0, 0)))
+        任务._定位欢迎回来确定按钮 = Mock(
+            side_effect=[(410, 501), (410, 501)]
+        )
+        任务._登录主页已确认 = Mock(return_value=True)
+        for 方法名 in (
+            "_启动阶段处理英雄升级详情", "_启动阶段处理研究目标页",
+            "_启动阶段处理结算页", "_启动阶段处理军队配置页",
+            "_启动阶段处理主世界活动弹窗",
+        ):
+            setattr(任务, 方法名, Mock(return_value=False))
+
+        class 假引擎:
+            def 执行匹配(self, _图像, 模板路径, **_参数):
+                if "家乡进攻图标" in 模板路径 or "不用拉远视距" in 模板路径:
+                    return True, (100, 100), 0.95
+                return False, (0, 0), 0.0
+
+        with patch("任务流程.检测游戏登录状态.模板匹配引擎", return_value=假引擎()), \
+             patch("任务流程.检测游戏登录状态.页面识别器") as 页面类:
+            页面类.return_value.识别.side_effect = [
+                SimpleNamespace(页面="多按钮弹窗"),
+                SimpleNamespace(页面="主世界主页"),
+            ]
+            self.assertTrue(任务.执行(首次登录=False))
+
+        上下文.点击已确认安全按钮.assert_called_once_with(410, 501, 延时=180)
+        上下文.游戏内拉远视距.assert_not_called()
 
     def test_旧版断线模板连续命中也受三次恢复上限保护(self):
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)

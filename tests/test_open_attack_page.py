@@ -51,6 +51,13 @@ class 打开进攻页面测试(unittest.TestCase):
         cv2.rectangle(画面, (46, 409), (227, 482), (44, 173, 249), -1)
         return 画面
 
+    @classmethod
+    def 多人模式选择画面(cls):
+        画面 = cls.攻击选择画面()
+        # 新版多人模式页同时呈现蓝色排位报名卡，作为页面级联合证据。
+        cv2.rectangle(画面, (345, 409), (526, 482), (255, 126, 35), -1)
+        return 画面
+
     def test_主世界右下绿色区域不会被当成军队页攻击按钮(self):
         画面 = np.zeros((600, 800, 3), dtype=np.uint8)
         画面[:, :] = (40, 115, 55)
@@ -109,6 +116,95 @@ class 打开进攻页面测试(unittest.TestCase):
         self.assertIsNotNone(结果)
         self.assertAlmostEqual(结果[0], 137, delta=5)
         self.assertAlmostEqual(结果[1], 445, delta=5)
+
+    def test_新版多人模式页只识别普通对战橙色按钮(self):
+        画面 = self.攻击选择画面()
+        # 新版右侧排位报名按钮是蓝色；即使同时显示，也只能命中左侧普通对战。
+        cv2.rectangle(画面, (345, 409), (526, 482), (255, 126, 35), -1)
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+
+        结果 = 任务._检测寻找目标按钮(画面)
+
+        self.assertIsNotNone(结果)
+        self.assertLess(结果[0], 300)
+        self.assertAlmostEqual(结果[0], 137, delta=5)
+
+    def test_启动停在多人模式页时双帧确认后只点击普通对战(self):
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        画面 = self.多人模式选择画面()
+        模式页 = SimpleNamespace(
+            页面="主世界战斗模式选择", 世界="主世界", 可信度=0.96
+        )
+        上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            _主世界战斗模式选择页=True,
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=画面)),
+            识别点击画面=Mock(return_value=模式页),
+            点击已确认安全按钮=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.模板识别 = Mock()
+
+        with patch.object(任务, "_识别已存在的战斗页面", return_value=None), \
+                patch.object(任务, "_等待并点击攻击按钮", return_value=True) as 后续:
+            self.assertTrue(任务.执行())
+
+        上下文.点击已确认安全按钮.assert_called_once_with(137, 446, 延时=700)
+        后续.assert_called_once_with(
+            上下文,
+            主世界入口已点击=True,
+            模式页普通对战已点击=True,
+        )
+
+    def test_主世界入口后出现多人模式页时双帧确认并走安全普通对战点击(self):
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        模式画面 = self.多人模式选择画面()
+        搜索画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        模式页 = SimpleNamespace(
+            页面="主世界战斗模式选择", 世界="主世界", 可信度=0.96
+        )
+        上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            op=SimpleNamespace(获取屏幕图像cv=Mock(side_effect=[
+                模式画面, 模式画面, 搜索画面, 搜索画面,
+            ])),
+            识别点击画面=Mock(return_value=模式页),
+            点击=Mock(return_value=True),
+            点击已确认安全按钮=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.模板识别 = Mock()
+        任务._是否出现下一个 = Mock(side_effect=[False, True, True])
+
+        self.assertTrue(任务._等待并点击攻击按钮(
+            上下文, 主世界入口已点击=True
+        ))
+
+        上下文.点击.assert_not_called()
+        上下文.点击已确认安全按钮.assert_called_once_with(137, 446, 延时=700)
+        self.assertTrue(any(
+            "模式页" in 调用.args[0] and "普通对战" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_弱绿色候选不能把多人模式选择页确认成搜索页(self):
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        任务.模板识别 = Mock()
+        上下文 = SimpleNamespace(置脚本状态=Mock())
+        候选画面 = self.攻击选择画面()
+
+        with patch.object(
+            搜索页面识别器,
+            "查找下一个按钮",
+            return_value=(True, (639, 406), "绿色按钮", 0.35),
+        ):
+            self.assertFalse(任务._是否出现下一个(上下文, 候选画面))
 
     def test_先点击寻找目标再点击军队页攻击按钮(self):
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
@@ -479,6 +575,31 @@ class 打开进攻页面测试(unittest.TestCase):
         self.assertTrue(强制调用)
         任务._标记本场资源评分不可用.assert_called_once()
 
+    def test_攻击后强制新帧的假结算不能跳过下兵(self):
+        """强制截图也可能命中旧结算层，必须继续等真正的战斗页。"""
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=self.军队配置画面())
+            ),
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            停止事件=threading.Event(),
+        )
+        任务._是否出现下一个 = Mock(return_value=False)
+        任务._检测攻击按钮 = Mock(side_effect=[(705, 535), None, None])
+        任务._检测寻找目标按钮 = Mock(return_value=None)
+        任务._识别已存在的战斗页面 = Mock(
+            side_effect=[None, None, "战斗结算", "战斗中"]
+        )
+        任务._标记本场资源评分不可用 = Mock()
+
+        self.assertTrue(任务._等待并点击攻击按钮(上下文))
+        self.assertTrue(上下文._入口已进入战斗)
+        self.assertFalse(getattr(上下文, "_入口已进入结算", False))
+        上下文.点击.assert_called_once()
+
     def test_入口超时边界仍在战斗时交给下兵流程(self):
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
         上下文 = SimpleNamespace(
@@ -496,6 +617,20 @@ class 打开进攻页面测试(unittest.TestCase):
             "超时边界确认仍在战斗页" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
+
+    def test_入口超时后连续假结算不能接管回营(self):
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        任务._进攻入口超时后确认秒 = 0.02
+        上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务._识别已存在的战斗页面 = Mock(return_value="战斗结算")
+
+        self.assertFalse(任务._超时后接管已进入战斗(上下文, True, False))
+        self.assertFalse(getattr(上下文, "_入口已进入结算", False))
+        self.assertGreaterEqual(任务._识别已存在的战斗页面.call_count, 2)
 
     def test_入口超时边界沿用本轮已确认战斗证据(self):
         """避免已看到战斗页后因过渡帧把入口误报失败。"""
@@ -638,19 +773,35 @@ class 打开进攻页面测试(unittest.TestCase):
         self.assertIn("按钮", 依据)
         self.assertGreaterEqual(分数, 0.30)
 
+    def test_新版右下下一個带价格按钮也能识别(self):
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        # 新版将“下一個 1700”主按钮下移到屏幕右下，价格文本在按钮中
+        # 不影响大尺寸橙色矩形的颜色/几何识别。
+        cv2.rectangle(画面, (660, 514), (793, 580), (80, 190, 245), -1)
+
+        命中, 中心, 依据, 分数 = 搜索页面识别器.查找下一个按钮(画面)
+
+        self.assertTrue(命中)
+        self.assertGreaterEqual(中心[0], 搜索页面识别器.点击安全最左x)
+        self.assertGreater(中心[1], 500)
+        self.assertIn("按钮", 依据)
+        self.assertGreaterEqual(分数, 搜索页面识别器.颜色最低可信分)
+
     def test_军队页底部攻击按钮不被当成下一個按钮(self):
         画面 = np.zeros((600, 800, 3), dtype=np.uint8)
         cv2.rectangle(画面, (630, 515), (780, 555), (73, 227, 154), -1)
         命中, _, _, _ = 搜索页面识别器.查找下一个按钮(画面)
         self.assertFalse(命中)
 
-    def test_兵栏第一格避开结束战斗按钮并覆盖当前实机卡牌(self):
+    def test_新版九格兵栏覆盖到最后的法术卡牌(self):
         第一格 = 进攻任务.兵栏槽位[0][1]
         第二格 = 进攻任务.兵栏槽位[1][1]
+        最后一格 = 进攻任务.兵栏槽位[-1][1]
         self.assertGreaterEqual(第一格[0], 50)
         self.assertLessEqual(第一格[1], 500)
         self.assertGreater(第二格[0], 第一格[0])
-        self.assertEqual(len(进攻任务.兵栏槽位), 8)
+        self.assertEqual(len(进攻任务.兵栏槽位), 9)
+        self.assertEqual(最后一格, (568, 493, 624, 594))
 
     def test_兵栏空槽OCR的XO不会把等级读成兵量(self):
         任务 = 进攻任务.__new__(进攻任务)

@@ -11,6 +11,264 @@ from 模块.检测.OCR识别器 import 安全OCR引擎
 
 
 class 资源状态测试(unittest.TestCase):
+    def test_异常资源跳变经独立复读多数确认后才写入(self):
+        原资源 = {"金币": 16_870_629, "圣水": 19_833_942, "黑油": 181_749, "识别成功": True}
+        OCR错读 = {"金币": 7_545_682, "圣水": 20_997_843, "黑油": 190_166, "识别成功": True}
+        复读正确 = {"金币": 17_945_682, "圣水": 20_997_843, "黑油": 190_166, "识别成功": True}
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((160, 210, 3), dtype=np.uint8)),
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            数据库=SimpleNamespace(
+                获取最新完整状态=Mock(return_value=SimpleNamespace(
+                    状态数据={"家乡资源": 原资源}
+                )),
+                更新状态=Mock(),
+            ),
+            机器人标志="测试机器人",
+        )
+        任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        任务.上下文 = 上下文
+        任务.ocr引擎 = Mock()
+        任务.识别当前资源 = Mock(side_effect=[OCR错读, 复读正确])
+        任务._完整资源栏复核 = Mock(return_value=(
+            复读正确["金币"], 复读正确["圣水"], 复读正确["黑油"]
+        ))
+
+        self.assertTrue(任务.执行())
+
+        self.assertEqual(任务.识别当前资源.call_count, 2)
+        任务._完整资源栏复核.assert_called_once()
+        写入资源 = 上下文.数据库.更新状态.call_args.args[2]
+        self.assertEqual(写入资源["金币"], 17_945_682)
+
+    def test_重复漏掉金币首位时保留此前可信读数(self):
+        原资源 = {"金币": 17_502_946, "圣水": 21_238_943, "黑油": 191_061, "识别成功": True}
+        漏首位 = {"金币": 7_502_946, "圣水": 21_238_943, "黑油": 191_061, "识别成功": True}
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((160, 210, 3), dtype=np.uint8)),
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            数据库=SimpleNamespace(
+                获取最新完整状态=Mock(return_value=SimpleNamespace(
+                    状态数据={"家乡资源": 原资源}
+                )),
+                更新状态=Mock(),
+            ),
+            机器人标志="测试机器人",
+        )
+        任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        任务.上下文 = 上下文
+        任务.ocr引擎 = Mock()
+        任务.识别当前资源 = Mock(side_effect=[漏首位, 漏首位])
+        任务._完整资源栏复核 = Mock(return_value=(
+            漏首位["金币"], 漏首位["圣水"], 漏首位["黑油"]
+        ))
+
+        self.assertTrue(任务.执行())
+
+        上下文.数据库.更新状态.assert_called_once()
+        写入资源 = 上下文.数据库.更新状态.call_args.args[2]
+        self.assertEqual(写入资源["金币"], 原资源["金币"])
+        self.assertTrue(上下文._最近资源识别成功)
+        状态文本 = [调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list]
+        self.assertTrue(any("数字漏读或余额约十倍骤降" in 文本 for 文本 in 状态文本))
+
+    def test_重复漏掉圣水中间数字时保留此前可信读数(self):
+        原资源 = {"金币": 19_385_973, "圣水": 22_422_079, "黑油": 220_605, "识别成功": True}
+        漏一位 = {"金币": 19_385_973, "圣水": 2_242_079, "黑油": 220_605, "识别成功": True}
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((160, 210, 3), dtype=np.uint8)),
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            数据库=SimpleNamespace(
+                获取最新完整状态=Mock(return_value=SimpleNamespace(
+                    状态数据={"家乡资源": 原资源}
+                )),
+                更新状态=Mock(),
+            ),
+            机器人标志="测试机器人",
+        )
+        任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        任务.上下文 = 上下文
+        任务.ocr引擎 = Mock()
+        任务.识别当前资源 = Mock(side_effect=[漏一位, 漏一位])
+        任务._完整资源栏复核 = Mock(return_value=(
+            漏一位["金币"], 漏一位["圣水"], 漏一位["黑油"]
+        ))
+
+        self.assertTrue(任务.执行())
+
+        写入资源 = 上下文.数据库.更新状态.call_args.args[2]
+        self.assertEqual(写入资源["圣水"], 原资源["圣水"])
+        self.assertTrue(上下文._最近资源识别成功)
+
+    def test_余额正常变化后圣水约十倍骤降仍保留此前可信读数(self):
+        原资源 = {"金币": 19_611_932, "圣水": 22_680_249, "黑油": 224_676, "识别成功": True}
+        漏读后复读 = {"金币": 19_794_909, "圣水": 2_312_087, "黑油": 238_430, "识别成功": True}
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((160, 210, 3), dtype=np.uint8)),
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            数据库=SimpleNamespace(
+                获取最新完整状态=Mock(return_value=SimpleNamespace(
+                    状态数据={"家乡资源": 原资源}
+                )),
+                更新状态=Mock(),
+            ),
+            机器人标志="测试机器人",
+        )
+        任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        任务.上下文 = 上下文
+        任务.ocr引擎 = Mock()
+        任务.识别当前资源 = Mock(side_effect=[漏读后复读, 漏读后复读])
+        任务._完整资源栏复核 = Mock(return_value=(
+            漏读后复读["金币"], 漏读后复读["圣水"], 漏读后复读["黑油"]
+        ))
+
+        self.assertTrue(任务.执行())
+
+        写入资源 = 上下文.数据库.更新状态.call_args.args[2]
+        self.assertEqual(写入资源["圣水"], 原资源["圣水"])
+        self.assertEqual(写入资源["金币"], 漏读后复读["金币"])
+
+    def test_金币和圣水同时约十倍少读时保留两项可信值(self):
+        原资源 = {"金币": 21_106_254, "圣水": 24_258_013, "黑油": 245_334, "识别成功": True}
+        同时少读 = {"金币": 2_121_809, "圣水": 2_427_389, "黑油": 245_334, "识别成功": True}
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((160, 210, 3), dtype=np.uint8)),
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            数据库=SimpleNamespace(
+                获取最新完整状态=Mock(return_value=SimpleNamespace(
+                    状态数据={"家乡资源": 原资源}
+                )),
+                更新状态=Mock(),
+            ),
+            机器人标志="测试机器人",
+        )
+        任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        任务.上下文 = 上下文
+        任务.ocr引擎 = Mock()
+        任务.识别当前资源 = Mock(side_effect=[同时少读, 同时少读])
+        任务._完整资源栏复核 = Mock(return_value=(
+            同时少读["金币"], 同时少读["圣水"], 同时少读["黑油"]
+        ))
+
+        self.assertTrue(任务.执行())
+
+        写入资源 = 上下文.数据库.更新状态.call_args.args[2]
+        self.assertEqual(写入资源["金币"], 原资源["金币"])
+        self.assertEqual(写入资源["圣水"], 原资源["圣水"])
+        self.assertEqual(写入资源["黑油"], 同时少读["黑油"])
+
+    def test_金币十倍少读且圣水十倍多读时保留两项可信值(self):
+        原资源 = {"金币": 21_481_746, "圣水": 27_003_279, "黑油": 266_521, "识别成功": True}
+        错误读数 = {"金币": 2_200_680, "圣水": 270_523_351, "黑油": 266_521, "识别成功": True}
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((160, 210, 3), dtype=np.uint8)),
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            数据库=SimpleNamespace(
+                获取最新完整状态=Mock(return_value=SimpleNamespace(
+                    状态数据={"家乡资源": 原资源}
+                )),
+                更新状态=Mock(),
+            ),
+            机器人标志="测试机器人",
+        )
+        任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        任务.上下文 = 上下文
+        任务.ocr引擎 = Mock()
+        任务.识别当前资源 = Mock(side_effect=[错误读数, 错误读数])
+        任务._完整资源栏复核 = Mock(return_value=(
+            错误读数["金币"], 错误读数["圣水"], 错误读数["黑油"]
+        ))
+
+        self.assertTrue(任务.执行())
+
+        写入资源 = 上下文.数据库.更新状态.call_args.args[2]
+        self.assertEqual(写入资源["金币"], 原资源["金币"])
+        self.assertEqual(写入资源["圣水"], 原资源["圣水"])
+        self.assertEqual(写入资源["黑油"], 错误读数["黑油"])
+        状态文本 = [调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list]
+        self.assertTrue(any("数量级偏移" in 文本 for 文本 in 状态文本))
+
+    def test_金币约十倍少读时容许其他资源正常采集增长(self):
+        原资源 = {"金币": 22_347_971, "圣水": 25_457_150, "黑油": 249_950, "识别成功": True}
+        新读数 = {"金币": 2_366_106, "圣水": 26_320_742, "黑油": 261_015, "识别成功": True}
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((160, 210, 3), dtype=np.uint8)),
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            数据库=SimpleNamespace(
+                获取最新完整状态=Mock(return_value=SimpleNamespace(
+                    状态数据={"家乡资源": 原资源}
+                )),
+                更新状态=Mock(),
+            ),
+            机器人标志="测试机器人",
+        )
+        任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        任务.上下文 = 上下文
+        任务.ocr引擎 = Mock()
+        任务.识别当前资源 = Mock(side_effect=[新读数, 新读数])
+        任务._完整资源栏复核 = Mock(return_value=(
+            新读数["金币"], 新读数["圣水"], 新读数["黑油"]
+        ))
+
+        self.assertTrue(任务.执行())
+
+        写入资源 = 上下文.数据库.更新状态.call_args.args[2]
+        self.assertEqual(写入资源["金币"], 原资源["金币"])
+        self.assertEqual(写入资源["圣水"], 新读数["圣水"])
+        self.assertEqual(写入资源["黑油"], 新读数["黑油"])
+
+    def test_异常资源跳变无法取得一致复核时不写入数据库(self):
+        原资源 = {"金币": 16_870_629, "圣水": 19_833_942, "黑油": 181_749, "识别成功": True}
+        原始 = {"金币": 7_545_682, "圣水": 20_997_843, "黑油": 190_166, "识别成功": True}
+        不一致复读 = {"金币": 23_000_000, "圣水": 16_000_000, "黑油": 260_000, "识别成功": True}
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((160, 210, 3), dtype=np.uint8)),
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            数据库=SimpleNamespace(
+                获取最新完整状态=Mock(return_value=SimpleNamespace(
+                    状态数据={"家乡资源": 原资源}
+                )),
+                更新状态=Mock(),
+            ),
+            机器人标志="测试机器人",
+        )
+        任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        任务.上下文 = 上下文
+        任务.ocr引擎 = Mock()
+        任务.识别当前资源 = Mock(side_effect=[原始, 不一致复读])
+        任务._完整资源栏复核 = Mock(return_value=(
+            19_500_000, 18_000_000, 230_000
+        ))
+
+        self.assertFalse(任务.执行())
+
+        上下文.数据库.更新状态.assert_not_called()
+        self.assertFalse(上下文._最近资源识别成功)
+
     def test_单行资源只使用轻量识别模型(self):
         引擎 = Mock(return_value=([("123456", 0.99)], None))
         图像 = np.zeros((24, 120, 3), dtype=np.uint8)

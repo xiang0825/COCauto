@@ -172,7 +172,7 @@ class 机器人设置:
     )
 
     是否刷主世界: bool = field(
-        default=True,
+        default=False,
         metadata={
             "显示名称": "是否刷主世界",
             "描述": "是否启用主世界打鱼模式",
@@ -268,10 +268,10 @@ class 机器人设置:
     )
 
     漏下兵种检测格数: int = field(
-        default=1,
+        default=3,
         metadata={
-            "显示名称": "漏下兵种检测格数（新增）",
-            "描述": "设置检测遗漏兵种的格子数量（1-5格），建议设置为你进攻所携带的兵种种类数量（不包含英雄，法术，攻城武器）",
+            "显示名称": "漏兵复核兵种数",
+            "描述": "最多复核多少种普通兵是否仍有剩余（1-5）；不扫描英雄、攻城器械和法术，默认3种",
             "UI类型": "spinbox",
             "最小值": 1,
             "最大值": 5,
@@ -280,7 +280,7 @@ class 机器人设置:
     )
 
     欲升级的英雄或建筑: List[str] = field(
-        default_factory=lambda: ["弓箭女皇", "亡灵王子", "飞盾战神"],
+        default_factory=list,
         metadata={
             "显示名称": "欲升级的英雄或建筑",
             "描述": "选择想要升级的英雄或建筑，可多选、添加自定义项",
@@ -290,7 +290,7 @@ class 机器人设置:
     )
 
     是否升级建议升级的建筑: bool = field(
-        default=True,
+        default=False,
         metadata={
             "显示名称": "升级建议建筑",
             "描述": "是否自动升级系统建议的建筑",
@@ -473,16 +473,10 @@ class 任务数据库:
             os.makedirs(os.path.dirname(共享数据库), exist_ok=True)
             return 共享数据库
         if getattr(sys, "frozen", False):
-            # 单文件 EXE 的 _MEIPASS 是临时解包目录；数据库不能放进临时目录。
-            # 当前发布目录位于 ``项目/仓库``，正式数据库位于上一级的
-            # ``项目/数据库``。优先复用已经存在的上级共享库，避免 EXE
-            # 悄悄创建 ``仓库/数据库/任务系统.db``，造成日志和配置分叉。
+            # 打包版只使用 EXE 旁的持久数据库。上级目录即使恰好有同名库，
+            # 也可能是源码开发库；隔离测试或复制发布包时不能误写进去。
+            # 确实要共享数据库时，由 COCAUTO_DB_PATH 显式指定。
             EXE目录 = os.path.dirname(os.path.abspath(sys.executable))
-            共享目录 = os.path.join(os.path.dirname(EXE目录), "数据库")
-            共享路径 = os.path.join(共享目录, "任务系统.db")
-            if os.path.isfile(共享路径):
-                return 共享路径
-            # 独立分发时没有上级共享库，才在 EXE 旁创建持久化数据库。
             数据目录 = os.path.join(EXE目录, "数据库")
             os.makedirs(数据目录, exist_ok=True)
             return os.path.join(数据目录, "任务系统.db")
@@ -745,6 +739,27 @@ class 任务数据库:
             记录时间=time.time(),
             状态数据=完整状态
         )
+
+    def 获取近期家乡资源峰值(self, 机器人标志: str, 条数: int = 500) -> dict:
+        """历史实测值是容量的下界；用于排除猜测容量造成的误停。"""
+        峰值 = {"金币": 0, "圣水": 0, "黑油": 0}
+        with self._获取连接() as conn:
+            记录 = conn.execute(
+                """SELECT 状态值 FROM 运行时状态
+                WHERE 机器人标志 = ? AND 状态类型 = '家乡资源'
+                ORDER BY 记录ID DESC LIMIT ?""",
+                (机器人标志, 条数),
+            ).fetchall()
+        for (状态值,) in 记录:
+            try:
+                资源 = json.loads(状态值)
+                if not isinstance(资源, dict) or 资源.get("识别成功") is False:
+                    continue
+                for 类型 in 峰值:
+                    峰值[类型] = max(峰值[类型], int(资源.get(类型, 0)))
+            except (TypeError, ValueError, OverflowError, json.JSONDecodeError):
+                continue
+        return 峰值
 
 
     # ==== 系统配置操作 ====

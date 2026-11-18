@@ -34,8 +34,8 @@ def readonly_runner(argv, **kwargs):
         args in (['devices'], ['devices', '-l'], ['get-state'])
         or (args[:2] == ['shell', 'getprop'] and len(args) in (2, 3))
         or args in (["shell", "dumpsys", "display"],
-                    ["shell", "dumpsys", "window", "displays"],
-                    ["shell", "dumpsys", "activity", "activities"],
+                    ["shell", "dumpsys", "input"],
+                    ["shell", "dumpsys", "activity", "top-resumed"],
                     ["shell", "wm", "size"])
         or args == ['exec-out', 'screencap', '-p']
         or (len(args) == 5 and args[:3] == ['exec-out', 'screencap', '-d'] and args[-1] == '-p')

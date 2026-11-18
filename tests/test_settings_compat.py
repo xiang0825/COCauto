@@ -8,6 +8,9 @@ from 数据库.任务数据库 import 任务数据库, 机器人设置
 
 
 class 机器人设置兼容测试(unittest.TestCase):
+    def test_漏兵复核默认覆盖三种普通兵(self):
+        self.assertEqual(机器人设置().漏下兵种检测格数, 3)
+
     def test_旧版是否刷墙字段可以迁移(self):
         with tempfile.TemporaryDirectory() as 临时目录:
             数据库路径 = str(Path(临时目录) / "任务系统.db")

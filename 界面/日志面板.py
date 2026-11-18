@@ -76,6 +76,10 @@ class 日志面板(ttk.Frame):
         self._可见 = True
         self._悬浮窗口 = None
         self._悬浮日志文本框 = None
+        self._悬浮机器人标签 = None
+        self._悬浮状态标签 = None
+        self._悬浮阶段标签 = None
+        self._最新阶段 = {}
 
         self._创建界面()
         self._定时刷新日志()
@@ -198,6 +202,32 @@ class 日志面板(ttk.Frame):
         )
         悬浮模式选择.pack(side=tk.RIGHT, padx=(0, 10))
         悬浮模式选择.bind("<<ComboboxSelected>>", lambda _事件: self._渲染日志())
+
+        状态卡 = tk.Frame(窗口, bg="#293b52", padx=12, pady=9)
+        状态卡.pack(fill=tk.X, padx=10, pady=(0, 8))
+        状态顶行 = tk.Frame(状态卡, bg="#293b52")
+        状态顶行.pack(fill=tk.X)
+        self._悬浮机器人标签 = tk.Label(
+            状态顶行, text="当前机器人", bg="#293b52", fg="#b9cbe2",
+            font=("Microsoft YaHei UI", 9),
+        )
+        self._悬浮机器人标签.pack(side=tk.LEFT)
+        self._悬浮状态标签 = tk.Label(
+            状态顶行, text="未运行", bg="#293b52", fg="#e2e8f0",
+            font=("Microsoft YaHei UI", 11, "bold"),
+        )
+        self._悬浮状态标签.pack(side=tk.RIGHT)
+        self._悬浮阶段标签 = tk.Label(
+            状态卡, text="等待任务状态…", bg="#293b52", fg="#ffffff",
+            font=("Microsoft YaHei UI", 10), anchor=tk.W, justify=tk.LEFT,
+            wraplength=700,
+        )
+        self._悬浮阶段标签.pack(fill=tk.X, pady=(5, 2))
+        tk.Label(
+            状态卡, text="F1 开始／继续    F2 暂停  ·  暂停时游戏计时仍会继续",
+            bg="#293b52", fg="#a8bdd5", anchor=tk.W,
+            font=("Microsoft YaHei UI", 9),
+        ).pack(fill=tk.X)
         self._悬浮日志文本框 = scrolledtext.ScrolledText(
             窗口, wrap=tk.NONE, font=("Consolas", 10),
             background="#1c2636", foreground="#f1f5fa",
@@ -207,12 +237,16 @@ class 日志面板(ttk.Frame):
         self._悬浮日志文本框.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         self._悬浮日志文本框.configure(state="disabled")
         self._悬浮按钮.configure(text="关闭悬浮")
+        self._更新悬浮状态()
         self._渲染日志()
 
     def _关闭悬浮窗(self):
         窗口 = self._悬浮窗口
         self._悬浮窗口 = None
         self._悬浮日志文本框 = None
+        self._悬浮机器人标签 = None
+        self._悬浮状态标签 = None
+        self._悬浮阶段标签 = None
         if 窗口 is not None and 窗口.winfo_exists():
             窗口.destroy()
         self._悬浮按钮.configure(text="悬浮半透明")
@@ -237,6 +271,10 @@ class 日志面板(ttk.Frame):
                 except (TypeError, ValueError):
                     记录时间 = 当前时间
                 self._实时日志.append((记录时间, 机器人ID, 内容, 级别))
+                if 机器人ID != "系统" and self._是否重点(内容, 级别):
+                    self._最新阶段[机器人ID] = (
+                        记录时间, self._去掉实时前缀(内容)[:150]
+                    )
             else:
                 self._实时日志.append((当前时间, "系统", str(日志消息), "正常"))
             try:
@@ -255,7 +293,48 @@ class 日志面板(ttk.Frame):
             有变化 = 有变化 or self._历史日志有变化
         if 有变化 and 需要显示:
             self._渲染日志()
+        if self._悬浮窗已打开():
+            self._更新悬浮状态()
         self.after(800, self._定时刷新日志)
+
+    def _更新悬浮状态(self):
+        """从机器人内存状态取运行/暂停，阶段仅取该机器人的关键日志。"""
+        if not self._悬浮窗已打开():
+            return
+        try:
+            机器人 = self.获取当前机器人()
+        except Exception:
+            机器人 = None
+        if 机器人 is None:
+            名称, 状态, 颜色, 阶段 = (
+                "未选择机器人", "未运行", "#d3dce8", "请先在主窗口选择机器人。"
+            )
+        else:
+            名称 = str(getattr(机器人, "机器人标志", "当前机器人"))
+            状态 = str(getattr(机器人, "当前状态", "未知"))
+            颜色 = {
+                "运行中": "#70e4af", "暂停中": "#ffcf70",
+                "已停止": "#ff9d95",
+            }.get(状态, "#d3dce8")
+            if 状态 == "暂停中":
+                阶段 = "机器人已暂停，等待 F1 继续；游戏计时不会暂停。"
+            elif 状态 == "已停止":
+                原因 = str(getattr(机器人, "停止原因", "") or "").strip()
+                阶段 = f"停止原因：{原因}" if 原因 else "机器人已停止，按 F1 开始。"
+            else:
+                最新 = self._最新阶段.get(名称)
+                if 最新 is None:
+                    for 项 in reversed(self.日志缓存内容.get(名称, [])):
+                        if self._是否重点(项.日志内容, "正常"):
+                            最新 = (项.记录时间, str(项.日志内容)[:150])
+                            break
+                if 最新 and time.time() - float(最新[0]) < 300:
+                    阶段 = 最新[1]
+                else:
+                    阶段 = "正在运行，等待下一条关键状态…"
+        self._悬浮机器人标签.configure(text=名称)
+        self._悬浮状态标签.configure(text=f"● {状态}", fg=颜色)
+        self._悬浮阶段标签.configure(text=阶段)
 
     def _获取历史日志(self):
         try:

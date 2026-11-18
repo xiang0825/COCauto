@@ -8,10 +8,22 @@ import time
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+from 界面.全局快捷键 import 运行快捷键
+from 工具包.版本管理 import 获取本地版本号
+
 
 _单实例句柄 = None
 _启动窗口就绪事件 = threading.Event()
 _控制台退出事件 = threading.Event()
+
+
+def 生成控制台副标题():
+    """返回首页品牌行的版本标识；读不到发布元数据时明确显示本地版。"""
+    try:
+        版本号 = str(获取本地版本号() or "").strip() or "本地版"
+    except Exception:
+        版本号 = "本地版"
+    return f"部落冲突控制台 · {版本号}"
 
 
 def _启动或唤醒已有窗口():
@@ -78,7 +90,18 @@ class 增强型机器人控制界面:
         self._设置窗口尺寸(1320, 790)
         self._创建面板()
         self._加载保存的配置()
+        self._运行快捷键 = 运行快捷键(master, self._处理运行快捷键)
         self._定时刷新顶部状态()
+
+    def _处理运行快捷键(self, 按键):
+        """热键只走现有按钮的状态守卫，不绕过设备或任务计划检查。"""
+        if 按键 == "F1":
+            if self.机器人管理.快捷键开始或继续():
+                self.日志面板.记录操作日志("F1：开始／继续")
+        elif 按键 == "F2":
+            if self.机器人管理.快捷键暂停():
+                self.日志面板.记录操作日志("F2：暂停，等待继续")
+        self.日志面板._更新悬浮状态()
 
     def _创建面板(self):
         self.master.configure(bg="#f7f8fa")
@@ -94,7 +117,7 @@ class 增强型机器人控制界面:
         品牌字.pack(side=tk.LEFT)
         tk.Label(品牌字, text="城控", bg="#ffffff", fg="#253142",
                  font=("Microsoft YaHei UI", 17, "bold")).pack(anchor=tk.W)
-        tk.Label(品牌字, text="部落冲突控制台", bg="#ffffff", fg="#697788",
+        tk.Label(品牌字, text=生成控制台副标题(), bg="#ffffff", fg="#697788",
                  font=("Microsoft YaHei UI", 9)).pack(anchor=tk.W)
         状态区 = ttk.Frame(顶栏, style="Bar.TFrame")
         状态区.pack(side=tk.RIGHT)
@@ -280,6 +303,8 @@ class 增强型机器人控制界面:
         if getattr(self, "_正在关闭", False):
             return
         self._正在关闭 = True
+        if hasattr(self, "_运行快捷键"):
+            self._运行快捷键.关闭()
         try:
             self.监控中心.关闭()
         except Exception:

@@ -63,6 +63,10 @@ class ADB屏幕:
         self.是否已绑定 = False
         self._原始截图缓存 = None
 
+    def 检查主机内存预算(self, 强制刷新=True):
+        """把只读内存预算检查委托给底层 ADB 设备。"""
+        return self.设备.检查主机内存预算(强制刷新=强制刷新)
+
     def 绑定(self, 设备, *args, **kwargs):
         if not isinstance(设备, ADB设备操作类):
             raise RuntimeError("ADB 模式只能绑定到已选择的 ADB 设备。")

@@ -27,9 +27,138 @@ from 任务流程.兵种或法术升级 import 兵种或法术升级任务
 from 任务流程.战宠升级 import 战宠升级任务
 from 任务流程.建筑升级 import 建筑升级任务
 from 任务流程.基础任务框架 import 任务上下文
+from 核心.核心异常们 import 图像获取失败
 
 
 class 任务计划测试(unittest.TestCase):
+    def test_全新机器人默认不启用业务任务(self):
+        设置 = 机器人设置()
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        self.assertEqual(机器人._任务计划顺序(设置), [])
+        self.assertFalse(设置.是否刷主世界)
+        self.assertFalse(设置.是否升级建议升级的建筑)
+        self.assertEqual(设置.欲升级的英雄或建筑, [])
+
+    def test_空任务计划拒绝启动且不连接设备(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.机器人标志 = "测试机器人"
+        机器人.数据库 = SimpleNamespace(获取机器人设置=Mock(return_value=机器人设置()))
+        with patch("线程.自动化机器人.ADB设备操作类") as 设备类:
+            with self.assertRaisesRegex(RuntimeError, "没有启用任何任务"):
+                机器人.启动()
+        设备类.assert_not_called()
+
+    def test_启动早期检查返回时线程状态会收尾(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.机器人标志 = "测试机器人"
+        机器人.停止事件 = threading.Event()
+        机器人.停止原因 = ""
+        机器人._初始化任务上下文 = Mock()
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(安全清理=Mock()),
+            释放识别模型=Mock(),
+        )
+        机器人._初始化任务上下文.return_value = (机器人设置(), 上下文, None)
+
+        with patch("线程.自动化机器人.检测游戏登录状态任务"), \
+             patch("线程.自动化机器人.启动模拟器任务") as 启动模拟器, \
+             patch("线程.自动化机器人.检查图像任务") as 检查图像:
+            启动模拟器.return_value.执行.return_value = True
+            检查图像.return_value.执行.return_value = False
+            机器人._任务流程()
+
+        self.assertTrue(机器人.停止事件.is_set())
+        self.assertEqual(机器人.当前状态, "已停止")
+        self.assertIn("提前结束", 机器人.停止原因)
+        上下文.op.安全清理.assert_called_once()
+
+    def test_截图异常退出时保留异常原因并标记已停止(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.机器人标志 = "测试机器人"
+        机器人.停止事件 = threading.Event()
+        机器人.停止原因 = ""
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(安全清理=Mock()),
+            释放识别模型=Mock(),
+            发送死亡通知=Mock(),
+        )
+        机器人._初始化任务上下文 = Mock(
+            return_value=(机器人设置(), 上下文, None)
+        )
+
+        with patch("线程.自动化机器人.检测游戏登录状态任务"), \
+             patch("线程.自动化机器人.启动模拟器任务") as 启动模拟器:
+            启动模拟器.return_value.执行.side_effect = 图像获取失败("截图超时")
+            机器人._任务流程()
+
+        self.assertEqual(机器人.当前状态, "已停止")
+        self.assertIn("截图超时", 机器人.停止原因)
+        上下文.发送死亡通知.assert_called_once()
+
+    def test_人工回到主世界后页面恢复失败会重新开始任务计划(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.机器人标志 = "测试机器人"
+        机器人.停止事件 = threading.Event()
+        机器人.停止原因 = ""
+        设置 = 机器人设置()
+        机器人.数据库 = SimpleNamespace(获取机器人设置=Mock(return_value=设置))
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(安全清理=Mock()),
+            释放识别模型=Mock(),
+            发送企业微信通知=Mock(),
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+        机器人._初始化任务上下文 = Mock(return_value=(设置, 上下文, None))
+        机器人._接管启动时战斗 = Mock(return_value=True)
+        机器人._任务计划顺序 = Mock(return_value=["main_resource"])
+        调用次数 = 0
+
+        def 执行任务项(*_参数):
+            nonlocal 调用次数
+            调用次数 += 1
+            if 调用次数 == 1:
+                return False, False
+            机器人.停止事件.set()
+            return True, False
+
+        机器人._执行任务计划项 = Mock(side_effect=执行任务项)
+        机器人._等待人工恢复主世界 = Mock(return_value=True)
+
+        with patch("线程.自动化机器人.检测游戏登录状态任务") as 检测登录, \
+             patch("线程.自动化机器人.启动模拟器任务") as 启动模拟器, \
+             patch("线程.自动化机器人.检查图像任务") as 检查图像:
+            检测登录.return_value.执行.return_value = True
+            启动模拟器.return_value.执行.return_value = True
+            检查图像.return_value.执行.return_value = True
+            机器人._任务流程()
+
+        self.assertEqual(机器人.当前状态, "已停止")
+        self.assertNotIn("页面恢复失败", 机器人.停止原因)
+        self.assertNotEqual(机器人.停止原因, "任务自然完成")
+        self.assertEqual(机器人._执行任务计划项.call_count, 2)
+        机器人._等待人工恢复主世界.assert_called_once_with(
+            上下文, 检测登录.return_value
+        )
+
+    def test_下一场资源读取前英雄详情未关闭则不进攻(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = threading.Event()
+        机器人._进入并确认主世界 = Mock(return_value=True)
+        机器人._断线时恢复游戏连接 = Mock(return_value=True)
+        机器人._清理残留英雄升级详情 = Mock(return_value=False)
+        上下文 = SimpleNamespace(页面恢复失败=False, 置脚本状态=Mock())
+
+        with patch("线程.自动化机器人.收集资源任务") as 收集资源, \
+             patch("线程.自动化机器人.更新家乡资源状态任务") as 读取资源, \
+             patch("线程.自动化机器人.主世界打鱼任务") as 打鱼:
+            收集资源.return_value.执行.return_value = True
+            self.assertFalse(机器人._执行主世界刷资源计划(上下文, Mock()))
+
+        self.assertTrue(上下文.页面恢复失败)
+        读取资源.assert_not_called()
+        打鱼.assert_not_called()
+
     def test_残留英雄详情交给英雄专用关闭器而不当作主页(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
         画面 = object()
@@ -144,7 +273,7 @@ class 任务计划测试(unittest.TestCase):
         上下文 = SimpleNamespace(
             页面恢复失败=False,
             机器人标志="测试机器人",
-            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态)),
+            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态), 获取近期家乡资源峰值=Mock(return_value={})),
             置脚本状态=Mock(),
             脚本延时=Mock(),
         )
@@ -165,6 +294,27 @@ class 任务计划测试(unittest.TestCase):
         self.assertEqual(更新资源.return_value.执行.call_count, 1)
         self.assertEqual(机器人._断线时恢复游戏连接.call_count, 3)
 
+    def test_主世界战斗模式选择页跳过遮挡下的资源收集点击(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = threading.Event()
+        机器人.机器人标志 = "测试机器人"
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            _主世界战斗模式选择页=True,
+            机器人标志="测试机器人",
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+        机器人._进入并确认主世界 = Mock(return_value=True)
+        机器人._断线时恢复游戏连接 = Mock(side_effect=[True, False])
+
+        with patch("线程.自动化机器人.收集资源任务") as 收集资源:
+            结果 = 机器人._执行主世界刷资源计划(上下文, Mock())
+
+        self.assertFalse(结果)
+        收集资源.return_value.执行.assert_not_called()
+        self.assertEqual(机器人._断线时恢复游戏连接.call_count, 2)
+
     def test_军队未满时资源计划不进入战后处理(self):
         """半满军队只请求冷却，不得伪装成一场已完成战斗。"""
         机器人 = 自动化机器人.__new__(自动化机器人)
@@ -176,7 +326,7 @@ class 任务计划测试(unittest.TestCase):
         上下文 = SimpleNamespace(
             页面恢复失败=False,
             机器人标志="测试机器人",
-            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态)),
+            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态), 获取近期家乡资源峰值=Mock(return_value={})),
             置脚本状态=Mock(),
             脚本延时=Mock(),
             请求任务计划等待=Mock(),
@@ -219,7 +369,7 @@ class 任务计划测试(unittest.TestCase):
         上下文 = SimpleNamespace(
             页面恢复失败=False,
             机器人标志="测试机器人",
-            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态)),
+            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态), 获取近期家乡资源峰值=Mock(return_value={})),
             置脚本状态=Mock(),
             脚本延时=Mock(),
         )
@@ -525,7 +675,7 @@ class 任务计划测试(unittest.TestCase):
         上下文 = SimpleNamespace(
             页面恢复失败=False,
             机器人标志="测试机器人",
-            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态)),
+            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态), 获取近期家乡资源峰值=Mock(return_value={})),
             识别点击画面=Mock(return_value=SimpleNamespace(页面="夜世界主页")),
             置脚本状态=Mock(),
             脚本延时=Mock(),
@@ -561,7 +711,7 @@ class 任务计划测试(unittest.TestCase):
         上下文 = SimpleNamespace(
             页面恢复失败=False,
             机器人标志="测试机器人",
-            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态)),
+            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态), 获取近期家乡资源峰值=Mock(return_value={})),
             识别点击画面=Mock(return_value=SimpleNamespace(页面="夜世界主页")),
             置脚本状态=Mock(),
             脚本延时=Mock(),
@@ -1031,6 +1181,28 @@ class 任务计划测试(unittest.TestCase):
         键盘.按字符按压.assert_not_called()
         self.assertFalse(上下文.页面恢复失败)
 
+    def test_主页上方详情弹窗会先安全关闭并重新取帧(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        键盘 = Mock()
+        初始画面, 关闭后画面 = object(), object()
+        获取画面 = Mock(side_effect=[初始画面, 关闭后画面])
+        关闭详情 = Mock(return_value=True)
+        上下文 = SimpleNamespace(
+            键盘=键盘,
+            op=SimpleNamespace(获取屏幕图像cv=获取画面),
+            关闭升级详情弹窗=关闭详情,
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+
+        with patch("线程.自动化机器人.模板匹配引擎") as 引擎工厂:
+            引擎工厂.return_value.执行匹配.return_value = (True, (0, 0), None)
+            self.assertTrue(机器人._确保主世界主页面(上下文))
+
+        关闭详情.assert_called_once_with(初始画面)
+        self.assertEqual(获取画面.call_count, 2)
+        键盘.按字符按压.assert_not_called()
+
     def test_哥布林宝石提示露出主页锚点仍安全停止(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
         画面 = np.zeros((600, 800, 3), dtype=np.uint8)
@@ -1073,6 +1245,27 @@ class 任务计划测试(unittest.TestCase):
         键盘.按字符按压.assert_not_called()
         self.assertFalse(上下文.页面恢复失败)
 
+    def test_进入主世界已处于模式选择页时不搜索飞艇(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        模式页 = SimpleNamespace(
+            页面="主世界战斗模式选择", 世界="主世界", 可信度=0.96
+        )
+        上下文 = SimpleNamespace(
+            识别点击画面=Mock(return_value=模式页),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+
+        with patch("线程.自动化机器人.到主世界任务") as 世界任务:
+            self.assertTrue(
+                机器人._进入并确认主世界(
+                    上下文, "测试", 允许模式选择页=True
+                )
+            )
+
+        世界任务.return_value.执行.assert_not_called()
+        self.assertTrue(上下文._主世界战斗模式选择页)
+
     def test_主世界主页确认失败时禁止继续(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
         键盘 = Mock()
@@ -1099,7 +1292,7 @@ class 任务计划测试(unittest.TestCase):
         )
         状态 = SimpleNamespace(状态数据={"家乡资源": {"金币": 1, "圣水": 1, "黑油": 0}})
         上下文 = SimpleNamespace(
-            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态)),
+            数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态), 获取近期家乡资源峰值=Mock(return_value={})),
             机器人标志="测试机器人",
             识别点击画面=Mock(return_value=SimpleNamespace(页面="主世界主页")),
             置脚本状态=Mock(),

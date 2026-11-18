@@ -195,6 +195,14 @@ class 设备连接面板(ttk.Frame):
             self.设备序列号.get().strip(),
             自动检测路径=self.自动检测路径.get(),
         )
+        # MuMu Android 15 的 dumpsys activity 返回多个虚拟显示；只有把
+        # CoC 包名传给 ADB 映射器，才能从 Display #N 中选中真实游戏层。
+        # 连接预览也必须设置，与正式机器人相同，不能因仅测试截图而
+        # 将其误报成“未确认 CoC 所在的 MuMu”。
+        if self.当前机器人ID:
+            设置 = self.数据库.获取机器人设置(self.当前机器人ID)
+            包名 = getattr(设置, "部落冲突包名", None) or "com.supercell.clashofclans"
+            设备.设置目标包名(包名)
         设备.确认在线()
         return 设备
 

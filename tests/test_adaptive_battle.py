@@ -2,13 +2,14 @@ import unittest
 import os
 from pathlib import Path
 import tempfile
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import numpy as np
 
 from 任务流程.主世界打鱼.进攻 import 进攻任务
-from 任务流程.主世界打鱼.进攻坐标逻辑计算 import 坐标
+from 任务流程.主世界打鱼.进攻坐标逻辑计算 import 坐标, 取进攻方向
 from 任务流程.主世界打鱼.搜索敌人 import 搜索目标敌人任务
 from 任务流程.主世界打鱼.等待战斗结束并回营 import 等待战斗结束并回营任务
 
@@ -72,6 +73,53 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertEqual(
             任务._提取资源行文本(完整OCR结果),
             ["111111", "222222", "333333"],
+        )
+
+    def test_资源行缺失时仍按屏幕行映射不把黑油补到圣水(self):
+        OCR结果 = [
+            ([[0, 16], [20, 16], [20, 24], [0, 24]], "97690", 0.99),
+            ([[0, 78], [20, 78], [20, 86], [0, 86]], "5326", 0.99),
+        ]
+
+        self.assertEqual(
+            搜索目标敌人任务._提取资源行文本(OCR结果),
+            ["97690", "0", "5326"],
+        )
+
+    def test_敌方资源截图覆盖金币圣水黑油三行(self):
+        任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
+        OCR行 = ((18, "97690"), (51, "367510"), (83, "5326"))
+
+        def 按可见区域OCR(区域):
+            结果 = []
+            for 中心Y, 文本 in OCR行:
+                if 中心Y >= 区域.shape[0]:
+                    continue
+                框 = [
+                    [0, 中心Y - 4], [40, 中心Y - 4],
+                    [40, 中心Y + 4], [0, 中心Y + 4],
+                ]
+                结果.append((框, 文本, 0.99))
+            return 结果, None
+
+        任务.ocr引擎 = Mock(side_effect=按可见区域OCR)
+        设置 = SimpleNamespace(战利品优先级="均衡")
+        上下文 = SimpleNamespace(
+            数据库=SimpleNamespace(获取机器人设置=Mock(return_value=设置)),
+            机器人标志="测试机器人",
+            置脚本状态=Mock(),
+            是否内存异常=Mock(return_value=False),
+            触发内存保护=Mock(),
+        )
+        任务.上下文 = 上下文
+
+        资源 = 任务.识别当前资源(
+            上下文, np.zeros((600, 800, 3), dtype=np.uint8)
+        )
+
+        self.assertEqual(
+            (资源["金币"], 资源["圣水"], 资源["黑油"]),
+            (97690, 367510, 5326),
         )
         self.assertEqual(
             任务._提取资源行文本([
@@ -157,7 +205,112 @@ class 自适应战斗测试(unittest.TestCase):
         任务 = 进攻任务.__new__(进攻任务)
         self.assertEqual(任务.读取自适应进攻策略(上下文), "分散探索")
 
-    def test_连续低表现不会改变用户五分进攻门槛(self):
+    def test_最新减少分兵建议优先于旧的分散探索标签(self):
+        class 数据库:
+            def 获取最新完整状态(self, _标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {"结果": "失败", "星数": 0, "摧毁率": 36},
+                            {"结果": "失败", "星数": 0, "摧毁率": 44},
+                        ],
+                        "下一场建议": "分散探索",
+                        "最近原因": (
+                            "高评分且高可达资源目标仍低摧毁：可达评分已足够，"
+                            "下一场集中主力方向、减少分兵并观察突破效果"
+                        ),
+                        "建议依据": "低表现后分散覆盖尚未完成，继续探索入口",
+                    }
+                })
+
+        上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
+        任务 = 进攻任务.__new__(进攻任务)
+        self.assertEqual(任务.读取自适应进攻策略(上下文), "集中主力")
+
+    def test_最新提高可达评分诊断优先于旧的分散探索标签(self):
+        class 数据库:
+            def 获取最新完整状态(self, _标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {"结果": "失败", "星数": 0, "摧毁率": 40},
+                            {"结果": "胜利", "星数": 1, "摧毁率": 50},
+                        ],
+                        "下一场建议": "分散探索",
+                        "最近原因": (
+                            "已获胜但星数偏低：下一场提高目标可达评分，"
+                            "并在有可靠目标时分散入口"
+                        ),
+                        "建议依据": "低表现后分散覆盖尚未完成，继续探索入口",
+                    }
+                })
+
+        上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
+        任务 = 进攻任务.__new__(进攻任务)
+        self.assertEqual(
+            任务.读取自适应进攻策略(上下文),
+            "提高目标可达评分",
+        )
+
+    def test_提高目标可达评分后稳健三星在可靠入口分散至两个方向(self):
+        class 数据库:
+            def 获取最新完整状态(self, _标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {"结果": "失败", "星数": 0, "摧毁率": 36},
+                            {"结果": "失败", "星数": 0, "摧毁率": 41},
+                        ],
+                        "下一场建议": "提高目标可达评分",
+                    }
+                })
+
+        日志 = []
+        上下文 = SimpleNamespace(
+            数据库=数据库(),
+            机器人标志="测试",
+            设置=SimpleNamespace(
+                是否自动配兵=True,
+                自动配兵玩法="稳健三星",
+                战利品优先级="均衡",
+            ),
+            置脚本状态=日志.append,
+        )
+        目标列表 = [
+            {"类别名称": "圣水瓶", "中心坐标": 坐标(155, 205), "靠近边缘": True, "置信度": 0.95},
+            {"类别名称": "金矿", "中心坐标": 坐标(190, 230), "靠近边缘": True, "置信度": 0.95},
+            {"类别名称": "圣水瓶", "中心坐标": 坐标(625, 345), "靠近边缘": True, "置信度": 0.95},
+            {"类别名称": "金矿", "中心坐标": 坐标(660, 375), "靠近边缘": True, "置信度": 0.95},
+        ]
+        任务 = 进攻任务.__new__(进攻任务)
+
+        选择结果 = 任务.选择集中进攻目标(上下文, 目标列表)
+
+        选择方向 = {
+            取进攻方向(目标["中心坐标"])
+            for 目标 in 选择结果
+        }
+        self.assertEqual(len(选择方向), 2)
+        self.assertIn("提高目标可达评分", 上下文.本场进攻策略)
+        self.assertTrue(any("提高目标可达评分" in 文本 and "双方向探索" in 文本 for 文本 in 日志))
+
+    def test_连续一星胜利也切换探索策略(self):
+        class 数据库:
+            def 获取最新完整状态(self, _标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {"结果": "胜利", "星数": 1, "摧毁率": 73},
+                            {"结果": "胜利", "星数": 1, "摧毁率": 54},
+                        ]
+                    }
+                })
+
+        上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
+        任务 = 进攻任务.__new__(进攻任务)
+        self.assertEqual(任务.读取自适应进攻策略(上下文), "分散探索")
+
+    def test_连续低表现时前八个候选临时提高评分与可达门槛(self):
         class 数据库:
             def 获取最新完整状态(self, _标志):
                 return SimpleNamespace(状态数据={
@@ -172,12 +325,12 @@ class 自适应战斗测试(unittest.TestCase):
 
         上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
         任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
-        评分, 可达比例, 说明 = 任务.获取自适应资源筛选门槛(上下文)
-        self.assertEqual(评分, 5.0)
-        self.assertIsNone(可达比例)
-        self.assertEqual(说明, "")
+        评分, 可达比例, 说明 = 任务.获取自适应资源筛选门槛(上下文, 1)
+        self.assertEqual(评分, 6.5)
+        self.assertEqual(可达比例, 0.70)
+        self.assertIn("前8个候选", 说明)
 
-    def test_学习反馈始终恢复用户五分门槛(self):
+    def test_第九个候选开始恢复基础评分门槛(self):
         class 数据库:
             def 获取最新完整状态(self, _标志):
                 return SimpleNamespace(状态数据={
@@ -192,7 +345,23 @@ class 自适应战斗测试(unittest.TestCase):
 
         上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
         任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
-        self.assertEqual(任务.获取自适应资源筛选门槛(上下文), (5.0, None, ""))
+        self.assertEqual(任务.获取自适应资源筛选门槛(上下文, 9), (5.0, None, ""))
+
+    def test_自适应门槛不会低于基础评分门槛(self):
+        class 数据库:
+            def 获取最新完整状态(self, _标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "下一场建议": "提高目标可达评分",
+                    }
+                })
+
+        上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
+        任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
+        with patch.object(搜索目标敌人任务, "资源易窃取最低评分", 7.0):
+            评分, 可达比例, _ = 任务.获取自适应资源筛选门槛(上下文, 1)
+        self.assertEqual(评分, 7.0)
+        self.assertEqual(可达比例, 0.70)
 
     def test_没有学习反馈时仍保持用户设定的五分门槛(self):
         class 数据库:
@@ -222,6 +391,23 @@ class 自适应战斗测试(unittest.TestCase):
         上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
         任务 = 进攻任务.__new__(进攻任务)
         self.assertEqual(任务.读取自适应进攻策略(上下文), "提高目标可达评分")
+
+    def test_进攻策略保留高可达失败后的集中资源建议(self):
+        class 数据库:
+            def 获取最新完整状态(self, _标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {"结果": "失败", "星数": 0, "摧毁率": 49},
+                            {"结果": "失败", "星数": 0, "摧毁率": 33},
+                        ],
+                        "下一场建议": "集中资源",
+                    }
+                })
+
+        上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
+        任务 = 进攻任务.__new__(进攻任务)
+        self.assertEqual(任务.读取自适应进攻策略(上下文), "集中资源")
 
     def test_拆分OCR框仍能读取百分比(self):
         结果 = [
@@ -323,6 +509,26 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertTrue(任务.下兵点是否位于可下兵区域(上下文, (302, 489)))
         self.assertFalse(任务.下兵点是否位于可下兵区域(上下文, (300, 498)))
 
+    def test_底部目标跳过游戏拒绝的贴边点并优先最近安全落点(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        上下文 = SimpleNamespace(
+            _部署区域已初始化=True,
+            _部署红色掩码=None,
+            本场可下兵区域={
+                "边界顶点": [(394, 20), (745, 293), (405, 549), (68, 278)],
+                "边界带宽": 58.0,
+            },
+        )
+
+        目标 = 坐标(433, 438)
+        被实机拒绝的点 = [(474, 488), (500, 490), (495, 481)]
+        候选点 = 任务.生成可下兵候选点(上下文, 目标)
+
+        for 点 in 被实机拒绝的点:
+            self.assertFalse(任务.下兵点是否位于可下兵区域(上下文, 点))
+            self.assertNotIn(点, 候选点)
+        self.assertEqual(候选点[0], (524, 482))
+
     def test_兵栏变化才视为下兵成功(self):
         任务 = 进攻任务.__new__(进攻任务)
         前图 = np.zeros((36, 31, 3), dtype=np.uint8)
@@ -354,6 +560,46 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertEqual(结果[0]["名称"], "未匹配模板(待探测)")
         self.assertTrue(any("启用一次安全探测" in 文本 for 文本 in 状态))
 
+    def test_彩色攻城飞艇被OCR误读为零时仍安全探测一次(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.兵栏槽位 = [("第4格", (0, 0, 10, 10))]
+        任务.取本次兵种模板列表 = lambda _上下文: ["兵种_攻城气球.bmp"]
+        任务._识别槽位文本 = lambda _图像: "x0|5"
+        任务._识别槽位数量 = lambda _图像, _文本: 0
+        任务._槽位最佳模板 = Mock(side_effect=[
+            ("兵种_攻城气球", 0.9), ("", 0.0), ("", 0.0),
+        ])
+        任务.是否为灰色图片 = lambda *_参数, **_关键字: False
+        日志 = []
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=lambda *_区域: np.zeros((10, 10, 3), dtype=np.uint8)),
+            置脚本状态=日志.append,
+        )
+        结果 = 任务.检查当前配兵(上下文)
+        self.assertEqual(结果[0]["类别"], "攻城器械")
+        self.assertEqual(结果[0]["数量"], 1)
+        self.assertFalse(结果[0]["数量已确认"])
+        self.assertTrue(any("一次部署尝试" in 文本 for 文本 in 日志))
+
+    def test_单架飞艇被OCR误读为六架时不得重复投放(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.兵栏槽位 = [("第4格", (0, 0, 10, 10))]
+        任务.取本次兵种模板列表 = lambda _上下文: ["兵种_攻城气球.bmp"]
+        任务._识别槽位文本 = lambda _图像: "x6|5"
+        任务._识别槽位数量 = lambda _图像, _文本: 6
+        任务._槽位最佳模板 = Mock(side_effect=[
+            ("兵种_攻城气球", 0.9), ("", 0.0), ("", 0.0),
+        ])
+        任务.是否为灰色图片 = lambda *_参数, **_关键字: False
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=lambda *_区域: np.zeros((10, 10, 3), dtype=np.uint8)),
+            置脚本状态=Mock(),
+        )
+        结果 = 任务.检查当前配兵(上下文)
+        self.assertEqual(结果[0]["类别"], "攻城器械")
+        self.assertEqual(结果[0]["数量"], 1)
+        self.assertFalse(结果[0]["数量已确认"])
+
     def test_前五格大数量未匹配卡牌按普通兵种启用高速下兵(self):
         """模板缺失但 x40 这类大数量卡牌不能被误当成慢速攻城器械。"""
         任务 = 进攻任务.__new__(进攻任务)
@@ -376,6 +622,109 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertEqual(结果[0]["数量"], 40)
         self.assertEqual(结果[0]["类别"], "兵种")
         self.assertTrue(any("启用高速下兵" in 文本 for 文本 in 状态))
+
+    def test_九条雷龙模板失配时不能判成攻城器械(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.兵栏槽位 = [("第1格", (0, 0, 10, 10))]
+        任务.取本次兵种模板列表 = lambda _上下文: []
+        任务._识别槽位文本 = lambda _图像: "x9|9"
+        任务._识别槽位数量 = lambda _图像, _文本: 9
+        任务._槽位最佳模板 = lambda *_参数: ("", 0.0)
+        任务.是否为灰色图片 = lambda *_参数, **_关键字: False
+        状态 = []
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=lambda *_区域: np.zeros((10, 10, 3), dtype=np.uint8),
+            ),
+            置脚本状态=状态.append,
+        )
+
+        结果 = 任务.检查当前配兵(上下文)
+
+        self.assertEqual(结果[0]["类别"], "兵种")
+        self.assertEqual(结果[0]["数量"], 9)
+
+    def test_没有英雄时闪电法术前的单个飞艇仍是攻城器械(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        结果 = 任务._按英雄布局修正槽位类别([
+            {"槽位": 1, "类别": "兵种", "名称": "未匹配兵种模板", "数量": 9},
+            {"槽位": 2, "类别": "兵种", "名称": "兵种_气球兵", "数量": 16},
+            {"槽位": 3, "类别": "兵种", "名称": "兵种_弓箭手", "数量": 2},
+            {"槽位": 4, "类别": "未知", "名称": "未匹配模板", "数量": 1},
+            {"槽位": 5, "类别": "药水", "名称": "法术_闪电法术", "数量": 11},
+            {"槽位": 6, "类别": "未知", "名称": "未匹配模板", "数量": 1},
+        ], 0)
+        self.assertEqual([项["类别"] for 项 in 结果],
+                         ["兵种", "兵种", "兵种", "攻城器械", "药水", "药水"])
+
+    def test_闪电法术模板失配时按已确认槽位下兵并复核数量(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.战斗是否仍在进行 = Mock(return_value=True)
+        任务.读取槽位显示兵量 = Mock(side_effect=[3, 2, 1, 0])
+        任务.读取兵栏槽位图像 = Mock(return_value=None)
+        点击 = Mock(return_value=True)
+        日志 = []
+        上下文 = SimpleNamespace(
+            当前兵栏清单=[{
+                "名称": "法术_闪电法术", "类别": "药水", "数量已确认": True,
+                "数量": 3, "区域": (320, 493, 376, 594),
+            }],
+            本场进攻方向=["左上"],
+            点击=点击,
+            置脚本状态=日志.append,
+        )
+
+        self.assertTrue(任务.执行已识别闪电法术(上下文))
+
+        self.assertEqual(点击.call_count, 4)
+        self.assertEqual(点击.call_args_list[0].args, (348, 543))
+        self.assertEqual(任务.读取槽位显示兵量.call_count, 4)
+        self.assertTrue(any("3/3个" in 文本 for 文本 in 日志))
+
+    def test_战中OCR暂不可读但数字确实变化可继续投放(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.战斗是否仍在进行 = Mock(return_value=True)
+        任务.读取槽位显示兵量 = Mock(side_effect=[None, None, None])
+        任务.读取兵栏槽位图像 = Mock(side_effect=[
+            np.zeros((90, 60, 3), dtype=np.uint8),
+            np.pad(np.ones((10, 10, 3), dtype=np.uint8) * 255,
+                   ((4, 76), (30, 20), (0, 0))),
+            np.zeros((90, 60, 3), dtype=np.uint8),
+        ])
+        点击 = Mock(return_value=True)
+        日志 = []
+        上下文 = SimpleNamespace(
+            当前兵栏清单=[{
+                "名称": "法术_闪电法术", "类别": "药水", "数量已确认": True,
+                "数量": 2, "区域": (320, 493, 376, 594),
+            }],
+            本场进攻方向=["左上"], 点击=点击, 置脚本状态=日志.append,
+        )
+        self.assertTrue(任务.执行已识别闪电法术(上下文))
+        self.assertEqual(点击.call_count, 3)
+        self.assertTrue(any("2/2个" in 文本 for 文本 in 日志))
+
+    def test_闪电法术未确认数量时不盲点槽位(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        点击 = Mock(return_value=True)
+        上下文 = SimpleNamespace(
+            当前兵栏清单=[{
+                "名称": "法术_闪电法术", "类别": "药水", "数量已确认": False,
+                "数量": 11, "区域": (320, 493, 376, 594),
+            }],
+            点击=点击,
+        )
+
+        self.assertFalse(任务.执行已识别闪电法术(上下文))
+        点击.assert_not_called()
+
+    def test_战前已投放闪电时战后法术流程不得重复投放(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.乱生效类法术列表 = ["法术_闪电法术.bmp"]
+        任务.执行已识别闪电法术 = Mock()
+        上下文 = SimpleNamespace(_闪电已提前处理=True)
+        任务.执行其他法术流程(上下文)
+        任务.执行已识别闪电法术.assert_not_called()
 
     def test_英雄技能无专用模板时按英雄槽位识别高亮(self):
         任务 = 进攻任务.__new__(进攻任务)
@@ -530,6 +879,7 @@ class 自适应战斗测试(unittest.TestCase):
             置脚本状态=lambda *_参数: None,
         )
         任务.战斗是否仍在进行 = Mock(return_value=True)
+        任务.下兵点是否位于可下兵区域 = Mock(return_value=True)
         任务.读取兵栏槽位图像 = lambda *_参数: object()
         任务.判断下兵反馈 = Mock(return_value=False)
         兵栏项 = {"槽位": 1, "名称": "测试兵", "类别": "兵种", "区域": (0, 0, 1, 1)}
@@ -713,6 +1063,52 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertEqual(鼠标对象.调用[0][0], [(120, 200), (140, 200)])
         self.assertTrue(getattr(上下文, "_最近高速批次使用分散"))
 
+    def test_边界不可见时高速批次只复用本场已确认落点(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        上下文 = SimpleNamespace(
+            本场可下兵区域={"颜色边界可见": False},
+        )
+        点位 = 任务.生成高速分散下兵点(
+            上下文,
+            {"槽位": 1},
+            0,
+            4,
+            2,
+            [[(30, 40), (31, 41)], [(50, 50)]],
+            (10, 20),
+        )
+        self.assertEqual(点位, [(10, 20)] * 4)
+
+    def test_已确认点批次不标记为多目标分散(self):
+        class 鼠标:
+            def __init__(self):
+                self.调用 = []
+
+            def 连续点击多点(self, 点位, **关键字):
+                self.调用.append((list(点位), 关键字))
+                return True
+
+        上下文 = SimpleNamespace(
+            鼠标=鼠标(),
+            置脚本状态=lambda *_参数, **_关键字: None,
+        )
+        任务 = 进攻任务.__new__(进攻任务)
+        self.assertEqual(
+            任务.执行高速下兵批次(
+                上下文,
+                (120, 200),
+                3,
+                "快速连点",
+                分散下兵点列表=[(120, 200)] * 3,
+            ),
+            3,
+        )
+        self.assertEqual(上下文.鼠标.调用[0][0], [(120, 200)] * 3)
+        self.assertFalse(getattr(上下文, "_最近高速批次使用分散"))
+
+    def test_高速下兵默认间隔设为八十毫秒(self):
+        self.assertEqual(进攻任务.高速连点间隔毫秒, 80)
+
     def test_高速分散点按目标顺序循环并跳过拒绝点(self):
         任务 = 进攻任务.__new__(进攻任务)
         上下文 = SimpleNamespace(
@@ -816,6 +1212,18 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertEqual(任务.推进资源目标索引(0, 0), 0)
         self.assertEqual(任务.推进资源目标索引(0, 20, 7), 7)
 
+    def test_新版九格兵栏按64像素间距覆盖第七第八英雄槽(self):
+        """实机新版兵栏从第五格起不能继续按66px累积偏移。"""
+        self.assertEqual(
+            [区域[0] for _, 区域 in 进攻任务.可见兵栏格子],
+            [56, 120, 184, 248, 312, 376, 440, 504, 568],
+        )
+        第八格区域 = 进攻任务.可见兵栏格子[7][1]
+        self.assertEqual(
+            进攻任务._英雄技能点击点列表(第八格区域),
+            [(508, 503), (513, 503), (508, 508)],
+        )
+
     def test_英雄后第一个未匹配槽位保留为攻城器械(self):
         任务 = 进攻任务.__new__(进攻任务)
         结果 = 任务._按英雄布局修正槽位类别([
@@ -828,6 +1236,63 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertEqual(结果[2]["类别"], "药水")
         self.assertEqual(结果[3]["类别"], "药水")
 
+    def test_新版九格兵栏中英雄后未匹配卡牌按证据识别为英雄(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        兵栏 = [
+            {"槽位": 5, "类别": "英雄", "名称": "英雄_野蛮人之王", "数量": 1},
+            {"槽位": 6, "类别": "未知", "名称": "未匹配模板", "数量": 1,
+             "OCR": "|99", "顶部数量已识别": False, "卡牌为灰色": False},
+            {"槽位": 7, "类别": "药水", "名称": "未匹配模板", "数量": 1,
+             "OCR": "|71", "顶部数量已识别": False, "卡牌为灰色": False},
+            {"槽位": 8, "类别": "未知", "名称": "未匹配模板", "数量": 1,
+             "OCR": "|25", "顶部数量已识别": False, "卡牌为灰色": False},
+            {"槽位": 9, "类别": "药水", "名称": "法术_闪电法术", "数量": 11,
+             "OCR": "x11|13", "顶部数量已识别": True, "卡牌为灰色": False},
+        ]
+
+        结果 = 任务._按英雄布局修正槽位类别(兵栏, 5)
+
+        self.assertEqual([项["类别"] for 项 in 结果], ["英雄", "英雄", "英雄", "英雄", "药水"])
+        self.assertTrue(all(项["名称"].startswith("英雄_") for 项 in 结果[1:4]))
+
+    def test_新版九格兵栏中不可信x0不应把英雄错分为兵种或法术(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        兵栏 = [
+            {"槽位": 5, "类别": "英雄", "名称": "英雄_野蛮人之王", "数量": 1},
+            {"槽位": 6, "类别": "攻城器械", "名称": "未匹配模板(待探测)", "数量": 1,
+             "数量已确认": False, "OCR": "x0|99", "顶部数量已识别": True, "卡牌为灰色": False},
+            {"槽位": 7, "类别": "药水", "名称": "未匹配模板(待探测)", "数量": 1,
+             "数量已确认": False, "OCR": "x0|71", "顶部数量已识别": True, "卡牌为灰色": False},
+            {"槽位": 8, "类别": "未知", "名称": "未匹配模板(待探测)", "数量": 1,
+             "数量已确认": False, "OCR": "x0|25", "顶部数量已识别": True, "卡牌为灰色": False},
+            {"槽位": 9, "类别": "药水", "名称": "法术_闪电法术", "数量": 11,
+             "数量已确认": True, "OCR": "x11|13", "顶部数量已识别": True, "卡牌为灰色": False},
+        ]
+
+        结果 = 任务._按英雄布局修正槽位类别(兵栏, 5)
+
+        self.assertEqual([项["类别"] for 项 in 结果], ["英雄", "英雄", "英雄", "英雄", "药水"])
+        self.assertTrue(all(项["数量"] == 1 for 项 in 结果[1:4]))
+
+    def test_新版九格兵栏第九格法术未命中模板时仍识别后续英雄(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        兵栏 = [
+            {"槽位": 5, "类别": "英雄", "名称": "英雄_野蛮人之王", "数量": 1},
+            {"槽位": 6, "类别": "攻城器械", "名称": "未匹配模板(待探测)", "数量": 1,
+             "数量已确认": False, "OCR": "x0|99", "顶部数量已识别": True, "卡牌为灰色": False},
+            {"槽位": 7, "类别": "药水", "名称": "未匹配模板(待探测)", "数量": 1,
+             "数量已确认": False, "OCR": "x0|71", "顶部数量已识别": True, "卡牌为灰色": False},
+            {"槽位": 8, "类别": "药水", "名称": "未匹配模板(待探测)", "数量": 1,
+             "数量已确认": False, "OCR": "x0|25", "顶部数量已识别": True, "卡牌为灰色": False},
+            {"槽位": 9, "类别": "药水", "名称": "未匹配模板", "数量": 11,
+             "数量已确认": True, "OCR": "x11|13", "顶部数量已识别": True, "卡牌为灰色": False},
+        ]
+
+        结果 = 任务._按英雄布局修正槽位类别(兵栏, 5)
+
+        self.assertEqual([项["类别"] for 项 in 结果], ["英雄", "英雄", "英雄", "英雄", "药水"])
+        self.assertEqual([项["数量"] for 项 in 结果[1:4]], [1, 1, 1])
+
     def test_英雄名称优先修正被回退为普通兵种的类别(self):
         任务 = 进攻任务.__new__(进攻任务)
         结果 = 任务._按英雄布局修正槽位类别([
@@ -835,6 +1300,12 @@ class 自适应战斗测试(unittest.TestCase):
         ], 0)
         self.assertEqual(结果[0]["类别"], "英雄")
         self.assertEqual(结果[0]["数量"], 1)
+
+    def test_英雄技能点击集中在卡片左上角徽标(self):
+        区域 = (316, 493, 372, 594)
+        点位 = 进攻任务._英雄技能点击点列表(区域)
+        self.assertEqual(点位, [(320, 503), (325, 503), (320, 508)])
+        self.assertTrue(all(316 <= x < 332 and 499 <= y < 516 for x, y in 点位))
 
     def test_英雄落地后只尝试一次可用技能(self):
         任务 = 进攻任务.__new__(进攻任务)
@@ -859,7 +1330,7 @@ class 自适应战斗测试(unittest.TestCase):
             "区域": (254, 493, 310, 594),
         }
         self.assertTrue(任务.尝试释放英雄技能(上下文, 兵栏项))
-        self.assertEqual(点击.call_args_list[0].args[:2], (282, 572))
+        self.assertEqual(点击.call_args_list[0].args[:2], (258, 503))
         self.assertIn(4, 上下文._本场已释放英雄技能)
         self.assertTrue(any("技能已点击" in 文本 for 文本 in 日志))
 
@@ -951,7 +1422,7 @@ class 自适应战斗测试(unittest.TestCase):
 
         self.assertTrue(任务.尝试释放英雄技能(上下文, 兵栏项))
         self.assertGreaterEqual(任务.识别英雄技能状态.call_count, 2)
-        self.assertEqual(点击.call_args_list[0].args[:2], (282, 572))
+        self.assertEqual(点击.call_args_list[0].args[:2], (258, 503))
         self.assertIn(4, 上下文._本场已释放英雄技能)
         self.assertTrue(any("准备复核" in 文本 for 文本 in 日志))
 
@@ -1057,6 +1528,50 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertEqual(读取区域, [(56, 493, 112, 594)])
         self.assertTrue(any("当前数量已确认0" in 文本 for 文本 in 日志))
 
+    def test_补兵复核按普通兵种筛前三种而不扫英雄和法术(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        读取区域 = []
+        区域 = {
+            1: (10, 500, 40, 540),
+            2: (50, 500, 80, 540),
+            3: (90, 500, 120, 540),
+            4: (130, 500, 160, 540),
+            5: (170, 500, 200, 540),
+        }
+        任务.可见兵栏格子 = [
+            (f"第{槽位}格", 区域[槽位]) for 槽位 in range(1, 6)
+        ]
+        设置 = SimpleNamespace(漏下兵种检测格数=3)
+        清单 = [
+            {"槽位": 1, "类别": "兵种", "数量": 2, "区域": 区域[1], "名称": "雷龙"},
+            {"槽位": 2, "类别": "英雄", "数量": 1, "区域": 区域[2], "名称": "飞龙公爵"},
+            {"槽位": 3, "类别": "兵种", "数量": 22, "区域": 区域[3], "名称": "气球兵"},
+            {"槽位": 4, "类别": "药水", "数量": 4, "区域": 区域[4], "名称": "闪电法术"},
+            {"槽位": 5, "类别": "兵种", "数量": 2, "区域": 区域[5], "名称": "弓箭手"},
+        ]
+        上下文 = SimpleNamespace(
+            机器人标志="测试",
+            数据库=SimpleNamespace(获取机器人设置=lambda _标志: 设置),
+            当前兵栏清单=清单,
+            op=SimpleNamespace(
+                获取屏幕图像cv=lambda *_区域: np.zeros((40, 30, 3), dtype=np.uint8),
+            ),
+            置脚本状态=lambda *_参数, **_关键字: None,
+            点击=lambda *_参数, **_关键字: self.fail("数量为0时不应点击"),
+            脚本延时=lambda _毫秒: None,
+        )
+        任务.准备可下兵区域 = lambda *_参数, **_关键字: None
+        任务.战斗是否仍在进行 = lambda _上下文: True
+        任务.是否为灰色图片 = lambda _图像: False
+        任务.读取槽位显示兵量 = lambda _上下文, 格子区域: 读取区域.append(tuple(格子区域)) or 0
+
+        任务.执行漏下兵种下兵流程(
+            上下文,
+            [{"中心坐标": 坐标(100, 100)}],
+        )
+
+        self.assertEqual(读取区域, [区域[1], 区域[3], 区域[5]])
+
     def test_战斗过渡开始漏兵检测时不读取兵栏也不点击(self):
         任务 = 进攻任务.__new__(进攻任务)
         日志 = []
@@ -1076,20 +1591,173 @@ class 自适应战斗测试(unittest.TestCase):
         任务.准备可下兵区域.assert_not_called()
         self.assertTrue(any("停止补下兵" in 文本 for 文本 in 日志))
 
-    def test_页面护栏识别到战斗过渡会立即停止战斗输入(self):
+    def test_页面护栏误报战斗过渡后复核到战斗不能结束(self):
         任务 = 进攻任务.__new__(进攻任务)
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        复核次数 = iter(("战斗过渡", "战斗中"))
+        识别器 = SimpleNamespace(
+            识别=lambda *_参数, **_关键字: SimpleNamespace(页面=next(复核次数)),
+            _战斗倒计时分数=lambda _图像: 0.0,
+            _红色放弃按钮分数=lambda _图像: 0.0,
+        )
         上下文 = SimpleNamespace(
             停止事件=SimpleNamespace(is_set=lambda: False),
             op=SimpleNamespace(获取屏幕图像cv=lambda *_区域: 屏幕),
-            _获取点击页面识别器=lambda: SimpleNamespace(
-                识别=lambda *_参数, **_关键字: SimpleNamespace(页面="战斗过渡")
-            ),
+            _获取点击页面识别器=lambda: 识别器,
         )
 
-        self.assertFalse(任务.战斗是否仍在进行(上下文))
+        with patch("任务流程.主世界打鱼.进攻.time.sleep"):
+            self.assertTrue(任务.战斗是否仍在进行(上下文))
+        self.assertFalse(getattr(上下文, "_战斗结束已确认", False))
+
+    def test_战斗特效持续超过旧版四帧后恢复不会停止(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        页面序列 = iter(["战斗过渡"] * 7 + ["战斗中"])
+        识别器 = SimpleNamespace(
+            识别=lambda *_参数, **_关键字: SimpleNamespace(页面=next(页面序列)),
+            _战斗倒计时分数=lambda _图像: 0.0,
+            _红色放弃按钮分数=lambda _图像: 0.0,
+        )
+        停止事件 = Event()
+        上下文 = SimpleNamespace(
+            停止事件=停止事件,
+            op=SimpleNamespace(获取屏幕图像cv=lambda *_区域: 屏幕),
+            _获取点击页面识别器=lambda: 识别器,
+            置脚本状态=Mock(),
+        )
+        with patch("任务流程.主世界打鱼.进攻.time.sleep"):
+            self.assertTrue(任务.战斗是否仍在进行(上下文))
+        self.assertFalse(停止事件.is_set())
+        self.assertFalse(getattr(上下文, "页面恢复失败", False))
+
+    def test_奖励页持续出现时交给既有结算等待而不立即停机(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        识别器 = SimpleNamespace(
+            识别=Mock(return_value=SimpleNamespace(页面="战斗奖励选择")),
+            _战斗倒计时分数=lambda _图像: 0.0,
+            _红色放弃按钮分数=lambda _图像: 0.0,
+        )
+        停止事件 = Event()
+        日志 = []
+        上下文 = SimpleNamespace(
+            停止事件=停止事件,
+            op=SimpleNamespace(获取屏幕图像cv=lambda *_区域: 屏幕),
+            _获取点击页面识别器=lambda: 识别器,
+            置脚本状态=日志.append,
+        )
+        with patch("任务流程.主世界打鱼.进攻.time.sleep"):
+            self.assertFalse(任务.战斗是否仍在进行(上下文))
+        self.assertFalse(停止事件.is_set())
+        self.assertTrue(上下文._战斗奖励弹窗已确认)
+        self.assertTrue(any("等待结算" in 文字 for 文字 in 日志))
+
+    def test_战斗倒计时仍在时奖励遮罩不得放行下兵(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        识别器 = SimpleNamespace(
+            _战斗倒计时分数=lambda _图像: 0.96,
+            _红色放弃按钮分数=lambda _图像: 0.93,
+            _奖励选择横幅分数=lambda _图像: 0.96,
+        )
+        self.assertFalse(进攻任务._画面有强战斗证据(识别器, 屏幕))
+        识别器._奖励选择横幅分数 = lambda _图像: 0.0
+        self.assertTrue(进攻任务._画面有强战斗证据(识别器, 屏幕))
+
+    def test_长期未知画面仍安全停机并记录页面序列(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        识别器 = SimpleNamespace(
+            识别=Mock(return_value=SimpleNamespace(页面="战斗过渡")),
+            _战斗倒计时分数=lambda _图像: 0.0,
+            _红色放弃按钮分数=lambda _图像: 0.0,
+        )
+        停止事件 = Event()
+        日志 = []
+        上下文 = SimpleNamespace(
+            停止事件=停止事件,
+            op=SimpleNamespace(获取屏幕图像cv=lambda *_区域: 屏幕),
+            _获取点击页面识别器=lambda: 识别器,
+            置脚本状态=日志.append,
+        )
+        with patch("任务流程.主世界打鱼.进攻.time.sleep"):
+            self.assertFalse(任务.战斗是否仍在进行(上下文))
+        self.assertTrue(停止事件.is_set())
+        self.assertTrue(上下文.页面恢复失败)
+        self.assertTrue(any("最近=战斗过渡" in 文字 for 文字 in 日志))
+
+    def test_识别失败不再记录为已确认战斗结束(self):
+        日志 = []
+        停止事件 = Event()
+        上下文 = SimpleNamespace(
+            停止事件=停止事件,
+            页面恢复失败=True,
+            置脚本状态=日志.append,
+        )
+        进攻任务._记录已确认战斗结束(上下文, "检测到战斗结束")
+        self.assertEqual(日志, [])
+        上下文.页面恢复失败 = False
+        进攻任务._记录已确认战斗结束(上下文, "检测到战斗结束")
+        self.assertEqual(日志, ["检测到战斗结束"])
+
+    def test_奖励页误报后新画面确认战斗会清除残留标记(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        识别器 = SimpleNamespace(
+            识别=Mock(return_value=SimpleNamespace(页面="战斗中")),
+            _战斗倒计时分数=lambda _图像: 0.0,
+            _红色放弃按钮分数=lambda _图像: 0.0,
+        )
+        截图 = Mock(return_value=屏幕)
+        日志 = []
+        上下文 = SimpleNamespace(
+            停止事件=Event(),
+            op=SimpleNamespace(获取屏幕图像cv=截图),
+            _获取点击页面识别器=lambda: 识别器,
+            _战斗奖励弹窗已确认=True,
+            _战斗状态缓存时间=float("inf"),
+            _战斗状态缓存结果=True,
+            置脚本状态=日志.append,
+        )
+        self.assertTrue(任务.战斗是否仍在进行(上下文))
+        截图.assert_called_once()
+        self.assertFalse(上下文._战斗奖励弹窗已确认)
+        self.assertTrue(any("清除过渡标记" in 文字 for 文字 in 日志))
+
+    def test_结算误报与倒计时红按钮共存时保持战斗(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        识别器 = SimpleNamespace(
+            识别=Mock(return_value=SimpleNamespace(页面="战斗结算")),
+            _战斗倒计时分数=lambda _图像: 0.96,
+            _红色放弃按钮分数=lambda _图像: 0.93,
+        )
+        上下文 = SimpleNamespace(
+            停止事件=SimpleNamespace(is_set=lambda: False),
+            op=SimpleNamespace(获取屏幕图像cv=lambda *_区域: 屏幕),
+            _获取点击页面识别器=lambda: 识别器,
+        )
+        self.assertTrue(任务.战斗是否仍在进行(上下文))
+        识别器.识别.assert_not_called()
+        self.assertFalse(getattr(上下文, "_战斗结束已确认", False))
+
+    def test_连续两帧真正结算才确认战斗结束(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        识别器 = SimpleNamespace(
+            识别=Mock(return_value=SimpleNamespace(页面="战斗结算")),
+            _战斗倒计时分数=lambda _图像: 0.0,
+            _红色放弃按钮分数=lambda _图像: 0.0,
+        )
+        上下文 = SimpleNamespace(
+            停止事件=SimpleNamespace(is_set=lambda: False),
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=屏幕)),
+            _获取点击页面识别器=lambda: 识别器,
+        )
+        with patch("任务流程.主世界打鱼.进攻.time.sleep"):
+            self.assertFalse(任务.战斗是否仍在进行(上下文))
         self.assertTrue(上下文._战斗结束已确认)
-        np.testing.assert_array_equal(上下文._战斗结束截图, 屏幕)
+        self.assertEqual(识别器.识别.call_count, 2)
 
     def test_读取槽位显示兵量能把OCR的XO识别为零(self):
         任务 = 进攻任务.__new__(进攻任务)
@@ -1201,6 +1869,27 @@ class 自适应战斗测试(unittest.TestCase):
             side_effect=[0, 0, 0, 25, 25, 30],
         ):
             self.assertEqual(任务.等待战斗画面确认(上下文), "战斗中")
+
+    def test_等待超时边界强制新帧发现结算后交给回营(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        上下文 = SimpleNamespace(
+            停止事件=SimpleNamespace(is_set=lambda: False, wait=lambda timeout: None),
+            识别点击画面=Mock(side_effect=[
+                SimpleNamespace(页面="战斗结算"),
+            ]),
+            置脚本状态=Mock(),
+            _战斗结束已确认=False,
+        )
+
+        with patch(
+            "任务流程.主世界打鱼.进攻.time.monotonic",
+            side_effect=[0.0, 2.0],
+        ):
+            结果 = 任务.等待战斗画面确认(上下文, 超时秒=1)
+
+        self.assertEqual(结果, "战斗结算")
+        self.assertTrue(上下文._战斗结束已确认)
+        上下文.识别点击画面.assert_called_once_with(强制=True)
 
 
 if __name__ == "__main__":

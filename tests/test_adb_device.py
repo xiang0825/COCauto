@@ -59,7 +59,7 @@ class ADB设备测试(unittest.TestCase):
                 数据库路径 = 任务数据库.默认数据库路径()
             self.assertEqual(Path(数据库路径), Path(临时目录) / "数据库" / "任务系统.db")
 
-    def test_单文件模式优先复用EXE上级的共享数据库(self):
+    def test_打包版不误用EXE上级的开发数据库(self):
         with tempfile.TemporaryDirectory() as 临时目录:
             根目录 = Path(临时目录)
             exe路径 = 根目录 / "coc_robot" / "部落冲突.exe"
@@ -67,9 +67,20 @@ class ADB设备测试(unittest.TestCase):
             共享路径.parent.mkdir(parents=True)
             共享路径.touch()
             with patch.object(sys, "frozen", True, create=True), \
-                    patch.object(sys, "executable", str(exe路径)):
+                    patch.object(sys, "executable", str(exe路径)), \
+                    patch.dict("os.environ", {"COCAUTO_DB_PATH": ""}, clear=False):
                 数据库路径 = 任务数据库.默认数据库路径()
-            self.assertEqual(Path(数据库路径), 共享路径)
+            self.assertEqual(Path(数据库路径), exe路径.parent / "数据库" / "任务系统.db")
+
+    def test_打包版显式共享数据库路径仍优先(self):
+        with tempfile.TemporaryDirectory() as 临时目录:
+            共享路径 = Path(临时目录) / "共享" / "任务系统.db"
+            exe路径 = str(Path(临时目录) / "发布" / "部落冲突.exe")
+            with patch.object(sys, "frozen", True, create=True), \
+                    patch.object(sys, "executable", exe路径), \
+                    patch.dict("os.environ", {"COCAUTO_DB_PATH": str(共享路径)}, clear=False):
+                数据库路径 = 任务数据库.默认数据库路径()
+            self.assertEqual(Path(数据库路径), 共享路径.resolve())
 
     def test_源码模式优先复用项目上级的共享数据库(self):
         数据库模块 = importlib.import_module("数据库.任务数据库")
@@ -137,7 +148,10 @@ class ADB设备测试(unittest.TestCase):
                 if 命令[1:4] == ["-s", "127.0.0.1:16416", "shell"]:
                     if 命令[-3:] == ["list", "packages", "com.supercell.clashofclans"]:
                         return 结果(b"package:com.supercell.clashofclans\n")
-                    return 结果(b"mResumedActivity: com.supercell.clashofclans/.GameApp\n")
+                    return 结果(
+                        b"FocusedWindows:\n"
+                        b"  displayId=4, name='87ab31 com.supercell.clashofclans/com.supercell.titan.GameApp'\n"
+                    )
                 if 命令[1:4] == ["-s", "emulator-5556", "shell"]:
                     if 命令[-3:] == ["list", "packages", "com.supercell.clashofclans"]:
                         return 结果(b"package:com.supercell.clashofclans\n")
@@ -190,11 +204,11 @@ class ADB设备测试(unittest.TestCase):
                     return 结果(b"package:com.supercell.clashofclans\n")
                 if serial == "127.0.0.1:16416":
                     return 结果(
-                        b"mCurrentFocus=Window{u0 com.supercell.clashofclans/.GameApp}\n"
-                        b"RecentTask: com.supercell.clashofclans/.GameApp\n"
+                        b"FocusedWindows:\n"
+                        b"  displayId=4, name='87ab31 com.supercell.clashofclans/com.supercell.titan.GameApp'\n"
                     )
                 return 结果(
-                    b"mCurrentFocus=Window{u0 app.lawnchair/.Launcher}\n"
+                    b"topResumedActivity=ActivityRecord{1 u0 app.lawnchair/.Launcher t2}\n"
                     b"RecentTask: com.supercell.clashofclans/.GameApp\n"
                 )
 
@@ -218,10 +232,15 @@ class ADB设备测试(unittest.TestCase):
                     )
                 if 命令[-3:] == ["list", "packages", "com.supercell.clashofclans"]:
                     return 结果(b"package:com.supercell.clashofclans\n")
-                if 命令[-3:] == ["getprop", "ro.serialno"]:
+                if 命令[-2:] == ["getprop", "ro.serialno"]:
                     return 结果(b"mumu-test-instance\n")
+                if 命令[1:4] == ["-s", "127.0.0.1:16416", "shell"]:
+                    return 结果(
+                        b"FocusedWindows:\n"
+                        b"  displayId=4, name='87ab31 com.supercell.clashofclans/com.supercell.titan.GameApp'\n"
+                    )
                 return 结果(
-                    b"mCurrentFocus=Window{u0 com.supercell.clashofclans/.GameApp}\n"
+                    b"topResumedActivity=ActivityRecord{1 u0 com.supercell.clashofclans/.GameApp t14}\n"
                 )
 
         with patch.object(ADB设备操作类, "解析ADB路径", return_value=ADB):
@@ -380,6 +399,141 @@ mViewports=[DisplayViewport{type=EXTERNAL, valid=true, displayId=6, uniqueId='lo
             "7",
         )
 
+    def test_MuMu输入焦点绑定游戏显示层而不遍历活动栈(self):
+        活动输出 = b"""
+FocusedWindows:
+  displayId=4, name='87ab31 com.supercell.clashofclans/com.supercell.titan.GameApp'
+"""
+        runner = 假Runner(结果(活动输出))
+        设备 = ADB设备操作类(
+            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            "127.0.0.1:16416", runner=runner, 自动检测路径=False,
+        )
+        设备.设置目标包名("com.supercell.clashofclans")
+        self.assertEqual(设备._获取MuMu输入显示ID(), "4")
+        self.assertEqual(设备._解析MuMu焦点包名(活动输出.decode(), 设备._目标包名), 设备._目标包名)
+        self.assertEqual(runner.命令[0][-2:], ["dumpsys", "input"])
+        self.assertFalse(any("activities" in 命令 for 命令 in runner.命令))
+
+    def test_MuMu后台游戏任务不能授权输入显示层(self):
+        活动输出 = """
+Display #4 (activities from top to bottom):
+    * Task{1 A=10017:com.supercell.clashofclans visible=false}
+Display #0 (activities from top to bottom):
+    topResumedActivity=ActivityRecord{2 u0 app.lawnchair/.LawnchairLauncher t2}
+"""
+        self.assertIsNone(ADB设备操作类._解析MuMu逻辑显示ID(活动输出, "com.supercell.clashofclans"))
+        self.assertEqual(ADB设备操作类._解析MuMu焦点包名(活动输出, "com.supercell.clashofclans"), "app.lawnchair")
+
+    def test_MuMu输入服务焦点可安全识别当前包名和逻辑显示层(self):
+        输入输出 = """
+FocusedApplications:
+  displayId=0, name='ActivityRecord{launcher app.lawnchair/.LawnchairLauncher t2}', dispatchingTimeout=25000ms
+FocusedWindows:
+  displayId=4, name='87ab31 com.supercell.clashofclans/com.supercell.titan.GameApp'
+FocusRequests:
+  displayId=4, name='87ab31 com.supercell.clashofclans/com.supercell.titan.GameApp' result='OK'
+"""
+        self.assertEqual(
+            ADB设备操作类._解析MuMu焦点包名(输入输出, "com.supercell.clashofclans"),
+            "com.supercell.clashofclans",
+        )
+        self.assertEqual(
+            ADB设备操作类._解析MuMu逻辑显示ID(
+                输入输出, "com.supercell.clashofclans"
+            ),
+            "4",
+        )
+
+    def test_MuMu启动器焦点不会错误授权后台CoC显示层(self):
+        输入输出 = """
+FocusedWindows:
+  displayId=0, name='d35c333 app.lawnchair/app.lawnchair.LawnchairLauncher'
+"""
+        self.assertEqual(
+            ADB设备操作类._解析MuMu焦点包名(输入输出, "com.supercell.clashofclans"),
+            "app.lawnchair",
+        )
+        self.assertIsNone(
+            ADB设备操作类._解析MuMu逻辑显示ID(
+                输入输出, "com.supercell.clashofclans"
+            )
+        )
+
+    def test_MuMu截图可读FocusedApplications游戏层但输入仍拒绝启动器焦点(self):
+        输入输出 = b"""
+FocusedApplications:
+  displayId=2, name='ActivityRecord{game u0 com.supercell.clashofclans/com.supercell.titan.GameApp t104}'
+  displayId=0, name='ActivityRecord{launcher u0 app.lawnchair/.LawnchairLauncher t2}'
+FocusedWindows:
+  displayId=0, name='e73b728 app.lawnchair/app.lawnchair.LawnchairLauncher'
+"""
+        显示输出 = b"""
+mViewports=[DisplayViewport{type=INTERNAL, valid=true, displayId=0, uniqueId='local:4619827820427265280'}, DisplayViewport{type=INTERNAL, valid=true, displayId=2, uniqueId='local:4619827767814508545'}]
+"""
+        runner = 假Runner(结果(输入输出), 结果(显示输出))
+        设备 = ADB设备操作类(
+            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            "127.0.0.1:16416", runner=runner, 自动检测路径=False,
+        )
+        设备.设置目标包名("com.supercell.clashofclans")
+
+        self.assertEqual(设备._获取MuMu截图显示ID(), "4619827767814508545")
+        self.assertIsNone(设备._获取MuMu输入显示ID())
+
+    def test_MuMu前台与输入显示查询只读取dumpsys_input(self):
+        输入输出 = b"""
+FocusedWindows:
+  displayId=4, name='87ab31 com.supercell.clashofclans/com.supercell.titan.GameApp'
+"""
+        runner = 假Runner(结果(输入输出))
+        设备 = ADB设备操作类(
+            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            "127.0.0.1:16416", runner=runner, 自动检测路径=False,
+        )
+        设备.设置目标包名("com.supercell.clashofclans")
+        self.assertEqual(设备.获取当前前台包名(), "com.supercell.clashofclans")
+        self.assertEqual(设备._获取MuMu输入显示ID(), "4")
+        self.assertEqual(len(runner.命令), 1)
+        self.assertEqual(runner.命令[0][-2:], ["dumpsys", "input"])
+        self.assertFalse(any("activities" in 命令 for 命令 in runner.命令))
+
+    def test_MuMu已在前台的游戏不会查询完整活动栈(self):
+        runner = 假Runner(结果(
+            b"FocusedWindows:\n"
+            b"  displayId=4, name='87ab31 com.supercell.clashofclans/com.supercell.titan.GameApp'\n"
+        ))
+        设备 = ADB设备操作类(
+            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            "127.0.0.1:16416", runner=runner, 自动检测路径=False,
+        )
+        with patch.object(设备, "_验证目标"):
+            设备.打开应用("com.supercell.clashofclans")
+        self.assertEqual(len(runner.命令), 1)
+        self.assertEqual(runner.命令[0][-2:], ["dumpsys", "input"])
+
+    def test_轻量top_resumed查询可解析前台包名(self):
+        输出 = """
+ACTIVITY MANAGER TOP-RESUMED (dumpsys activity top-resumed)
+packageName=com.supercell.clashofclans processName=com.supercell.clashofclans
+"""
+        self.assertEqual(
+            ADB设备操作类._解析前台包名列表(输出),
+            ["com.supercell.clashofclans"],
+        )
+
+    def test_MuMu屏幕尺寸来自显示视口而非窗口转储(self):
+        活动输出 = b"Display #4 (activities from top to bottom):\n    topResumedActivity=ActivityRecord{1 u0 com.supercell.clashofclans/.GameApp t32}\n"
+        显示输出 = b"mViewports=[DisplayViewport{displayId=4, uniqueId='local:123', logicalFrame=Rect(0, 0 - 1280, 720)}]"
+        runner = 假Runner(结果(活动输出), 结果(显示输出))
+        设备 = ADB设备操作类(
+            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            "127.0.0.1:16416", runner=runner, 自动检测路径=False,
+        )
+        设备.设置目标包名("com.supercell.clashofclans")
+        self.assertEqual(设备.查询屏幕尺寸(), (1280, 720))
+        self.assertFalse(any("window" in 命令 for 命令 in runner.命令))
+
     def test_MuMu触控命令明确发送到游戏display(self):
         runner = 假Runner()
         设备 = ADB设备操作类(
@@ -428,18 +582,9 @@ mViewports=[DisplayViewport{type=EXTERNAL, valid=true, displayId=6, uniqueId='lo
         )
 
     def test_MuMu拉伸手势明确发送到游戏display(self):
-        窗口输出 = b"""
-  Display: mDisplayId=0
-    mCurrentFocus=Window{u0 app.lawnchair/app.lawnchair.LawnchairLauncher}
-    mFocusedApp=ActivityRecord{launcher app.lawnchair/.LawnchairLauncher}
-  Display: mDisplayId=7
-    mCurrentFocus=Window{u0 com.supercell.clashofclans/com.supercell.titan.GameApp}
-    mFocusedApp=ActivityRecord{game com.supercell.clashofclans/com.supercell.titan.GameApp}
-"""
         runner = 假Runner(
             结果(b"List of devices attached\n127.0.0.1:16416 device product:a55x model:SM_A5560\n"),
-            结果(b"topResumedActivity=ActivityRecord{1 u0 com.supercell.clashofclans/com.supercell.titan.GameApp t15}\n"),
-            结果(窗口输出),
+            结果(b"FocusedWindows:\n  displayId=7, name='87ab31 com.supercell.clashofclans/com.supercell.titan.GameApp'\n"),
             结果(b"""Event Hub State:
     27: Xiaomi Touchscreen
       Path: /dev/input/event16
@@ -451,6 +596,7 @@ Input Reader State:
             结果(b"""  ABS_MT_POSITION_X : value 0, min 0, max 720
   ABS_MT_POSITION_Y : value 0, min 0, max 1280
 """),
+            结果(b"DisplayViewport{displayId=7, uniqueId='local:test', logicalFrame=Rect(0, 0 - 1280, 720)}"),
             结果(),
         )
         设备 = ADB设备操作类(
@@ -736,6 +882,46 @@ Input Reader State:
         self.assertEqual(len(runner.命令), 1)
         self.assertEqual(runner.命令[0][1:], ["devices", "-l"])
 
+    def test_公开内存预算查询识别低提交额度且不调用ADB(self):
+        runner = 假Runner()
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        状态读取 = patch.object(
+            设备,
+            "_获取主机内存状态",
+            return_value={
+                "内存负载": 79,
+                "可用物理内存": 6420 * 1024 * 1024,
+                "可用提交额度": 828 * 1024 * 1024,
+            },
+        )
+        with 状态读取 as 读取:
+            健康, 诊断 = 设备.检查主机内存预算()
+
+        self.assertFalse(健康)
+        self.assertIn("主机内存保护", 诊断)
+        读取.assert_called_once_with()
+        self.assertEqual(runner.命令, [])
+
+    def test_公开内存预算查询接受高于现有保护线且不调用ADB(self):
+        runner = 假Runner()
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        状态读取 = patch.object(
+            设备,
+            "_获取主机内存状态",
+            return_value={
+                "内存负载": 70,
+                "可用物理内存": 2048 * 1024 * 1024,
+                "可用提交额度": 4096 * 1024 * 1024,
+            },
+        )
+        with 状态读取 as 读取:
+            健康, 诊断 = 设备.检查主机内存预算()
+
+        self.assertTrue(健康)
+        self.assertIn("可用提交额度", 诊断)
+        读取.assert_called_once_with()
+        self.assertEqual(runner.命令, [])
+
     def test_ADB屏幕把任意实际分辨率归一化到逻辑画布(self):
         图像 = np.zeros((720, 1280, 3), dtype=np.uint8)
         编码成功, 编码 = cv2.imencode(".png", 图像)
@@ -753,6 +939,21 @@ Input Reader State:
         }):
             结果图 = 屏幕.获取屏幕图像cv(0, 0, 800, 600)
         self.assertEqual(结果图.shape, (600, 800, 3))
+
+    def test_ADB屏幕代理主机内存预算检查(self):
+        调用 = []
+
+        def 检查预算(*, 强制刷新=True):
+            调用.append(强制刷新)
+            return False, "low memory"
+
+        屏幕 = ADB屏幕(SimpleNamespace(检查主机内存预算=检查预算))
+
+        self.assertEqual(
+            屏幕.检查主机内存预算(强制刷新=True),
+            (False, "low memory"),
+        )
+        self.assertEqual(调用, [True])
 
     def test_ADB屏幕短窗口复用同一截图(self):
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
@@ -808,17 +1009,9 @@ Input Reader State:
     def test_MuMu前台查询优先按窗口焦点而不是隐藏的CoC历史任务(self):
         runner = 假Runner(
             结果(
-                b"topResumedActivity=ActivityRecord{1 u0 app.lawnchair/.LawnchairLauncher t2}\n"
-                b"topResumedActivity=ActivityRecord{2 u0 com.supercell.clashofclans/com.supercell.titan.GameApp t14}\n"
-            ),
-            结果(
                 b"""
-  Display: mDisplayId=0
-    mCurrentFocus=Window{u0 app.lawnchair/app.lawnchair.LawnchairLauncher}
-    mFocusedApp=ActivityRecord{launcher app.lawnchair/.LawnchairLauncher}
-  Display: mDisplayId=4
-    mCurrentFocus=null
-    mFocusedApp=null
+FocusedWindows:
+  displayId=0, name='d35c333 app.lawnchair/app.lawnchair.LawnchairLauncher'
 """
             ),
         )
@@ -835,17 +1028,9 @@ Input Reader State:
                 b"127.0.0.1:16416 device product:a55x model:SM_A5560\n"
             ),
             结果(
-                b"topResumedActivity=ActivityRecord{1 u0 app.lawnchair/.LawnchairLauncher t2}\n"
-                b"topResumedActivity=ActivityRecord{2 u0 com.supercell.clashofclans/com.supercell.titan.GameApp t14}\n"
-            ),
-            结果(
                 b"""
-  Display: mDisplayId=0
-    mCurrentFocus=Window{u0 app.lawnchair/app.lawnchair.LawnchairLauncher}
-    mFocusedApp=ActivityRecord{launcher app.lawnchair/.LawnchairLauncher}
-  Display: mDisplayId=4
-    mCurrentFocus=null
-    mFocusedApp=null
+FocusedWindows:
+  displayId=0, name='d35c333 app.lawnchair/app.lawnchair.LawnchairLauncher'
 """
             ),
             结果(b"priority=0\ncom.supercell.clashofclans/.SplashActivity\n"),

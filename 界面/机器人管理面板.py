@@ -67,7 +67,9 @@ class 机器人管理面板(ttk.Frame):
         暂停中 = 状态 == "暂停中"
         self.启动按钮.configure(state=tk.NORMAL if 机器人 and not (正在运行 or 暂停中) else tk.DISABLED)
         self.暂停按钮.configure(state=tk.NORMAL if 正在运行 else tk.DISABLED)
-        self.继续按钮.configure(state=tk.NORMAL if 暂停中 else tk.DISABLED)
+        # 异常安全停机后，用户人工回城常会点“继续”接管。停止态需走
+        # 与“启动”相同的配置/页面校验，不能对已经退出的线程调用继续()。
+        self.继续按钮.configure(state=tk.NORMAL if 机器人 and (暂停中 or 状态 == "已停止") else tk.DISABLED)
         self.停止按钮.configure(state=tk.NORMAL if 正在运行 or 暂停中 else tk.DISABLED)
 
     def 选中机器人(self, 机器人ID):
@@ -90,12 +92,14 @@ class 机器人管理面板(ttk.Frame):
         机器人 = self.获取当前机器人()
         if not 机器人:
             messagebox.showinfo("选择机器人", "请先选择机器人。", parent=self)
-            return
+            return False
         try:
             self.监控中心.启动机器人(机器人.机器人标志)
             self.更新状态显示()
+            return True
         except Exception as 异常:
             messagebox.showerror("启动失败", str(异常), parent=self)
+            return False
 
     def _暂停机器人(self):
         机器人 = self.获取当前机器人()
@@ -103,22 +107,48 @@ class 机器人管理面板(ttk.Frame):
             try:
                 机器人.暂停()
                 self.更新状态显示()
+                return True
             except Exception as 异常:
                 messagebox.showerror("暂停失败", str(异常), parent=self)
+        return False
 
     def _继续机器人(self):
         机器人 = self.获取当前机器人()
         if 机器人:
+            if getattr(机器人, "当前状态", "") == "已停止":
+                return self._启动机器人()
             try:
                 机器人.继续()
                 self.更新状态显示()
+                return True
             except Exception as 异常:
                 messagebox.showerror("继续失败", str(异常), parent=self)
+        return False
+
+    def 快捷键开始或继续(self) -> bool:
+        """F1 只启动已停止的机器人，或恢复已暂停的机器人。"""
+        机器人 = self.获取当前机器人()
+        if 机器人 is None:
+            return False
+        状态 = str(getattr(机器人, "当前状态", ""))
+        if 状态 == "暂停中":
+            return self._继续机器人()
+        elif 状态 == "已停止":
+            return self._启动机器人()
+        return False
+
+    def 快捷键暂停(self) -> bool:
+        """F2 只暂停正在运行的机器人，不会误启动任务。"""
+        机器人 = self.获取当前机器人()
+        if 机器人 is None or getattr(机器人, "当前状态", "") != "运行中":
+            return False
+        return self._暂停机器人()
 
     def _停止机器人(self):
         机器人 = self.获取当前机器人()
         if 机器人:
             threading.Thread(target=机器人.停止,
+                             args=("界面停止按钮",),
                              name=f"停止-{机器人.机器人标志}", daemon=True).start()
 
     def _新建机器人(self):

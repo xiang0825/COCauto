@@ -6,6 +6,9 @@ import io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 def 获取简洁版本号():
+    显式版本号 = os.environ.get("COC_RELEASE_VERSION", "").strip()
+    if 显式版本号:
+        return 显式版本号
     try:
         # HEAD 正好在 tag 上
         版本号 = subprocess.check_output(

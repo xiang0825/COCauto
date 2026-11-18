@@ -147,7 +147,8 @@ class 升级英雄任务(夜世界基础任务):
         延时 = getattr(self.上下文, "脚本延时", None)
         for 尝试序号 in range(3):
             try:
-                OCR结果 = self.执行OCR识别((250, 55, 710, 590))
+                from 任务流程.世界跳转.新版界面坐标 import 新版建造面板OCR区域
+                OCR结果 = self.执行OCR识别(新版建造面板OCR区域)
             except Exception:
                 OCR结果 = []
             文本 = "".join(
@@ -155,19 +156,19 @@ class 升级英雄任务(夜世界基础任务):
                 if isinstance(项, (list, tuple)) and len(项) > 1
             ).replace(" ", "").replace("\n", "")
             规范文本 = 文本
-            # 英雄详情底层卡也会显示“英雄殿堂[等级]”；只有列表中的
-            # “建议升级/可使用”段存在时，才授权顶部入口收尾。
-            if (
-                "英雄殿堂" in 规范文本
-                and ("建议升级" in 规范文本 or "可使用" in 规范文本)
-            ):
+            标题匹配 = any(标题 in 规范文本 for 标题 in (
+                "英雄殿堂", "建筑和英雄", "建造和英雄", "建造升级", "建筑升级"
+            ))
+            if 标题匹配 and any(锚点 in 规范文本 for 锚点 in (
+                "建议升级", "可使用", "升级中", "其他升级", "其他升級", "建造升级"
+            )):
                 return True
             if 尝试序号 < 2 and callable(延时):
                 延时(250)
         return False
 
     def _安全关闭英雄殿堂入口(self) -> bool:
-        """通过已确认的顶部英雄入口关闭列表，不猜测右上角 HUD 坐标。"""
+        """通过新版建造菜单开关关闭已确认列表，只发送一次点击。"""
         点击 = getattr(self.上下文, "点击", None)
         if not callable(点击):
             self.上下文.页面恢复失败 = True
@@ -175,58 +176,51 @@ class 升级英雄任务(夜世界基础任务):
                 "缺少英雄殿堂入口关闭能力，禁止发送ESC或盲点输入"
             )
             return False
-        for 尝试序号 in range(2):
-            if 点击(
-                356, 33,
-                延时=700,
-                是否精确点击=True,
-            ) is False:
-                self.上下文.页面恢复失败 = True
-                self.上下文.置脚本状态(
-                    "英雄殿堂入口关闭点击被安全层拒绝，停止后续操作"
-                )
-                return False
-            self.上下文.脚本延时(450)
-            if self._英雄殿堂文本仍在():
-                if 尝试序号 == 0:
-                    self.上下文.置脚本状态(
-                        "英雄殿堂入口点击后列表仍在，精确重试一次"
-                    )
-                    continue
-                self.上下文.页面恢复失败 = True
-                self.上下文.置脚本状态(
-                    "英雄殿堂入口重试后列表仍在，禁止继续任务输入"
-                )
-                return False
-
-            识别 = getattr(self.上下文, "识别点击画面", None)
-            if callable(识别):
-                try:
-                    try:
-                        结果 = 识别(强制=True)
-                    except TypeError:
-                        结果 = 识别()
-                except Exception as 异常:
-                    self.上下文.页面恢复失败 = True
-                    self.上下文.置脚本状态(
-                        f"英雄殿堂关闭后主页复核失败：{异常}"
-                    )
-                    return False
-                if not (
-                    getattr(结果, "页面", "") == "主世界主页"
-                    and getattr(结果, "世界", "") == "主世界"
-                ):
-                    self.上下文.页面恢复失败 = True
-                    self.上下文.置脚本状态(
-                        "英雄殿堂已点击关闭但未确认主世界，禁止后续输入"
-                    )
-                    return False
+        from 任务流程.世界跳转.新版界面坐标 import 建造面板外侧安全点
+        if 点击(
+            *建造面板外侧安全点,
+            延时=700,
+            是否精确点击=True,
+        ) is False:
+            self.上下文.页面恢复失败 = True
             self.上下文.置脚本状态(
-                "英雄殿堂列表已通过顶部入口安全关闭并确认回到主世界"
+                "英雄列表外侧安全收起点击被安全层拒绝，停止后续操作"
             )
-            return True
-        self.上下文.页面恢复失败 = True
-        return False
+            return False
+        self.上下文.脚本延时(450)
+        if self._英雄殿堂文本仍在():
+            self.上下文.页面恢复失败 = True
+            self.上下文.置脚本状态(
+                "建造菜单入口点击后英雄列表仍在；不重复切换菜单，禁止后续输入"
+            )
+            return False
+
+        识别 = getattr(self.上下文, "识别点击画面", None)
+        if callable(识别):
+            try:
+                try:
+                    结果 = 识别(强制=True)
+                except TypeError:
+                    结果 = 识别()
+            except Exception as 异常:
+                self.上下文.页面恢复失败 = True
+                self.上下文.置脚本状态(
+                    f"英雄殿堂关闭后主页复核失败：{异常}"
+                )
+                return False
+            if not (
+                getattr(结果, "页面", "") == "主世界主页"
+                and getattr(结果, "世界", "") == "主世界"
+            ):
+                self.上下文.页面恢复失败 = True
+                self.上下文.置脚本状态(
+                    "英雄殿堂已点击关闭但未确认主世界，禁止后续输入"
+                )
+                return False
+        self.上下文.置脚本状态(
+            "英雄升级列表已通过建造菜单安全关闭并确认回到主世界"
+        )
+        return True
 
     @classmethod
     def _识别英雄升级确认页(cls, OCR结果, 屏幕图像, 目标英雄: str) -> bool:
@@ -406,9 +400,8 @@ class 升级英雄任务(夜世界基础任务):
                                 )
                                 return False
                         self.上下文.脚本延时(350)
-                        # 关闭英雄殿堂后测试服可能先露出“升级中/建议升级”
-                        # 的主世界浮层；只有确认英雄殿堂 X 已消失，才用
-                        # 右侧林地空白点清理这一层，避免在列表仍在时点卡片。
+                        # 详情 X 关闭后如露出新版右侧英雄列表，交给专用
+                        # OCR/安全收起流程；不能再向固定地图坐标盲点。
                         try:
                             try:
                                 新画面 = 获取图像(0, 0, 800, 600, 强制刷新=True)
@@ -418,12 +411,8 @@ class 升级英雄任务(夜世界基础任务):
                                 continue
                         except Exception:
                             continue
-                        if 点击(700, 300, 延时=700, 是否精确点击=True) is False:
-                            self.上下文.页面恢复失败 = True
-                            self.上下文.置脚本状态(
-                                "清除英雄升级浮层点击被安全层拒绝，停止后续操作"
-                            )
-                            return False
+                        if self._英雄殿堂文本仍在():
+                            return self._安全关闭英雄殿堂入口()
                         识别页面 = getattr(self.上下文, "识别点击画面", None)
                         if callable(识别页面):
                             try:
@@ -457,17 +446,11 @@ class 升级英雄任务(夜世界基础任务):
                     self.上下文.置脚本状态(f"英雄升级详情收尾失败：{异常}")
                     return False
         if callable(点击):
-            try:
-                if 点击(700, 300, 延时=700, 是否精确点击=True) is False:
-                    self.上下文.页面恢复失败 = True
-                    self.上下文.置脚本状态(
-                        "英雄升级详情空白区域点击被安全层拒绝，停止后续操作"
-                    )
-                    return False
-                return True
-            except Exception as 异常:
-                self.上下文.页面恢复失败 = True
-                self.上下文.置脚本状态(f"英雄升级详情空白区域关闭失败：{异常}")
+            self.上下文.页面恢复失败 = True
+            置状态 = getattr(self.上下文, "置脚本状态", None)
+            if callable(置状态):
+                置状态("当前页面没有已识别的英雄列表或关闭X；禁止盲点地图区域")
+            return False
 
         # 缺少安全关闭器时不能用原始 ESC 兜底；CoC 根页面会把 ESC/BACK
         # 解释为退出游戏。若调用方提供了已确认面板的受限关闭器，仍可

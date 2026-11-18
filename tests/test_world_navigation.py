@@ -14,6 +14,30 @@ from 任务流程.世界跳转.世界识别器 import 世界识别器
 
 
 class 世界跳转测试(unittest.TestCase):
+    def test_通用世界跳转不把战斗模式选择页当作主世界主页(self):
+        任务 = object.__new__(进入世界任务基类)
+        任务.状态文本 = "主世界"
+        上下文 = SimpleNamespace(
+            识别点击画面=Mock(return_value=SimpleNamespace(
+                页面="主世界战斗模式选择", 世界="主世界", 可信度=0.96
+            )),
+            置脚本状态=Mock(),
+        )
+
+        self.assertFalse(任务._页面级确认目标世界(上下文))
+
+    def test_夜世界任务不能把主世界战斗模式选择页当作夜世界(self):
+        任务 = object.__new__(进入世界任务基类)
+        任务.状态文本 = "夜世界"
+        上下文 = SimpleNamespace(
+            识别点击画面=Mock(return_value=SimpleNamespace(
+                页面="主世界战斗模式选择", 世界="主世界", 可信度=0.96
+            )),
+            置脚本状态=Mock(),
+        )
+
+        self.assertFalse(任务._页面级确认目标世界(上下文))
+
     def test_新版夜世界红色等级徽章可在资源模板失配时确认夜世界(self):
         识别器 = 世界识别器(Mock())
         画面 = np.zeros((600, 800, 3), dtype=np.uint8)

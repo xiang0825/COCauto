@@ -671,15 +671,21 @@ class ADB设备操作类:
                         timeout=5,
                     )
                 )
-                前台文本 = 解码(
-                    适配器.执行(
-                        ["shell", "dumpsys", "activity", "activities"],
-                        timeout=5,
+                if 适配器._是MuMu连接():
+                    前台文本 = 解码(适配器._获取MuMu窗口状态())
+                    当前前台 = (
+                        cls._解析MuMu焦点包名(前台文本, 包名) == 包名
                     )
-                )
+                else:
+                    前台文本 = 解码(
+                        适配器.执行(
+                            ["shell", "dumpsys", "activity", "top-resumed"],
+                            timeout=5,
+                        )
+                    )
+                    当前前台 = cls._前台是否为包名(前台文本, 包名)
             except (ADB错误, OSError, subprocess.TimeoutExpired):
                 continue
-            当前前台 = cls._前台是否为包名(前台文本, 包名)
             评分 = (100 if 当前前台 else 0) + (10 if 已安装 else 0)
             # MuMu 有时会同时把同一实例暴露为网络 serial 和
             # emulator-* serial。读取 guest 唯一标识后再去重，避免同一
@@ -755,13 +761,16 @@ class ADB设备操作类:
         if not 包名:
             return False
         # dumpsys activity/window 会同时列出后台任务栈、最近任务和历史
-        # Activity。仅在当前焦点字段中匹配，避免“后台曾打开过 CoC”把
-        # 模拟器错误打成前台候选。
+        # Activity。仅在当前焦点字段或 top-resumed 单行中匹配，避免
+        # “后台曾打开过 CoC”把模拟器错误打成前台候选。
         当前字段 = re.compile(
-            r"(?:mCurrentFocus|mFocusedApp|mResumedActivity|ResumedActivity)\s*[:=].*"
+            r"(?:FocusedWindows|mCurrentFocus|mFocusedApp|mResumedActivity|ResumedActivity)\s*[:=].*"
         )
         return any(
-            包名 in 行 and 当前字段.search(行)
+            包名 in 行 and (
+                当前字段.search(行)
+                or re.search(r"^\s*packageName\s*=", 行)
+            )
             for 行 in str(窗口状态文本 or "").splitlines()
         )
 
@@ -995,6 +1004,48 @@ class ADB设备操作类:
         匹配 = re.search(模式, 文本, flags=re.S)
         return 匹配.group(1) if 匹配 else None
 
+    @staticmethod
+    def _解析MuMu截图逻辑显示ID(窗口输出: str, 目标包名: str = "") -> str | None:
+        """解析只供截图使用的游戏 display；绝不用于授权触控输入。
+
+        MuMu 维护/重连画面可能保留 CoC 的 FocusedApplications 和独立游戏
+        显示层，但把 FocusedWindows 焦点交给启动器。截图仍可安全读取 CoC
+        所在层来识别维护状态；输入路径继续只认 CoC 的 FocusedWindows。
+        """
+        文本 = str(窗口输出 or "")
+        目标包名 = str(目标包名 or "").strip()
+        if not 目标包名:
+            return None
+
+        if re.search(r"(?m)^\s*FocusedWindows:\s*$", 文本):
+            焦点 = ADB设备操作类._解析MuMu输入焦点(文本)
+            if 焦点 and 焦点[1] == 目标包名:
+                return 焦点[0]
+
+            区段 = re.search(
+                r"(?ms)^\s*FocusedApplications:\s*\n(.*?)(?=^\s*[A-Za-z][A-Za-z0-9 _-]*:\s*$|\Z)",
+                文本,
+            )
+            if not 区段:
+                return None
+            for 行 in 区段.group(1).splitlines():
+                匹配 = re.search(
+                    r"\bdisplayId\s*=\s*(\d+)\s*,\s*name\s*=\s*['\"]([^'\"]*)",
+                    行,
+                )
+                if not 匹配:
+                    continue
+                逻辑ID, 名称 = 匹配.groups()
+                if re.search(
+                    rf"(?<![A-Za-z0-9_.$-]){re.escape(目标包名)}(?:/|\b)",
+                    名称,
+                ):
+                    return 逻辑ID
+            return None
+
+        # 旧版 MuMu dumpsys 格式将 mFocusedApp 放在 display 分块中。
+        return ADB设备操作类._解析MuMu逻辑显示ID(文本, 目标包名)
+
     def _获取MuMu截图显示ID(self) -> str | None:
         """返回当前前台应用所在 MuMu 虚拟显示的 SurfaceFlinger ID。"""
         当前时间 = time.monotonic()
@@ -1018,8 +1069,16 @@ class ADB设备操作类:
             try:
                 选中逻辑ID = self._获取MuMu输入显示ID()
                 if 选中逻辑ID is None:
+                    # 截图可以只读检查 CoC 的 FocusedApplications 显示层，
+                    # 即使启动器暂时拥有触控焦点；此回退不会写入输入显示
+                    # 缓存，也不会放宽任何触控前台校验。
+                    窗口输出 = self._获取MuMu窗口状态()
+                    选中逻辑ID = self._解析MuMu截图逻辑显示ID(
+                        窗口输出 or "", self._目标包名
+                    )
+                if not 选中逻辑ID:
                     self._输入显示ID更新时间 = 0.0
-                    raise ADB错误("暂未确认 CoC 的 MuMu 逻辑显示层")
+                    raise ADB错误("暂未确认 CoC 的 MuMu 截图显示层")
 
                 显示输出 = self.执行(["shell", "dumpsys", "display"], timeout=8)
                 if isinstance(显示输出, bytes):
@@ -1066,8 +1125,33 @@ class ADB设备操作类:
 
     @staticmethod
     def _解析MuMu逻辑显示ID(窗口输出: str, 目标包名: str = "") -> str | None:
-        """从 MuMu 多显示窗口状态中选出目标应用所在的逻辑 display ID。"""
+        """从 MuMu 多显示状态中选出目标应用所在的逻辑 display ID。"""
         目标包名 = str(目标包名 or "").strip()
+        if re.search(r"(?m)^\s*FocusedWindows:\s*$", str(窗口输出 or "")):
+            焦点 = ADB设备操作类._解析MuMu输入焦点(窗口输出)
+            if not 焦点:
+                return None
+            逻辑ID, 包名 = 焦点
+            if 目标包名 and 包名 != 目标包名:
+                return None
+            return 逻辑ID
+        # MuMu Android 15 的 window service dump 可能令 system_server 崩溃。
+        # 保留解析旧版缓存/诊断文本的兼容，但不再调用完整活动栈查询。
+        活动分块 = re.split(
+            r"\n\s*Display #(\d+) \(activities from top to bottom\):",
+            "\n" + str(窗口输出 or ""),
+        )
+        if len(活动分块) > 1:
+            for 序号 in range(1, len(活动分块), 2):
+                逻辑ID = 活动分块[序号]
+                内容 = 活动分块[序号 + 1]
+                if any(
+                    目标包名 in 行
+                    for 行 in 内容.splitlines()
+                    if "topResumedActivity=" in 行
+                ) and 目标包名:
+                    return 逻辑ID
+            return None
         目标逻辑ID = None
         候选逻辑ID = []
         分块 = re.split(r"\n\s*Display:\s*mDisplayId=", "\n" + str(窗口输出 or ""))
@@ -1617,6 +1701,30 @@ class ADB设备操作类:
                 "禁止继续截图/OCR，已保留模拟器和游戏进程。"
             )
 
+    def 检查主机内存预算(self, 强制刷新: bool = True) -> tuple[bool, str]:
+        """只读检查宿主机截图预算，不执行任何 ADB 命令。"""
+        if 强制刷新:
+            self._主机内存检查时间 = float("-inf")
+
+        try:
+            self._检查主机内存预算()
+        except ADB错误 as 异常:
+            诊断 = str(异常)
+            if "主机内存保护已触发" in 诊断:
+                return False, 诊断
+            raise
+
+        状态 = self._主机内存状态缓存
+        if not 状态:
+            return False, "主机内存状态暂不可用，不能确认截图预算安全"
+
+        MB = 1024 * 1024
+        return True, (
+            f"主机内存预算健康：负载{状态['内存负载']}%，"
+            f"可用物理内存{状态['可用物理内存'] // MB}MB，"
+            f"可用提交额度{状态['可用提交额度'] // MB}MB"
+        )
+
     def 取屏幕尺寸(self) -> tuple[int, int]:
         if self._屏幕尺寸 is None:
             self._验证目标()
@@ -1737,18 +1845,22 @@ class ADB设备操作类:
             # MuMu organized display 的 ``wm size`` 可能只返回竖向物理
             # 尺寸 720×1280，而 CoC 实际所在 display 的窗口已经是
             # 横向 1280×720。输入坐标必须跟当前逻辑 display 一致，优先
-            # 读取 dumpsys window displays 的 ``cur=`` 尺寸。
+            # 读取 display viewport 的逻辑尺寸，避免调用 MuMu Android 15
+            # 上可能令 system_server 崩溃的 dumpsys window displays。
             try:
                 逻辑显示ID = self._获取MuMu输入显示ID()
                 if 逻辑显示ID:
-                    输出 = self.执行(["shell", "dumpsys", "window", "displays"], timeout=8)
+                    输出 = self.执行(["shell", "dumpsys", "display"], timeout=8)
                     if isinstance(输出, bytes):
                         输出 = 输出.decode("utf-8", errors="replace")
-                    分块 = re.split(r"\n\s*Display:\s*mDisplayId=", "\n" + str(输出))
-                    for 块 in 分块[1:]:
-                        if not re.match(rf"{re.escape(逻辑显示ID)}\b", 块):
+                    for 匹配块 in re.finditer(r"DisplayViewport\{([^}]*)\}", str(输出), re.S):
+                        块 = 匹配块.group(1)
+                        if not re.search(rf"\bdisplayId\s*=\s*{re.escape(逻辑显示ID)}\b", 块):
                             continue
-                        匹配 = re.search(r"\bcur=(\d+)x(\d+)\b", 块)
+                        匹配 = re.search(
+                            r"\blogicalFrame=Rect\(\s*\d+\s*,\s*\d+\s*-\s*(\d+)\s*,\s*(\d+)\s*\)",
+                            块,
+                        )
                         if 匹配:
                             宽, 高 = map(int, 匹配.groups())
                             if 宽 > 0 and 高 > 0:
@@ -1783,23 +1895,19 @@ class ADB设备操作类:
         self._验证目标()
         if not 包名:
             raise ADB错误("游戏包名为空。")
-        当前前台 = self.执行(["shell", "dumpsys", "activity", "activities"], timeout=12)
-        if isinstance(当前前台, bytes):
-            当前前台 = 当前前台.decode("utf-8", errors="replace")
-        # MuMu 多显示会同时返回 CoC 和启动器两条 topResumedActivity。
-        # 仅扫描 activity 列表会把“游戏在另一层运行、启动器在当前焦点层”
-        # 误判成已经前台，导致不切回游戏。先用窗口显示层的焦点确认；
-        # 查询失败时才回退旧逻辑，兼容没有 window displays 的旧 Android。
         if self._是MuMu连接():
+            # dumpsys activity activities 会遍历每个显示层的整份任务栈，
+            # 在 MuMu Android 15 上曾触发 system_server 崩溃。输入服务的
+            # FocusedWindows 同时给出真正焦点包名和逻辑 display，且不遍历栈。
             MuMu前台 = self._获取MuMu焦点包名()
-            if MuMu前台 is not None:
-                if MuMu前台 == 包名:
-                    return
-            else:
-                前台包名列表 = self._解析前台包名列表(当前前台)
-                if 包名 in 前台包名列表:
-                    return
+            if MuMu前台 == 包名:
+                return
         else:
+            当前前台 = self.执行(
+                ["shell", "dumpsys", "activity", "top-resumed"], timeout=8
+            )
+            if isinstance(当前前台, bytes):
+                当前前台 = 当前前台.decode("utf-8", errors="replace")
             前台包名列表 = self._解析前台包名列表(当前前台)
             if 包名 in 前台包名列表:
                 return
@@ -1836,15 +1944,15 @@ class ADB设备操作类:
 
     def 获取当前前台包名(self) -> str:
         """读取当前前台 Activity 所属包名，不执行任何切换操作。"""
-        当前前台 = self.执行(["shell", "dumpsys", "activity", "activities"], timeout=12)
-        if isinstance(当前前台, bytes):
-            当前前台 = 当前前台.decode("utf-8", errors="replace")
-        # 先保留 activity 查询，兼容没有 window displays 的旧 Android 和
-        # 已有调用方；MuMu 再用窗口显示层焦点覆盖多显示历史任务误判。
         if self._是MuMu连接():
             MuMu前台 = self._获取MuMu焦点包名()
-            if MuMu前台 is not None:
-                return MuMu前台
+            # MuMu 查询不明确时 fail closed；不能回退到后台历史 Activity。
+            return MuMu前台 or ""
+        当前前台 = self.执行(
+            ["shell", "dumpsys", "activity", "top-resumed"], timeout=8
+        )
+        if isinstance(当前前台, bytes):
+            当前前台 = 当前前台.decode("utf-8", errors="replace")
         前台包名列表 = self._解析前台包名列表(当前前台)
         # 多显示下优先返回当前任务的目标包名，避免把 MuMu 启动器的
         # 辅助显示层当成真实前台，进而误拒绝 CoC 输入。
@@ -1853,15 +1961,7 @@ class ADB设备操作类:
         return 前台包名列表[0] if 前台包名列表 else ""
 
     def _获取MuMu焦点包名(self) -> str | None:
-        """按 MuMu 的显示层焦点读取当前应用包名。
-
-        ``dumpsys activity activities`` 在多显示 MuMu 中会同时列出多个
-        ``topResumedActivity``，其中可能包含隐藏游戏层和可见启动器层。
-        ``dumpsys window displays`` 才包含每个 display 的
-        ``mCurrentFocus``/``mFocusedApp``，因此这里优先使用它来避免把
-        后台 CoC 当成当前前台。返回 ``None`` 表示查询格式/服务不可用，
-        调用方可以安全回退旧 Android 逻辑。
-        """
+        """从 MuMu 输入服务的 FocusedWindows 读取真实焦点包名。"""
         try:
             输出 = self._获取MuMu窗口状态()
             if 输出 is None:
@@ -1871,14 +1971,14 @@ class ADB设备操作类:
             return None
 
     def _获取MuMu窗口状态(self) -> str | None:
-        """读取并短暂缓存 MuMu ``dumpsys window displays`` 输出。"""
+        """读取并短暂缓存输入焦点；避免遍历 MuMu 的多显示 Activity 栈。"""
         当前时间 = time.monotonic()
         if (
             self._MuMu窗口状态缓存
             and 当前时间 - self._MuMu窗口状态缓存时间 <= 0.20
         ):
             return self._MuMu窗口状态缓存
-        输出 = self.执行(["shell", "dumpsys", "window", "displays"], timeout=8)
+        输出 = self.执行(["shell", "dumpsys", "input"], timeout=8)
         if isinstance(输出, bytes):
             输出 = 输出.decode("utf-8", errors="replace")
         self._MuMu窗口状态缓存 = str(输出)
@@ -1887,14 +1987,31 @@ class ADB设备操作类:
 
     @staticmethod
     def _解析MuMu焦点包名(窗口输出: str, 目标包名: str = "") -> str | None:
-        """从 MuMu 多显示窗口焦点中选出当前应用包名。
-
-        目标包在任一显示层的 ``mCurrentFocus`` 优先；没有窗口焦点时，
-        ``mFocusedApp`` 仍是 MuMu 游戏层的有效绑定证据。只有确认了至少
-        一个 display 块，才返回非目标包；完全无法解析时返回 ``None``。
-        """
+        """解析 MuMu 输入服务的当前焦点；保留旧格式的只读兼容。"""
         文本 = str(窗口输出 or "")
         目标包名 = str(目标包名 or "").strip()
+        if re.search(r"(?m)^\s*FocusedWindows:\s*$", 文本):
+            焦点 = ADB设备操作类._解析MuMu输入焦点(文本)
+            if not 焦点:
+                return ""
+            _逻辑ID, 包名 = 焦点
+            return 包名 or ""
+        活动分块 = re.split(
+            r"\n\s*Display #(\d+) \(activities from top to bottom\):",
+            "\n" + 文本,
+        )
+        if len(活动分块) > 1:
+            前台包名 = []
+            for 序号 in range(1, len(活动分块), 2):
+                for 行 in 活动分块[序号 + 1].splitlines():
+                    if "topResumedActivity=" not in 行:
+                        continue
+                    匹配 = re.search(r"\bu\d+\s+([A-Za-z0-9_.$-]+)/", 行)
+                    if 匹配 and 匹配.group(1) not in 前台包名:
+                        前台包名.append(匹配.group(1))
+            if 目标包名 in 前台包名:
+                return 目标包名
+            return 前台包名[0] if 前台包名 else ""
         分块 = re.split(r"\n\s*Display:\s*mDisplayId=", "\n" + 文本)
         if len(分块) <= 1:
             return None
@@ -1931,10 +2048,45 @@ class ADB设备操作类:
         return ""
 
     @staticmethod
+    def _解析MuMu输入焦点(输出: str) -> tuple[str, str] | None:
+        """从 dumpsys input 的 FocusedWindows 字段读取焦点 display 与包名。"""
+        文本 = str(输出 or "")
+        行列表 = 文本.splitlines()
+        区段内 = False
+        for 行 in 行列表:
+            清理行 = 行.strip()
+            if 清理行 == "FocusedWindows:":
+                区段内 = True
+                continue
+            if not 区段内:
+                continue
+            if re.fullmatch(r"[A-Za-z][A-Za-z0-9 _-]*:", 清理行):
+                break
+            匹配 = re.match(
+                r"displayId\s*=\s*(\d+)\s*,\s*name\s*=\s*['\"]([^'\"]*)['\"]",
+                清理行,
+            )
+            if not 匹配:
+                continue
+            显示ID, 窗口名 = 匹配.groups()
+            包名匹配 = re.search(
+                r"(?:^|\s)(?:u\d+\s+)?([A-Za-z0-9_.$-]+)/[A-Za-z0-9_.$/-]+",
+                窗口名,
+            )
+            return 显示ID, 包名匹配.group(1) if 包名匹配 else ""
+        return None
+
+    @staticmethod
     def _解析前台包名列表(文本: str) -> list[str]:
-        """从多显示 dumpsys 输出中提取所有 resumed Activity 的包名。"""
+        """从 top-resumed 或旧版 dumpsys 输出中提取前台 Activity 包名。"""
         结果 = []
         for 行 in str(文本 or "").splitlines():
+            包名字段 = re.match(r"^\s*packageName\s*=\s*([^\s]+)", 行)
+            if 包名字段:
+                包名 = 包名字段.group(1)
+                if 包名 and 包名 not in 结果:
+                    结果.append(包名)
+                continue
             if "mResumedActivity" not in 行 and "topResumedActivity" not in 行:
                 continue
             # 兼容 ActivityRecord{... u0 package/activity ...}，并保留

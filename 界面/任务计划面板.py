@@ -279,7 +279,7 @@ class 任务计划面板(ttk.Frame):
                 foreground="#2563eb",
                 wraplength=560,
             ).pack(anchor=tk.W, pady=5)
-            self._增加输入项("漏兵检测格数", "漏下兵种检测格数", getattr(self._设置, "漏下兵种检测格数", 1))
+            self._增加输入项("漏兵复核兵种数", "漏下兵种检测格数", getattr(self._设置, "漏下兵种检测格数", 3))
         elif 任务名称 == "刷墙":
             self._增加输入项("起始金币", "刷墙起始金币", getattr(self._设置, "刷墙起始金币", 0))
             self._增加输入项("起始圣水", "刷墙起始圣水", getattr(self._设置, "刷墙起始圣水", 0))

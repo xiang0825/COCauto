@@ -42,20 +42,37 @@ class 启动模拟器状态测试(unittest.TestCase):
 
 
 class 启动残留英雄详情测试(unittest.TestCase):
-    def test_启动时英雄详情登记后跳过拉远交给英雄任务收尾(self):
+    def test_启动时英雄详情安全关闭后才继续(self):
         上下文 = SimpleNamespace(
             _当前画面是英雄升级详情=Mock(return_value=True),
+            关闭意外英雄升级详情弹窗=Mock(return_value=True),
             置脚本状态=Mock(),
         )
         任务 = 检测游戏登录状态任务.__new__(检测游戏登录状态任务)
         任务.上下文 = 上下文
 
         self.assertTrue(任务._启动阶段处理英雄升级详情(None))
-        self.assertTrue(上下文._启动时英雄升级详情)
+        上下文.关闭意外英雄升级详情弹窗.assert_called_once_with(None)
+        self.assertFalse(hasattr(上下文, "_启动时英雄升级详情"))
         self.assertTrue(any(
-            "跳过活动弹窗清理" in 调用.args[0]
+            "不执行未选中的英雄升级任务" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
+
+    def test_启动时英雄详情未能确认回主页则停止(self):
+        停止事件 = Mock()
+        上下文 = SimpleNamespace(
+            _当前画面是英雄升级详情=Mock(return_value=True),
+            关闭意外英雄升级详情弹窗=Mock(return_value=False),
+            置脚本状态=Mock(),
+            停止事件=停止事件,
+        )
+        任务 = 检测游戏登录状态任务.__new__(检测游戏登录状态任务)
+        任务.上下文 = 上下文
+
+        self.assertTrue(任务._启动阶段处理英雄升级详情(None))
+        self.assertTrue(上下文.页面恢复失败)
+        停止事件.set.assert_called_once_with()
 
     def test_启动时没有英雄详情不会登记(self):
         上下文 = SimpleNamespace(
@@ -66,7 +83,7 @@ class 启动残留英雄详情测试(unittest.TestCase):
         任务.上下文 = 上下文
 
         self.assertFalse(任务._启动阶段处理英雄升级详情(None))
-        self.assertFalse(hasattr(上下文, "_启动时英雄升级详情"))
+        self.assertFalse(hasattr(上下文, "页面恢复失败"))
 
 
 class 启动残留研究目标页测试(unittest.TestCase):
