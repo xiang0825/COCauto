@@ -6,10 +6,12 @@ import sys
 import threading
 import time
 import tkinter as tk
+import webbrowser
 from tkinter import ttk, messagebox
 
 from 界面.全局快捷键 import 运行快捷键
 from 工具包.版本管理 import 获取本地版本号
+from 工具包.更新检查器 import 获取最新发布, 有可用更新
 
 
 _单实例句柄 = None
@@ -23,7 +25,20 @@ def 生成控制台副标题():
         版本号 = str(获取本地版本号() or "").strip() or "本地版"
     except Exception:
         版本号 = "本地版"
-    return f"部落冲突控制台 · {版本号}"
+    return f"部落冲突控制台 · 版本：{版本号}"
+
+
+def 生成顶部连接文本(机器人标志=None):
+    """在不被模拟器悬浮窗口遮挡的右上状态区显示当前版本。"""
+    try:
+        版本号 = str(获取本地版本号() or "").strip() or "本地版"
+    except Exception:
+        版本号 = "本地版"
+    机器人文本 = (
+        f"当前机器人：{机器人标志}"
+        if 机器人标志 else "未选择机器人"
+    )
+    return f"{机器人文本} · 版本：{版本号}"
 
 
 def _启动或唤醒已有窗口():
@@ -81,6 +96,10 @@ class 增强型机器人控制界面:
         self.监控中心 = 监控中心
         self.日志队列 = 监控中心.日志队列
         self.数据库 = 任务数据库()
+        self._当前版本 = str(获取本地版本号() or "本地版")
+        self._版本检查结果队列 = queue.Queue()
+        self._版本检查中 = False
+        self._最新发布 = None
 
         set_theme("light")
         配置现代化样式()
@@ -92,6 +111,7 @@ class 增强型机器人控制界面:
         self._加载保存的配置()
         self._运行快捷键 = 运行快捷键(master, self._处理运行快捷键)
         self._定时刷新顶部状态()
+        self._开始版本检查(手动=False)
 
     def _处理运行快捷键(self, 按键):
         """热键只走现有按钮的状态守卫，不绕过设备或任务计划检查。"""
@@ -123,13 +143,26 @@ class 增强型机器人控制界面:
         状态区.pack(side=tk.RIGHT)
         self.顶部状态标签 = ttk.Label(状态区, text="● 未运行", style="Status.TLabel")
         self.顶部状态标签.pack(anchor=tk.E)
-        self.顶部连接标签 = ttk.Label(状态区, text="未选择机器人", style="Bar.TLabel")
+        self.顶部连接标签 = ttk.Label(
+            状态区, text=生成顶部连接文本(), style="Bar.TLabel"
+        )
         self.顶部连接标签.pack(anchor=tk.E, pady=(3, 0))
+        更新栏 = ttk.Frame(状态区, style="Bar.TFrame")
+        更新栏.pack(anchor=tk.E, pady=(3, 0))
+        self.更新检查按钮 = ttk.Button(
+            更新栏, text="检查更新", command=self._手动检查更新,
+        )
+        self.更新检查按钮.pack(side=tk.RIGHT)
+        self.更新提示标签 = ttk.Label(
+            更新栏, text="", style="Bar.TLabel", cursor="hand2",
+        )
+        self.更新提示标签.pack(side=tk.RIGHT, padx=(0, 8))
+        self.更新提示标签.bind("<Button-1>", self._打开更新页面)
 
         导航 = ttk.Frame(外框, style="Bar.TFrame", padding=(23, 0, 23, 9))
         导航.pack(fill=tk.X)
         self._导航按钮 = {}
-        for 名称 in ("首页", "任务计划", "模拟器连接", "运行日志", "自动启动"):
+        for 名称 in ("首页", "任务计划", "模拟器连接", "手机控制", "运行日志", "自动启动"):
             按钮 = tk.Button(
                 导航, text=名称, command=lambda 页面=名称: self._显示页面(页面),
                 relief=tk.FLAT, bd=0, padx=18, pady=7,
@@ -186,11 +219,26 @@ class 增强型机器人控制界面:
             数据库=self.数据库,
             获取机器人回调=lambda: self.机器人管理.当前机器人ID,
         )
+        self._手机控制桥 = DesktopMobileBridge(
+            database=self.数据库,
+            monitor_center=self.监控中心,
+            state_directory=os.path.join(
+                os.path.dirname(self.数据库.文件路径), "手机控制"
+            ),
+            version_provider=lambda: self._当前版本,
+        )
+        self.手机控制面板 = 手机控制面板(
+            父容器=self._页面容器,
+            控制桥=self._手机控制桥,
+            获取当前机器人=lambda: self.机器人管理.当前机器人ID,
+            操作日志回调=lambda 内容: self.日志面板.记录操作日志(内容),
+        )
         self.自动启动面板 = 自动启动界面(self._页面容器, self.监控中心)
         self._页面 = {
             "首页": self.概览面板,
             "任务计划": self.任务计划面板,
             "模拟器连接": self.设备连接面板,
+            "手机控制": self.手机控制面板,
             "运行日志": 日志页,
             "自动启动": self.自动启动面板,
         }
@@ -218,6 +266,7 @@ class 增强型机器人控制界面:
             "首页": "清楚查看状态，只运行你选择的任务。",
             "任务计划": "勾选任务并设置参数，修改会自动保存。",
             "模拟器连接": "确认目标设备，测试实时截图。",
+            "手机控制": "手动开启局域网服务，配对手机后远程查看和控制当前机器人。",
             "运行日志": "查看执行记录和错误信息。",
             "自动启动": "配置需要时自动启动的条件。",
         }[名称])
@@ -236,14 +285,15 @@ class 增强型机器人控制界面:
     def _定时刷新顶部状态(self):
         """只读取内存状态，保持窗口缩放和日志滚动顺畅。"""
         try:
+            self._处理版本检查结果()
             机器人 = self.机器人管理.获取当前机器人()
             if 机器人 is None:
                 状态 = "● 未运行"
-                机器人文本 = "未选择机器人"
+                机器人文本 = 生成顶部连接文本()
             else:
                 当前状态 = str(getattr(机器人, "当前状态", "未运行"))
                 状态 = f"● {当前状态}"
-                机器人文本 = f"当前机器人：{机器人.机器人标志}"
+                机器人文本 = 生成顶部连接文本(机器人.机器人标志)
             self.顶部状态标签.configure(text=状态)
             self.顶部连接标签.configure(text=机器人文本)
         except tk.TclError:
@@ -251,6 +301,61 @@ class 增强型机器人控制界面:
         except Exception:
             pass
         self.master.after(1000, self._定时刷新顶部状态)
+
+    def _手动检查更新(self):
+        self._开始版本检查(手动=True)
+
+    def _开始版本检查(self, 手动=True):
+        """把网络请求放到短超时后台线程，避免阻塞 Tk 和机器人控制。"""
+        if self._版本检查中:
+            return
+        self._版本检查中 = True
+        self.更新检查按钮.configure(text="检查中…", state=tk.DISABLED)
+        if 手动:
+            self.更新提示标签.configure(text="")
+
+        def 后台检查():
+            try:
+                发布 = 获取最新发布(timeout=4)
+            except Exception:
+                发布 = None
+            self._版本检查结果队列.put((发布, 手动))
+
+        try:
+            threading.Thread(
+                target=后台检查,
+                name="GitHub版本检查",
+                daemon=True,
+            ).start()
+        except Exception:
+            self._版本检查中 = False
+            self.更新检查按钮.configure(text="检查更新", state=tk.NORMAL)
+
+    def _处理版本检查结果(self):
+        try:
+            发布, 手动 = self._版本检查结果队列.get_nowait()
+        except queue.Empty:
+            return
+        self._版本检查中 = False
+        self.更新检查按钮.configure(text="检查更新", state=tk.NORMAL)
+        self._最新发布 = 发布 if 有可用更新(self._当前版本, 发布) else None
+        if self._最新发布 is not None:
+            self.更新提示标签.configure(
+                text=f"发现新版本 {self._最新发布.版本} · 点击查看",
+                foreground="#a7562b",
+            )
+        else:
+            self.更新提示标签.configure(
+                text=("当前版本已是最新" if 手动 and 发布 is not None else "")
+            )
+
+    def _打开更新页面(self, _事件=None):
+        if self._最新发布 is None:
+            return
+        try:
+            webbrowser.open(self._最新发布.页面地址, new=2)
+        except Exception:
+            pass
 
     def _处理机器人选择变化(self, 机器人ID, 删除=None):
         if 删除:
@@ -305,6 +410,11 @@ class 增强型机器人控制界面:
         self._正在关闭 = True
         if hasattr(self, "_运行快捷键"):
             self._运行快捷键.关闭()
+        if hasattr(self, "_手机控制桥"):
+            try:
+                self._手机控制桥.stop()
+            except Exception:
+                pass
         try:
             self.监控中心.关闭()
         except Exception:
@@ -417,6 +527,8 @@ if __name__ == "__main__":
         from 界面.机器人管理面板 import 机器人管理面板
         from 界面.设备连接面板 import 设备连接面板
         from 界面.任务计划面板 import 任务计划面板
+        from 界面.手机控制面板 import 手机控制面板
+        from 服务.桌面手机控制桥 import DesktopMobileBridge
 
         获取本地版本号()
         监控中心 = 机器人监控中心(日志队列)

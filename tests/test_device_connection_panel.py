@@ -6,6 +6,36 @@ from 界面.设备连接面板 import 设备连接面板
 
 
 class 设备连接面板测试(unittest.TestCase):
+    def test_扫描前只重连已保存的本机ADB设备(self):
+        面板 = 设备连接面板.__new__(设备连接面板)
+        面板.状态 = SimpleNamespace(set=Mock())
+        面板.adb路径 = SimpleNamespace(get=Mock(return_value="adb.exe"))
+        面板.自动检测路径 = SimpleNamespace(get=Mock(return_value=False))
+        面板.设备序列号 = SimpleNamespace(get=Mock(return_value="127.0.0.1:16416"))
+        待执行工作 = []
+        面板._后台 = Mock(side_effect=lambda 工作, _完成: 待执行工作.append(工作))
+
+        with patch(
+            "界面.设备连接面板.ADB设备操作类.解析ADB路径",
+            return_value="C:/MuMu/adb.exe",
+        ), patch(
+            "界面.设备连接面板.ADB设备操作类.连接网络设备",
+            return_value="connected",
+        ) as 连接, patch(
+            "界面.设备连接面板.ADB设备操作类.扫描设备",
+            return_value=[],
+        ) as 扫描:
+            面板.扫描设备()
+            扫描结果 = 待执行工作[0]()
+
+        连接.assert_called_once_with(
+            "C:/MuMu/adb.exe",
+            "127.0.0.1:16416",
+            自动检测路径=False,
+        )
+        扫描.assert_called_once_with("C:/MuMu/adb.exe", 自动检测路径=False)
+        self.assertEqual(扫描结果, ("C:/MuMu/adb.exe", []))
+
     def test_连接截图使用机器人配置的CoC包名解析MuMu显示层(self):
         面板 = 设备连接面板.__new__(设备连接面板)
         面板.设备序列号 = SimpleNamespace(get=Mock(return_value="127.0.0.1:16416"))

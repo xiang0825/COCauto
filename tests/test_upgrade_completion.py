@@ -1,4 +1,5 @@
 import unittest
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -88,6 +89,16 @@ class 升级完成弹窗测试(unittest.TestCase):
         self.assertFalse(上下文.自动确认升级完成弹窗())
         上下文.检查宝石商店危险页面.assert_not_called()
         上下文.点击已确认安全按钮.assert_not_called()
+
+    def test_弹窗检查间隔内不重复读取机器人设置(self):
+        上下文 = 创建上下文([])
+        上下文._升级完成弹窗检查时间 = time.monotonic()
+        上下文._任务计划长时间等待 = True
+
+        self.assertFalse(上下文.自动确认升级完成弹窗())
+
+        上下文.数据库.获取机器人设置.assert_not_called()
+        上下文.检查宝石商店危险页面.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 """ADB 设备选择、截图预览与分辨率管理。"""
+import re
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -147,6 +148,7 @@ class 设备连接面板(ttk.Frame):
         self.状态.set("正在扫描 ADB 设备…")
         adb路径 = self.adb路径.get().strip()
         自动检测 = self.自动检测路径.get()
+        已保存序列号 = self.设备序列号.get().strip()
         def 完成(扫描结果):
             已解析路径, 设备列表 = 扫描结果
             self.adb路径.set(已解析路径)
@@ -163,6 +165,15 @@ class 设备连接面板(ttk.Frame):
                 self.状态.set(f"发现 {len(设备列表)} 台设备。请选择要连接的模拟器。")
         def 工作():
             已解析路径 = ADB设备操作类.解析ADB路径(adb路径, 自动检测=自动检测)
+            本机地址 = re.fullmatch(r"(?:127\.0\.0\.1|localhost):(\d{1,5})", 已保存序列号)
+            if 本机地址 and 1 <= int(本机地址.group(1)) <= 65535:
+                # 独立 ADB server 不继承 MuMu 在默认 server 中的连接缓存；
+                # 仅恢复已保存的 localhost serial，不自动挑选其他设备。
+                ADB设备操作类.连接网络设备(
+                    已解析路径,
+                    已保存序列号,
+                    自动检测路径=False,
+                )
             设备列表 = ADB设备操作类.扫描设备(
                 已解析路径,
                 自动检测路径=False,

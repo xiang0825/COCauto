@@ -700,11 +700,6 @@ class 任务上下文:
         """
         if getattr(self, "_升级完成弹窗检查中", False):
             return False
-        try:
-            if not bool(getattr(self.设置, "是否自动确认升级完成", False)):
-                return False
-        except Exception:
-            return False
         if (
             getattr(self, "_内存保护已触发", False)
             or bool(getattr(self, "_战斗中", False))
@@ -713,16 +708,24 @@ class 任务上下文:
 
         当前时间 = time.monotonic()
         上次检查 = float(getattr(self, "_升级完成弹窗检查时间", 0.0))
+        检查间隔 = self._升级完成弹窗检查间隔()
+        if 当前时间 - 上次检查 < 检查间隔:
+            return False
+        # 把间隔闸门放在配置读取之前。脚本延时调度器会反复调用本方法，
+        # 只在真正到期时查询机器人设置，避免待机期间每秒多次读取 SQLite。
+        self._升级完成弹窗检查时间 = 当前时间
+
+        try:
+            if not bool(getattr(self.设置, "是否自动确认升级完成", False)):
+                return False
+        except Exception:
+            return False
         # 升级完成弹窗会持续显示，不需要高频 OCR。5 秒一帧可以明显
         # 降低 RapidOCR native session 和 ADB screencap 的长期提交内存，
         # 同时保留两帧确认，避免误点。
         # 任务计划进入小时级冷却时，页面已经在本轮末尾确认过，
         # 不需要每 5 秒启动一次 ADB screencap/OCR。仍保留低频检查，
         # 这样升级完成弹窗不会被永久漏掉，同时显著降低长期运行压力。
-        检查间隔 = self._升级完成弹窗检查间隔()
-        if 当前时间 - 上次检查 < 检查间隔:
-            return False
-        self._升级完成弹窗检查时间 = 当前时间
         self._升级完成弹窗检查中 = True
         try:
             # 先执行现有宝石/商店护栏。它只会在明确危险模板命中时发送
@@ -786,9 +789,48 @@ class 任务上下文:
         中央绿色确定按钮时才允许精确点击；识别不到时保持阻断，不发送
         ESC、不进入商店，也不点击任何宝石入口。
         """
-        if getattr(self, "_内存保护已触发", False) or bool(getattr(self, "_战斗中", False)):
+        if getattr(self, "_内存保护已触发", False):
             return False
         try:
+            战后候选 = getattr(self, "_最近战后奖励按钮候选", None)
+            点击识别帧 = getattr(self, "_点击识别截图", None)
+            if (
+                战后候选
+                and 点击识别帧 is not None
+                and len(战后候选) == 3
+                and 战后候选[2] == id(点击识别帧)
+            ):
+                操作, 确认点, _ = 战后候选
+                self._最近战后奖励按钮候选 = None
+                self._战斗中 = False
+                self._已确认进入战斗 = False
+                点击成功 = self.点击已确认安全按钮(
+                    确认点[0], 确认点[1], 延时=350
+                )
+                if not 点击成功:
+                    self.置脚本状态(
+                        f"战后奖励{操作}按钮输入被安全护栏拒绝；保持当前画面"
+                    )
+                    return True
+                if 操作 == "领取":
+                    self._战后奖励动画处理中 = True
+                    self._战后星级奖励检查截止时间 = time.monotonic() + 180.0
+                    状态 = "已领取胜利之星奖励，等待宝箱动画安全结束"
+                elif 操作 == "跳过动画":
+                    self._战后奖励动画处理中 = True
+                    self._战后星级奖励检查截止时间 = time.monotonic() + 180.0
+                    状态 = "已确认跳过宝箱动画入口，等待奖励保留确认页"
+                else:
+                    self._战后奖励动画处理中 = False
+                    self._战后星级奖励检查截止时间 = 0.0
+                    状态 = "已确认跳过宝箱动画，游戏提示奖励仍会发放"
+                self._战后奖励OCR缓存帧ID = None
+                self.清除战斗结算保护状态()
+                self.置脚本状态(状态)
+                return True
+
+            if bool(getattr(self, "_战斗中", False)):
+                return False
             识别器 = self._获取点击页面识别器()
             屏幕图像 = self._获取点击识别截图(强制=bool(强制))
             页面结果 = 识别器.识别(屏幕图像, 战斗中=False)
@@ -1828,6 +1870,61 @@ class 任务上下文:
         self._点击识别截图时间 = 当前时间
         return 屏幕图像
 
+    def _识别战后奖励按钮(self, 屏幕图像, 识别器, 当前页面):
+        """只在战后短窗口复用 OCR，识别新奖励框与可验证的跳过操作。"""
+        战斗中 = bool(getattr(self, "_战斗中", False))
+        if 当前页面 not in {
+            "主世界主页", "战斗中", "战斗过渡", "未知", "战斗星级奖励"
+        }:
+            return None
+        现在 = time.monotonic()
+        截止时间 = float(
+            getattr(self, "_战后星级奖励检查截止时间", 0.0) or 0.0
+        )
+        奖励动画处理中 = bool(
+            getattr(self, "_战后奖励动画处理中", False)
+        )
+        战后奖励窗口已确认 = 截止时间 > 0 and 现在 <= 截止时间
+        if not 奖励动画处理中 and not 战后奖励窗口已确认:
+            return None
+        if 战斗中 and not 奖励动画处理中:
+            try:
+                if 识别器._战斗倒计时分数(屏幕图像) >= 0.90:
+                    return None
+            except (AttributeError, TypeError, ValueError):
+                return None
+
+        当前帧ID = id(屏幕图像)
+        if 当前帧ID == getattr(self, "_战后奖励OCR缓存帧ID", None):
+            return getattr(self, "_战后奖励OCR缓存候选", None)
+        上次检查 = float(getattr(self, "_战后奖励OCR检查时间", 0.0) or 0.0)
+        if 现在 - 上次检查 < 1.0:
+            self._战后奖励OCR缓存帧ID = 当前帧ID
+            self._战后奖励OCR缓存候选 = None
+            return None
+
+        self._战后奖励OCR检查时间 = 现在
+        self._战后奖励OCR缓存帧ID = 当前帧ID
+        self._战后奖励OCR缓存候选 = None
+        try:
+            OCR返回 = self.获取OCR引擎()(屏幕图像, use_cls=False)
+            OCR结果 = OCR返回[0] if isinstance(OCR返回, tuple) else OCR返回
+            候选 = 识别器.识别战后奖励按钮(
+                屏幕图像,
+                OCR结果,
+                奖励动画处理中=(
+                    奖励动画处理中
+                    or (战后奖励窗口已确认 and not 战斗中)
+                ),
+            )
+        except Exception as 异常:
+            if self.是否内存异常(异常):
+                self.触发内存保护("战后奖励OCR", 异常)
+            self._战后奖励OCR缓存候选 = None
+            return None
+        self._战后奖励OCR缓存候选 = 候选
+        return 候选
+
     def 识别点击画面(self, 强制: bool = False):
         """点击前/后执行一次轻量页面识别，只记录状态，不发送输入。"""
         try:
@@ -1836,6 +1933,24 @@ class 任务上下文:
                 屏幕图像,
                 战斗中=bool(getattr(self, "_战斗中", False)),
             )
+            页面识别器 = self._获取点击页面识别器()
+            战后候选 = self._识别战后奖励按钮(
+                屏幕图像,
+                页面识别器,
+                str(getattr(结果, "页面", "") or ""),
+            )
+            self._最近战后奖励按钮候选 = (
+                (*战后候选, id(屏幕图像)) if 战后候选 else None
+            )
+            if 战后候选:
+                操作, _ = 战后候选
+                结果 = replace(
+                    结果,
+                    页面="战斗星级奖励",
+                    世界=None,
+                    可信度=0.99,
+                    依据=(f"战后奖励OCR与按钮位置确认：{操作}",),
+                )
             # 夜世界红色等级徽章是有用的备用特征，但实机主世界在
             # 动画/地图纹理经过左上角时曾出现过“只有红徽章命中”的
             # 单帧误判。点击护栏不能把这种单帧结果当成已经切换世界：
@@ -2880,11 +2995,16 @@ class 任务上下文:
             # 仍由清理中央提示的 OCR + 下半屏范围共同确认，绝不点击商店、
             # 宝石或普通建筑。清理函数内部的短延时会再次进入本方法，但
             # 调度时间戳会阻止递归重复 OCR。
+            中央提示检查间隔 = (
+                30.0
+                if bool(getattr(self, "_任务计划长时间等待", False))
+                else 0.75
+            )
             if (
                 not getattr(self, "_战斗中", False)
                 and 当前单调时间
                 - float(getattr(self, "_中央提示调度时间", 0.0))
-                >= 0.75
+                >= 中央提示检查间隔
             ):
                 self._中央提示调度时间 = 当前单调时间
                 try:
@@ -3171,7 +3291,8 @@ class 基础任务(ABC):
         获取器 = getattr(self.上下文, "获取OCR引擎", None)
         if callable(获取器):
             引擎 = 获取器()
-            self.__dict__["ocr引擎"] = 引擎
+            if 引擎 is not None:
+                self.__dict__["ocr引擎"] = 引擎
             return 引擎
 
         # 兼容旧版上下文：首次用到时创建，并缓存在任务对象上。

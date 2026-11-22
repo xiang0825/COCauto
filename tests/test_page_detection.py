@@ -1,6 +1,7 @@
 import pathlib
 import sys
 import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -8,7 +9,7 @@ from unittest.mock import Mock, patch
 import cv2
 import numpy as np
 
-from 模块.检测.页面识别器 import 页面识别器
+from 模块.检测.页面识别器 import 页面识别器, 页面识别结果
 from 模块.检测.模板匹配器 import 模板匹配引擎
 from 任务流程.基础任务框架 import 任务上下文
 from 任务流程.检测游戏登录状态 import 检测游戏登录状态任务
@@ -517,6 +518,27 @@ class 页面识别测试(unittest.TestCase):
 
         上下文.清理中央游戏提示.assert_not_called()
 
+    def test_长时间待机把中央提示扫描降到低频(self):
+        """长时间待机不应按普通操作频率反复截图检查教程弹层。"""
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.停止事件 = threading.Event()
+        上下文.继续事件 = threading.Event()
+        上下文.继续事件.set()
+        上下文._战斗中 = False
+        上下文._任务计划长时间等待 = True
+        上下文._升级完成弹窗调度时间 = time.monotonic()
+        上下文._中央提示调度时间 = time.monotonic()
+        上下文._星级奖励调度时间 = time.monotonic()
+        上下文.自动确认升级完成弹窗 = Mock()
+        上下文.处理战斗星级奖励弹窗 = Mock()
+        上下文.清理中央游戏提示 = Mock(return_value=False)
+        上下文.企业微信通知器 = None
+        上下文.上报间隔秒 = 0
+
+        上下文.脚本延时(900)
+
+        上下文.清理中央游戏提示.assert_not_called()
+
     def test_中央说明正文较大时仍优先点击底部继续按钮(self):
         """不能把能力说明正文当成继续按钮点击。"""
         上下文 = 任务上下文.__new__(任务上下文)
@@ -741,6 +763,175 @@ class 页面识别测试(unittest.TestCase):
         图像 = np.full((600, 800, 3), (18, 25, 42), dtype=np.uint8)
         cv2.rectangle(图像, (315, 485), (485, 565), (90, 220, 120), -1)
         self.assertIsNone(self.识别器.定位战斗星级奖励确定按钮(图像))
+
+    def test_新版胜利之星弹窗需标题与领取按钮同时确认(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        def 文字框(x, y):
+            return ([[x - 20, y - 10], [x + 20, y - 10],
+                     [x + 20, y + 10], [x - 20, y + 10]],)
+        OCR = [
+            (文字框(400, 150)[0], "已收到勝利之星", 0.99),
+            (文字框(415, 480)[0], "领取", 0.99),
+        ]
+        self.assertEqual(
+            self.识别器.识别战后奖励按钮(图像, OCR),
+            ("领取", (415, 480)),
+        )
+        self.assertIsNone(
+            self.识别器.识别战后奖励按钮(
+                图像, [(文字框(415, 480)[0], "领取", 0.99)]
+            )
+        )
+
+    def test_宝箱动画跳过与二次确认使用受限坐标(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        跳过框 = [[730, 540], [770, 540], [770, 570], [730, 570]]
+        self.assertIsNone(
+            self.识别器.识别战后奖励按钮(
+                图像, [(跳过框, "跳過", 0.99)]
+            )
+        )
+        self.assertEqual(
+            self.识别器.识别战后奖励按钮(
+                图像, [(跳过框, "跳過", 0.99)], 奖励动画处理中=True
+            ),
+            ("跳过动画", (750, 555)),
+        )
+
+        cv2.rectangle(图像, (480, 350), (600, 430), (0, 255, 0), -1)
+        OCR = [
+            ([[330, 170], [470, 170], [470, 190], [330, 190]],
+             "跳過寶箱動畫", 0.99),
+            ([[290, 240], [520, 240], [520, 270], [290, 270]],
+             "你將獲得，但會跳過實箱動。仍要跳過", 0.98),
+        ]
+        操作, 点 = self.识别器.识别战后奖励按钮(
+            图像, OCR, 奖励动画处理中=True
+        )
+        self.assertEqual(操作, "确认跳过")
+        self.assertGreaterEqual(图像[点[1], 点[0], 1], 200)
+        self.assertGreater(点[0], 480)
+
+    def test_战后短窗口将新式奖励页送入受保护页面分支(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        def 文字框(x, y):
+            return [[x - 20, y - 10], [x + 20, y - 10],
+                    [x + 20, y + 10], [x - 20, y + 10]]
+        OCR = [
+            (文字框(400, 150), "已收到勝利之星", 0.99),
+            (文字框(415, 480), "领取", 0.99),
+        ]
+        识别器 = 页面识别器(Mock())
+        with patch.object(
+            识别器,
+            "识别",
+            return_value=页面识别结果(
+                页面="主世界主页", 世界="主世界", 可信度=0.8, 依据=()
+            ),
+        ):
+            上下文 = object.__new__(任务上下文)
+            上下文._战斗中 = False
+            上下文._战后星级奖励检查截止时间 = float("inf")
+            上下文._获取点击识别截图 = Mock(return_value=图像)
+            上下文._获取点击页面识别器 = Mock(return_value=识别器)
+            上下文.获取OCR引擎 = Mock(
+                return_value=Mock(return_value=(OCR, None))
+            )
+            上下文.置脚本状态 = Mock()
+
+            结果 = 上下文.识别点击画面(强制=True)
+
+        self.assertEqual(结果.页面, "战斗星级奖励")
+        self.assertEqual(
+            上下文._最近战后奖励按钮候选[:2],
+            ("领取", (415, 480)),
+        )
+
+    def test_确认战后窗口可识别回营后直接出现的宝箱跳过按钮(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        跳过框 = [[730, 540], [770, 540], [770, 570], [730, 570]]
+        上下文 = object.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文._战后星级奖励检查截止时间 = float("inf")
+        上下文._战后奖励动画处理中 = False
+        上下文._战后奖励OCR检查时间 = 0.0
+        上下文._战后奖励OCR缓存帧ID = None
+        上下文._战后奖励OCR缓存候选 = None
+        上下文.获取OCR引擎 = Mock(
+            return_value=Mock(
+                return_value=([(跳过框, "跳過", 0.99)], None)
+            )
+        )
+
+        候选 = 上下文._识别战后奖励按钮(
+            图像, self.识别器, "未知"
+        )
+
+        self.assertEqual(候选, ("跳过动画", (750, 555)))
+
+    def test_残留战斗标记但倒计时已消失时允许OCR复核奖励页(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        def 文字框(x, y):
+            return [[x - 20, y - 10], [x + 20, y - 10],
+                    [x + 20, y + 10], [x - 20, y + 10]]
+        OCR = [
+            (文字框(400, 150), "已收到勝利之星", 0.99),
+            (文字框(415, 480), "领取", 0.99),
+        ]
+        识别器 = 页面识别器(Mock())
+        识别器._战斗倒计时分数 = Mock(return_value=0.0)
+        with patch.object(
+            识别器,
+            "识别",
+            return_value=页面识别结果(
+                页面="战斗中", 世界=None, 可信度=0.93, 依据=("残留放弃按钮",)
+            ),
+        ):
+            上下文 = object.__new__(任务上下文)
+            上下文._战斗中 = True
+            上下文._战后星级奖励检查截止时间 = float("inf")
+            上下文._获取点击识别截图 = Mock(return_value=图像)
+            上下文._获取点击页面识别器 = Mock(return_value=识别器)
+            上下文.获取OCR引擎 = Mock(
+                return_value=Mock(return_value=(OCR, None))
+            )
+            上下文.置脚本状态 = Mock()
+            结果 = 上下文.识别点击画面(强制=True)
+
+        self.assertEqual(结果.页面, "战斗星级奖励")
+        识别器._战斗倒计时分数.assert_called_once_with(图像)
+
+    def test_活跃战斗倒计时下不加载战后OCR(self):
+        上下文 = object.__new__(任务上下文)
+        上下文._战斗中 = True
+        上下文._战后星级奖励检查截止时间 = float("inf")
+        识别器 = Mock()
+        识别器._战斗倒计时分数.return_value = 0.96
+        上下文.获取OCR引擎 = Mock()
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+
+        self.assertIsNone(
+            上下文._识别战后奖励按钮(图像, 识别器, "战斗中")
+        )
+        上下文.获取OCR引擎.assert_not_called()
+
+    def test_新式胜利之星领取使用安全按钮通道并进入动画状态(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文 = object.__new__(任务上下文)
+        上下文._战斗中 = True
+        上下文._最近战后奖励按钮候选 = ("领取", (415, 480), id(图像))
+        上下文._点击识别截图 = 图像
+        上下文.点击已确认安全按钮 = Mock(return_value=True)
+        上下文.清除战斗结算保护状态 = Mock()
+        上下文.置脚本状态 = Mock()
+
+        self.assertTrue(上下文.处理战斗星级奖励弹窗())
+        上下文.点击已确认安全按钮.assert_called_once_with(
+            415, 480, 延时=350
+        )
+        self.assertTrue(上下文._战后奖励动画处理中)
+        self.assertGreater(上下文._战后星级奖励检查截止时间, 0)
+        self.assertFalse(上下文._战斗中)
 
     def test_实机断线弹窗识别为断线页面(self):
         """中央连接中断遮罩不能被当成未知页面继续发送输入。"""
@@ -1331,6 +1522,68 @@ class 页面识别测试(unittest.TestCase):
         self.assertTrue(任务._启动阶段处理结算页(np.zeros((600, 800, 3), dtype=np.uint8), 识图引擎, 页面识别))
         上下文.点击已确认安全按钮.assert_called_once_with(640, 620, 延时=180)
         self.assertTrue(any("先点击回营" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
+    def test_启动时结算按钮首帧漏检后双帧复核再回营(self):
+        上下文 = SimpleNamespace(
+            数据库=Mock(),
+            机器人标志="robot_test",
+            置脚本状态=Mock(),
+            点击已确认安全按钮=Mock(return_value=True),
+            脚本延时=Mock(),
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(
+                    side_effect=[
+                        np.zeros((600, 800, 3), dtype=np.uint8),
+                        np.zeros((600, 800, 3), dtype=np.uint8),
+                    ]
+                )
+            ),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
+        结算页 = SimpleNamespace(页面="战斗结算", 可信度=0.94)
+        页面识别 = Mock()
+        页面识别.识别.return_value = 结算页
+        页面识别.定位结算回营按钮.side_effect = [None, (53, 531), (53, 531)]
+        识图引擎 = Mock()
+        识图引擎.执行匹配.return_value = (False, (0, 0), 0.0)
+        初始帧 = np.zeros((600, 800, 3), dtype=np.uint8)
+
+        self.assertTrue(任务._启动阶段处理结算页(初始帧, 识图引擎, 页面识别))
+
+        上下文.点击已确认安全按钮.assert_called_once_with(53, 531, 延时=180)
+        self.assertEqual(页面识别.定位结算回营按钮.call_count, 3)
+        self.assertTrue(any("双帧确认" in c.args[0] for c in 上下文.置脚本状态.call_args_list))
+
+    def test_启动时结算页复核转场后不盲点回营(self):
+        上下文 = SimpleNamespace(
+            数据库=Mock(),
+            机器人标志="robot_test",
+            置脚本状态=Mock(),
+            点击已确认安全按钮=Mock(return_value=True),
+            脚本延时=Mock(),
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(
+                    return_value=np.zeros((600, 800, 3), dtype=np.uint8)
+                )
+            ),
+        )
+        任务 = 检测游戏登录状态任务(上下文)
+        页面识别 = Mock()
+        页面识别.识别.side_effect = [
+            SimpleNamespace(页面="战斗结算", 可信度=0.94),
+            SimpleNamespace(页面="未知", 可信度=0.0),
+        ]
+        页面识别.定位结算回营按钮.side_effect = [None, (53, 531)]
+        识图引擎 = Mock()
+        识图引擎.执行匹配.return_value = (False, (0, 0), 0.0)
+
+        self.assertTrue(
+            任务._启动阶段处理结算页(
+                np.zeros((600, 800, 3), dtype=np.uint8), 识图引擎, 页面识别
+            )
+        )
+
+        上下文.点击已确认安全按钮.assert_not_called()
 
     def test_内存错误释放资源并停止任务(self):
         上下文 = 任务上下文.__new__(任务上下文)

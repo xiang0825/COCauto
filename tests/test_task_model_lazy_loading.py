@@ -1,3 +1,6 @@
+from pathlib import Path
+import subprocess
+import sys
 import unittest
 from unittest.mock import Mock
 
@@ -36,6 +39,28 @@ class _空任务(基础任务):
 
 
 class 任务模型延迟加载测试(unittest.TestCase):
+    def test_导入回营流程时不加载未使用的ONNX运行时(self):
+        项目目录 = Path(__file__).resolve().parents[1]
+        代码 = (
+            "import sys; "
+            "import 任务流程.主世界打鱼.等待战斗结束并回营; "
+            "assert 'onnxruntime' not in sys.modules, "
+            "'导入回营流程时不应加载 ONNX Runtime'"
+        )
+        结果 = subprocess.run(
+            [sys.executable, "-c", 代码],
+            cwd=项目目录,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        self.assertEqual(
+            结果.returncode,
+            0,
+            msg=f"回营流程导入加载了未使用的 ONNX Runtime:\n{结果.stderr}",
+        )
+
     def test_创建未使用识别的任务时不加载模型(self):
         上下文 = _共享模型上下文()
 

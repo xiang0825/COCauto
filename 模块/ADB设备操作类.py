@@ -76,6 +76,8 @@ class ADB设备操作类:
 
     参考宽度 = 800
     参考高度 = 600
+    # CoC 使用独立 ADB server，避免与 MuMu/SDK 的默认 5037 服务互相重启。
+    ADB服务器端口 = 5038
     # Android 的系统/电视功能键不能用于 CoC 的画面操作；误发时可能
     # 离开游戏、切换到启动器或打开模拟器的其他应用。底层再次拦截，
     # 防止绕过键盘控制器的调用把这类按键发送出去。
@@ -188,6 +190,13 @@ class ADB设备操作类:
         锁键 = (os.path.normcase(os.path.abspath(self.adb路径)), self.设备序列号)
         with self._设备命令锁容器锁:
             self._命令锁 = self._设备命令锁容器.setdefault(锁键, threading.RLock())
+
+    @classmethod
+    def _ADB子进程环境(cls) -> dict[str, str]:
+        """为每个 ADB 子进程指定 CoC 专用 server，绝不修改宿主进程环境。"""
+        环境 = os.environ.copy()
+        环境["ANDROID_ADB_SERVER_PORT"] = str(cls.ADB服务器端口)
+        return 环境
 
     @staticmethod
     def _候选ADB路径() -> list[Path]:
@@ -311,6 +320,7 @@ class ADB设备操作类:
                 check=False,
                 startupinfo=startupinfo,
                 creationflags=creationflags,
+                env=self._ADB子进程环境(),
             )
         进程 = subprocess.Popen(
             命令,
@@ -318,6 +328,7 @@ class ADB设备操作类:
             stderr=subprocess.PIPE,
             startupinfo=startupinfo,
             creationflags=creationflags,
+            env=self._ADB子进程环境(),
         )
         try:
             标准输出, 标准错误 = 进程.communicate(timeout=timeout)
@@ -477,10 +488,11 @@ class ADB设备操作类:
             check=False,
             startupinfo=startupinfo,
             creationflags=creationflags,
+            env=self._ADB子进程环境(),
         )
 
     def _重置ADB服务(self) -> None:
-        """仅重启本机 adb server，不关闭游戏、不重启模拟器。"""
+        """仅重启 CoC 专用 ADB server，不影响默认 server、游戏或模拟器。"""
         当前时间 = time.monotonic()
         if 当前时间 - self._最近ADB服务重置时间 < self._ADB服务重置冷却秒数:
             return
@@ -522,6 +534,7 @@ class ADB设备操作类:
                 check=False,
                 startupinfo=startupinfo,
                 creationflags=creationflags,
+                env=self._ADB子进程环境(),
             )
         except (OSError, subprocess.TimeoutExpired):
             pass
@@ -550,6 +563,7 @@ class ADB设备操作类:
                     check=False,
                     startupinfo=startupinfo,
                     creationflags=creationflags,
+                    env=self._ADB子进程环境(),
                 )
         except Exception:
             # 恢复命令失败时让原始命令的第二次尝试给出最终错误。
@@ -606,7 +620,8 @@ class ADB设备操作类:
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             结果 = runner(命令, capture_output=True, timeout=10, check=False,
-                          startupinfo=startupinfo, creationflags=creationflags)
+                          startupinfo=startupinfo, creationflags=creationflags,
+                          env=cls._ADB子进程环境())
         except (FileNotFoundError, subprocess.TimeoutExpired) as 异常:
             raise ADB错误(f"扫描 ADB 设备失败：{异常}") from 异常
         if 结果.returncode:
@@ -802,7 +817,8 @@ class ADB设备操作类:
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             结果 = runner(命令, capture_output=True, timeout=10, check=False,
-                          startupinfo=startupinfo, creationflags=creationflags)
+                          startupinfo=startupinfo, creationflags=creationflags,
+                          env=cls._ADB子进程环境())
         except (FileNotFoundError, subprocess.TimeoutExpired) as 异常:
             raise ADB错误(f"ADB 网络连接失败：{异常}") from 异常
         输出 = 结果.stdout or b""
@@ -1006,11 +1022,11 @@ class ADB设备操作类:
 
     @staticmethod
     def _解析MuMu截图逻辑显示ID(窗口输出: str, 目标包名: str = "") -> str | None:
-        """解析只供截图使用的游戏 display；绝不用于授权触控输入。
+        """解析只供截图使用的游戏 display；不用于授权触控输入。
 
-        MuMu 维护/重连画面可能保留 CoC 的 FocusedApplications 和独立游戏
-        显示层，但把 FocusedWindows 焦点交给启动器。截图仍可安全读取 CoC
-        所在层来识别维护状态；输入路径继续只认 CoC 的 FocusedWindows。
+        MuMu 维护或重连画面可能保留 CoC 的 FocusedApplications 和独立
+        游戏显示层，同时把 FocusedWindows 焦点交给启动器。截图可以继续
+        读取该游戏层以识别维护状态；输入仍必须单独通过真实焦点校验。
         """
         文本 = str(窗口输出 or "")
         目标包名 = str(目标包名 or "").strip()
@@ -1043,7 +1059,7 @@ class ADB设备操作类:
                     return 逻辑ID
             return None
 
-        # 旧版 MuMu dumpsys 格式将 mFocusedApp 放在 display 分块中。
+        # 旧版 MuMu 输出仍按原来的 display 分块规则解析。
         return ADB设备操作类._解析MuMu逻辑显示ID(文本, 目标包名)
 
     def _获取MuMu截图显示ID(self) -> str | None:
@@ -1068,16 +1084,13 @@ class ADB设备操作类:
             self._截图显示ID更新时间 = time.monotonic()
             try:
                 选中逻辑ID = self._获取MuMu输入显示ID()
-                if 选中逻辑ID is None:
-                    # 截图可以只读检查 CoC 的 FocusedApplications 显示层，
-                    # 即使启动器暂时拥有触控焦点；此回退不会写入输入显示
-                    # 缓存，也不会放宽任何触控前台校验。
+                if not 选中逻辑ID:
+                    self._输入显示ID更新时间 = 0.0
                     窗口输出 = self._获取MuMu窗口状态()
                     选中逻辑ID = self._解析MuMu截图逻辑显示ID(
                         窗口输出 or "", self._目标包名
                     )
                 if not 选中逻辑ID:
-                    self._输入显示ID更新时间 = 0.0
                     raise ADB错误("暂未确认 CoC 的 MuMu 截图显示层")
 
                 显示输出 = self.执行(["shell", "dumpsys", "display"], timeout=8)

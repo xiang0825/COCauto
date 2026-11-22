@@ -470,5 +470,60 @@ class 进攻目标选择测试(unittest.TestCase):
             {"金矿", "圣水采集器"},
         )
 
+class 下兵候选方向限制测试(unittest.TestCase):
+    def test_集中主力计划不会生成其它方向的候选落点(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.准备可下兵区域 = lambda _上下文: None
+        任务.下兵点是否位于可下兵区域 = lambda _上下文, _点: True
+        上下文 = SimpleNamespace(
+            本场进攻方向=["右上"],
+            本场进攻策略="稳健三星/集中主力右上",
+        )
+
+        候选点 = 任务.生成可下兵候选点(上下文, 坐标(400, 40))
+        实际方向 = {
+            取进攻方向(坐标(x, y))
+            for x, y in 候选点
+        }
+
+        self.assertTrue(候选点)
+        self.assertEqual(实际方向, {"右上"})
+
+
+class 兵栏槽位选择复核测试(unittest.TestCase):
+    def test_检测到槽位未选中时只重试一次并复核成功(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.读取兵栏槽位选中状态 = Mock(side_effect=[False, True])
+        任务.刷新选中兵种后的下兵边界 = Mock()
+        上下文 = SimpleNamespace(
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        兵栏项 = {"槽位": 2, "名称": "第2格", "区域": (120, 493, 176, 594)}
+
+        self.assertTrue(任务.复核兵栏槽位选择(上下文, 兵栏项))
+
+        上下文.点击.assert_called_once()
+        任务.刷新选中兵种后的下兵边界.assert_called_once_with(上下文)
+
+    def test_重试后仍确认未选中则阻止地图投放(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.读取兵栏槽位选中状态 = Mock(side_effect=[False, False])
+        任务.刷新选中兵种后的下兵边界 = Mock()
+        上下文 = SimpleNamespace(
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        兵栏项 = {"槽位": 2, "名称": "第2格", "区域": (120, 493, 176, 594)}
+
+        self.assertFalse(任务.复核兵栏槽位选择(上下文, 兵栏项))
+
+        上下文.点击.assert_called_once()
+        状态 = " ".join(调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list)
+        self.assertIn("未确认选中", 状态)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,24 @@
+name: cocauto
+description: "Android companion for the COCauto Windows controller."
+publish_to: 'none'
+version: 2026.11.23+118
+
+environment:
+  sdk: ^3.14.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  material_ui: ^1.11.1
+  crypto: ^3.0.8
+  flutter_secure_storage: ^11.2.0
+  mobile_scanner: ^7.5.0
+  url_launcher: ^6.3.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

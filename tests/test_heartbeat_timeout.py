@@ -151,6 +151,69 @@ class 心跳超时测试(unittest.TestCase):
                 for 调用 in 上下文.置脚本状态.call_args_list)
         )
 
+    def test_登录识别超时但连续两帧确认主世界时继续(self):
+        任务 = object.__new__(检测游戏登录状态任务)
+        主世界页 = SimpleNamespace(
+            页面="主世界主页", 世界="主世界", 可信度=0.78,
+            依据=("主世界资源栏0.94", "新版战斗入口0.99"),
+        )
+        页面识别器实例 = SimpleNamespace(
+            识别=Mock(side_effect=[主世界页, 主世界页])
+        )
+        屏幕 = Mock(return_value=object())
+        上下文 = SimpleNamespace(
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            键盘=SimpleNamespace(按字符按压=Mock()),
+            op=SimpleNamespace(
+                获取屏幕图像cv=屏幕,
+                设备=SimpleNamespace(
+                    获取当前前台包名=Mock(return_value="com.supercell.clashofclans")
+                ),
+            ),
+            停止事件=threading.Event(),
+        )
+        任务.上下文 = 上下文
+        任务.第一次检测游戏登录 = False
+
+        现在 = iter((0.0, 201.0))
+        with patch(
+            "任务流程.检测游戏登录状态.模板匹配引擎", return_value=Mock()
+        ), patch(
+            "任务流程.检测游戏登录状态.页面识别器",
+            return_value=页面识别器实例,
+        ), patch(
+            "任务流程.检测游戏登录状态.time.monotonic",
+            side_effect=lambda: next(现在),
+        ):
+            self.assertTrue(任务.执行())
+
+        self.assertFalse(上下文.停止事件.is_set())
+        self.assertEqual(页面识别器实例.识别.call_count, 2)
+        self.assertEqual(屏幕.call_count, 2)
+        上下文.键盘.按字符按压.assert_not_called()
+        self.assertTrue(any(
+            "连续两帧确认主世界主页" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_登录超时复核两帧页面不一致时不接续(self):
+        任务 = object.__new__(检测游戏登录状态任务)
+        任务.上下文 = SimpleNamespace(
+            脚本延时=Mock(),
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=object())),
+            置脚本状态=Mock(),
+        )
+        页面识别器实例 = SimpleNamespace(
+            识别=Mock(side_effect=[
+                SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.78),
+                SimpleNamespace(页面="战斗结算", 世界="未知", 可信度=0.99),
+            ])
+        )
+
+        self.assertFalse(任务._超时前双帧复核主世界(object(), 页面识别器实例))
+        self.assertEqual(页面识别器实例.识别.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

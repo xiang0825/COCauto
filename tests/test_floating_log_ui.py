@@ -8,6 +8,32 @@ from 界面.日志面板 import 日志面板
 
 
 class 悬浮日志测试(unittest.TestCase):
+    def test_隐藏主界面后悬浮窗仍可见且关闭后恢复主界面(self):
+        try:
+            根 = tk.Tk()
+        except tk.TclError as 异常:
+            self.skipTest(f"当前环境没有桌面显示：{异常}")
+        try:
+            根.update_idletasks()
+            面板 = 日志面板(根, queue.Queue(), lambda: None, lambda: {})
+            面板.pack()
+            面板._切换悬浮窗()
+            根.update()
+
+            隐藏按钮 = getattr(面板, "_隐藏主界面按钮", None)
+            self.assertIsNotNone(隐藏按钮)
+            隐藏按钮.invoke()
+            根.update()
+            self.assertEqual(根.state(), "withdrawn")
+            self.assertTrue(面板._悬浮窗口.winfo_viewable())
+
+            面板._关闭悬浮窗()
+            根.update()
+            self.assertEqual(根.state(), "normal")
+            self.assertTrue(根.winfo_viewable())
+        finally:
+            根.destroy()
+
     def test_半透明日志在主日志页隐藏时仍实时更新且可关闭(self):
         try:
             根 = tk.Tk()

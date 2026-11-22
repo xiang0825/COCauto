@@ -35,6 +35,42 @@ class 打开进攻页面测试(unittest.TestCase):
                 for 调用 in 上下文.置脚本状态.call_args_list)
         )
 
+    def test_联赛概况弹窗需两帧确认后只点关闭并复核主世界(self):
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        联赛页 = SimpleNamespace(页面="联赛概况弹窗", 可信度=0.98)
+        主城页 = SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.70)
+        识别器 = SimpleNamespace(
+            定位联赛概况关闭按钮=Mock(return_value=(772, 84))
+        )
+        上下文 = SimpleNamespace(
+            识别点击画面=Mock(side_effect=[联赛页, 联赛页, 主城页, 主城页]),
+            _获取点击页面识别器=Mock(return_value=识别器),
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8))),
+            点击已确认安全按钮=Mock(return_value=True),
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+
+        self.assertTrue(任务._关闭已确认联赛概况弹窗(上下文))
+
+        上下文.点击已确认安全按钮.assert_called_once_with(772, 84, 延时=250)
+        self.assertEqual(上下文.识别点击画面.call_count, 4)
+
+    def test_联赛弹窗未通过双帧复核时不点击(self):
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        上下文 = SimpleNamespace(
+            识别点击画面=Mock(side_effect=[
+                SimpleNamespace(页面="联赛概况弹窗", 可信度=0.98),
+                SimpleNamespace(页面="未知", 可信度=0.30),
+            ]),
+            点击已确认安全按钮=Mock(return_value=True),
+            置脚本状态=Mock(),
+            页面恢复失败=False,
+        )
+
+        self.assertFalse(任务._关闭已确认联赛概况弹窗(上下文))
+        上下文.点击已确认安全按钮.assert_not_called()
+
     @staticmethod
     def 军队配置画面():
         画面 = np.zeros((600, 800, 3), dtype=np.uint8)
@@ -110,6 +146,47 @@ class 打开进攻页面测试(unittest.TestCase):
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
+    def test_稳定配兵320除352时允许开战(self):
+        OCR引擎 = Mock(return_value=(
+            [[[0, 0], "320/352", 0.99]],
+            [1.0],
+        ))
+        上下文 = SimpleNamespace(
+            获取OCR引擎=Mock(return_value=OCR引擎),
+            请求任务计划等待=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        任务._军队容量上次检查时间 = 0.0
+
+        self.assertTrue(任务._检查军队容量(
+            上下文, np.zeros((600, 800, 3), dtype=np.uint8)
+        ))
+        self.assertFalse(getattr(上下文, "_军队未满待机", False))
+        上下文.请求任务计划等待.assert_not_called()
+
+    def test_军队容量OCR裁剪不包含右侧警告图标(self):
+        传入OCR的区域尺寸 = []
+
+        def 识别容量(区域):
+            传入OCR的区域尺寸.append(区域.shape)
+            return ([[[0, 0], "320/352", 0.99]], [1.0])
+
+        OCR引擎 = Mock(side_effect=识别容量)
+        上下文 = SimpleNamespace(
+            获取OCR引擎=Mock(return_value=OCR引擎),
+            请求任务计划等待=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        任务._军队容量上次检查时间 = 0.0
+
+        self.assertTrue(任务._检查军队容量(
+            上下文, np.zeros((600, 800, 3), dtype=np.uint8)
+        ))
+        self.assertEqual(传入OCR的区域尺寸, [(70, 145, 3)])
+        上下文.请求任务计划等待.assert_not_called()
+
     def test_攻击选择面板动态识别寻找目标按钮(self):
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
         结果 = 任务._检测寻找目标按钮(self.攻击选择画面())
@@ -170,7 +247,7 @@ class 打开进攻页面测试(unittest.TestCase):
             停止事件=threading.Event(),
             页面恢复失败=False,
             op=SimpleNamespace(获取屏幕图像cv=Mock(side_effect=[
-                模式画面, 模式画面, 搜索画面, 搜索画面,
+                模式画面, 模式画面, 搜索画面, 搜索画面, 搜索画面,
             ])),
             识别点击画面=Mock(return_value=模式页),
             点击=Mock(return_value=True),
@@ -180,7 +257,7 @@ class 打开进攻页面测试(unittest.TestCase):
         )
         任务.上下文 = 上下文
         任务.模板识别 = Mock()
-        任务._是否出现下一个 = Mock(side_effect=[False, True, True])
+        任务._是否出现下一个 = Mock(side_effect=[False, False, True, True])
 
         self.assertTrue(任务._等待并点击攻击按钮(
             上下文, 主世界入口已点击=True
@@ -208,15 +285,17 @@ class 打开进攻页面测试(unittest.TestCase):
 
     def test_先点击寻找目标再点击军队页攻击按钮(self):
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
-        页面状态 = iter((
-            SimpleNamespace(页面="未知"),
-            SimpleNamespace(页面="未知"),
-            SimpleNamespace(页面="战斗中"),
-        ))
+        页面状态 = iter(
+            [SimpleNamespace(页面="未知")] * 2
+            + [SimpleNamespace(页面="战斗中")] * 8
+        )
         上下文 = SimpleNamespace(
             op=SimpleNamespace(
                 获取屏幕图像cv=Mock(
-                    side_effect=[self.攻击选择画面(), self.军队配置画面(), self.军队配置画面()]
+                    side_effect=[
+                        self.攻击选择画面(),
+                        *[self.军队配置画面()] * 8,
+                    ]
                 )
             ),
             点击=Mock(return_value=True),
@@ -281,7 +360,7 @@ class 打开进攻页面测试(unittest.TestCase):
         任务.模板识别 = Mock()
         任务.主世界入口重试间隔秒 = 0
         任务._识别已存在的战斗页面 = Mock(
-            side_effect=[None, None, None, "战斗中"]
+            side_effect=[None, None, None] + ["战斗中"] * 8
         )
         任务._是否出现下一个 = Mock(return_value=False)
         任务._检测寻找目标按钮 = Mock(side_effect=[None, (137, 445)])
@@ -354,10 +433,10 @@ class 打开进攻页面测试(unittest.TestCase):
 
     def test_攻击按钮点击后直接进入战斗会交给下兵流程(self):
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
-        页面状态 = iter((
-            SimpleNamespace(页面="未知"),
-            SimpleNamespace(页面="战斗中"),
-        ))
+        页面状态 = iter(
+            [SimpleNamespace(页面="未知")]
+            + [SimpleNamespace(页面="战斗中")] * 8
+        )
         上下文 = SimpleNamespace(
             op=SimpleNamespace(
                 获取屏幕图像cv=Mock(return_value=self.军队配置画面())
@@ -404,12 +483,9 @@ class 打开进攻页面测试(unittest.TestCase):
     def test_攻击后结算过渡单帧不会跳过下兵(self):
         """攻击点击后的结算视觉过渡帧必须等下一帧，不能误判为已结算。"""
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
-        页面状态 = iter((
-            None,          # 军队配置页，允许点击攻击
-            "战斗结算",    # 上一场结果层残留
-            "战斗结算",    # 即使连续命中也不能跳过本场下兵
-            "战斗中",      # 下一帧真实战斗页
-        ))
+        页面状态 = iter(
+            [None, "战斗结算", "战斗结算"] + ["战斗中"] * 8
+        )
         上下文 = SimpleNamespace(
             op=SimpleNamespace(
                 获取屏幕图像cv=Mock(return_value=self.军队配置画面())
@@ -465,7 +541,7 @@ class 打开进攻页面测试(unittest.TestCase):
     def test_点击寻找目标后不再关闭主页弹窗(self):
         """攻击流程开始后，过渡帧不能再次触发升级/宝石恢复输入。"""
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
-        页面状态 = iter((None, None, "战斗中"))
+        页面状态 = iter([None, None] + ["战斗中"] * 8)
         上下文 = SimpleNamespace(
             op=SimpleNamespace(
                 获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8))
@@ -492,7 +568,7 @@ class 打开进攻页面测试(unittest.TestCase):
     def test_直接点击军队攻击后不再点击寻找目标(self):
         """军队页攻击已发出后，不能把过渡帧上的橙色区域当入口。"""
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
-        页面状态 = iter((None, None, "战斗中"))
+        页面状态 = iter([None, None] + ["战斗中"] * 8)
         上下文 = SimpleNamespace(
             op=SimpleNamespace(
                 获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8))
@@ -532,7 +608,9 @@ class 打开进攻页面测试(unittest.TestCase):
             置脚本状态=Mock(),
             识别点击画面=Mock(side_effect=lambda **_: next(页面状态)),
         )
-        任务._识别已存在的战斗页面 = Mock(side_effect=[None, "战斗中"])
+        任务._识别已存在的战斗页面 = Mock(
+            side_effect=[None] + ["战斗中"] * 8
+        )
         任务._检测攻击按钮 = Mock(side_effect=[(705, 535), None, None])
         任务._检测寻找目标按钮 = Mock(return_value=None)
         任务._是否出现下一个 = Mock(return_value=False)
@@ -563,7 +641,7 @@ class 打开进攻页面测试(unittest.TestCase):
         任务._检测攻击按钮 = Mock(side_effect=[(705, 535), None, None])
         任务._检测寻找目标按钮 = Mock(return_value=None)
         任务._识别已存在的战斗页面 = Mock(
-            side_effect=[None, None, "战斗中"]
+            side_effect=[None, None] + ["战斗中"] * 8
         )
         任务._标记本场资源评分不可用 = Mock()
 
@@ -574,6 +652,32 @@ class 打开进攻页面测试(unittest.TestCase):
         ]
         self.assertTrue(强制调用)
         任务._标记本场资源评分不可用.assert_called_once()
+
+    def test_过渡帧单次战斗判定后仍优先等待搜索页按钮(self):
+        """过渡帧短暂像战斗页时，等下一帧搜索按钮后仍须先评分。"""
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=self.军队配置画面())
+            ),
+            点击=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            停止事件=threading.Event(),
+        )
+        任务._是否出现下一个 = Mock(side_effect=[False, False, True, True])
+        任务._检测攻击按钮 = Mock(side_effect=[(705, 535), None, None])
+        任务._检测寻找目标按钮 = Mock(return_value=None)
+        任务._识别已存在的战斗页面 = Mock(
+            side_effect=[None, None, "战斗中"]
+        )
+        任务._标记本场资源评分不可用 = Mock()
+
+        self.assertTrue(任务._等待并点击攻击按钮(上下文))
+        self.assertFalse(getattr(上下文, "_入口已进入战斗", False))
+        self.assertEqual(上下文.本场资源评分状态, "待评分")
+        self.assertEqual(任务._是否出现下一个.call_count, 4)
+        任务._标记本场资源评分不可用.assert_not_called()
 
     def test_攻击后强制新帧的假结算不能跳过下兵(self):
         """强制截图也可能命中旧结算层，必须继续等真正的战斗页。"""
@@ -591,7 +695,9 @@ class 打开进攻页面测试(unittest.TestCase):
         任务._检测攻击按钮 = Mock(side_effect=[(705, 535), None, None])
         任务._检测寻找目标按钮 = Mock(return_value=None)
         任务._识别已存在的战斗页面 = Mock(
-            side_effect=[None, None, "战斗结算", "战斗中"]
+            side_effect=[
+                None, None, "战斗结算", "战斗中", "战斗中", "战斗中", "战斗中"
+            ]
         )
         任务._标记本场资源评分不可用 = Mock()
 
@@ -670,7 +776,7 @@ class 打开进攻页面测试(unittest.TestCase):
 
     def test_主世界打鱼任务出口未确认主世界时禁止下一轮(self):
         """回营子任务误报成功时，外层任务仍不能放行下一轮。"""
-        主世界打鱼模块 = importlib.import_module("任务流程.主世界打鱼.__init__")
+        主世界打鱼模块 = importlib.import_module("任务流程.主世界打鱼")
         执行顺序 = []
 
         class 假子任务:
@@ -719,7 +825,7 @@ class 打开进攻页面测试(unittest.TestCase):
         )
 
     def test_军队未满时主世界任务跳过搜索和下兵(self):
-        主世界打鱼模块 = importlib.import_module("任务流程.主世界打鱼.__init__")
+        主世界打鱼模块 = importlib.import_module("任务流程.主世界打鱼")
         执行顺序 = []
 
         class 假入口任务:

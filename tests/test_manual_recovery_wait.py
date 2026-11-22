@@ -1,7 +1,7 @@
 import threading
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from 模块.ADB设备操作类 import ADB错误
 from 任务流程.基础任务框架 import 任务上下文
@@ -91,6 +91,28 @@ class 人工安全恢复等待测试(unittest.TestCase):
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
+    def test_安全待命在已确认战斗后处理战后宝箱并等待主页复核(self):
+        机器人 = self._创建机器人()
+        页面序列 = iter([
+            self._页面("未知"),
+            self._页面("战斗星级奖励", 可信度=0.99),
+            self._页面("主世界主页", "主世界", 0.78),
+            self._页面("主世界主页", "主世界", 0.78),
+        ])
+        上下文 = SimpleNamespace(
+            识别点击画面=Mock(side_effect=lambda **_参数: next(页面序列)),
+            处理战斗星级奖励弹窗=Mock(return_value=True),
+            _战斗结束已确认=True,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+
+        self.assertTrue(机器人._等待人工恢复主世界(上下文, Mock()))
+
+        上下文.处理战斗星级奖励弹窗.assert_called_once_with()
+        self.assertGreater(上下文._战后星级奖励检查截止时间, 0)
+        self.assertEqual(上下文.识别点击画面.call_count, 4)
+
     def test_低置信度战斗模式页不解除安全待命(self):
         机器人 = self._创建机器人()
         模式页 = self._页面("主世界战斗模式选择", "主世界", 0.89)
@@ -134,6 +156,197 @@ class 人工安全恢复等待测试(unittest.TestCase):
             "断线" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
+
+    def test_满仓待机期间断线会受控重连并继续待机(self):
+        机器人 = self._创建机器人()
+        主页面 = self._页面("主世界主页", "主世界", 0.78)
+        断线页 = self._页面("断线弹窗")
+        页面序列 = iter([主页面, 断线页, 断线页, 主页面, 主页面])
+        延时次数 = 0
+        上下文 = None
+
+        def 待机延时(_毫秒):
+            nonlocal 延时次数
+            self.assertTrue(getattr(上下文, "_任务计划长时间等待", False))
+            延时次数 += 1
+            if 延时次数 >= 3:
+                机器人.停止事件.set()
+
+        上下文 = SimpleNamespace(
+            停止事件=机器人.停止事件,
+            页面恢复失败=False,
+            机器人标志="robot_1",
+            识别点击画面=Mock(side_effect=lambda **_参数: next(页面序列)),
+            数据库=SimpleNamespace(
+                获取最新完整状态=Mock(return_value=SimpleNamespace(状态数据={
+                    "家乡资源": {
+                        "金币": 31_000_000,
+                        "圣水": 31_000_000,
+                        "黑油": 480_000,
+                    }
+                })),
+                获取近期家乡资源峰值=Mock(return_value={
+                    "金币": 31_000_000,
+                    "圣水": 31_000_000,
+                    "黑油": 480_000,
+                }),
+            ),
+            置脚本状态=Mock(),
+            脚本延时=Mock(side_effect=待机延时),
+        )
+        检测登录 = Mock()
+        检测登录.执行.return_value = True
+
+        with patch("线程.自动化机器人.更新家乡资源状态任务") as 更新资源, \
+                patch("线程.自动化机器人.是否目标资源打满", return_value=True):
+            更新资源.return_value.执行.return_value = True
+            self.assertFalse(机器人._满仓待机并监测断线(上下文, 检测登录))
+
+        检测登录.执行.assert_called_once_with(首次登录=False)
+        self.assertEqual(上下文.识别点击画面.call_count, 5)
+        self.assertTrue(any(
+            "满仓待机检测到断线" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+        self.assertFalse(上下文._任务计划长时间等待)
+
+    def test_满仓待机四分钟后只在确认主页时轻拖保活(self):
+        机器人 = self._创建机器人()
+        机器人.机器人标志 = "robot_1"
+        主页面 = self._页面("主世界主页", "主世界", 0.78)
+        延时次数 = 0
+
+        def 待机延时(_毫秒):
+            nonlocal 延时次数
+            延时次数 += 1
+            if 延时次数 >= 2:
+                机器人.停止事件.set()
+
+        滑动 = Mock(return_value=True)
+        上下文 = SimpleNamespace(
+            停止事件=机器人.停止事件,
+            页面恢复失败=False,
+            机器人标志="robot_1",
+            识别点击画面=Mock(return_value=主页面),
+            雷电模拟器=SimpleNamespace(滑动=滑动),
+            _满仓待机上次保活时间=100.0,
+            数据库=SimpleNamespace(
+                获取最新完整状态=Mock(return_value=SimpleNamespace(状态数据={
+                    "家乡资源": {
+                        "金币": 31_000_000,
+                        "圣水": 31_000_000,
+                        "黑油": 480_000,
+                    }
+                })),
+                获取近期家乡资源峰值=Mock(return_value={
+                    "金币": 31_000_000,
+                    "圣水": 31_000_000,
+                    "黑油": 480_000,
+                }),
+            ),
+            置脚本状态=Mock(),
+            脚本延时=Mock(side_effect=待机延时),
+        )
+
+        with patch("线程.自动化机器人.time.monotonic", return_value=341.0), \
+                patch("线程.自动化机器人.更新家乡资源状态任务") as 更新资源, \
+                patch("线程.自动化机器人.是否目标资源打满", return_value=True):
+            更新资源.return_value.执行.return_value = True
+            机器人._满仓待机并监测断线(上下文, Mock())
+
+        滑动.assert_called_once_with((300, 260), (340, 260), 时长毫秒=350)
+
+    def test_满仓待机未知页面和四分钟间隔内都不保活(self):
+        机器人 = self._创建机器人()
+        滑动 = Mock()
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            _战斗中=False,
+            继续事件=threading.Event(),
+            _满仓待机上次保活时间=100.0,
+            雷电模拟器=SimpleNamespace(滑动=滑动),
+            置脚本状态=Mock(),
+        )
+        上下文.继续事件.set()
+
+        with patch("线程.自动化机器人.time.monotonic", return_value=339.0):
+            self.assertFalse(机器人._满仓待机安全轻拖(
+                上下文, self._页面("未知", "未知", 0.99)
+            ))
+            self.assertFalse(机器人._满仓待机安全轻拖(
+                上下文, self._页面("主世界主页", "主世界", 0.78)
+            ))
+
+        滑动.assert_not_called()
+
+    def test_满仓待机中资源降到容量以下时请求恢复刷资源(self):
+        机器人 = self._创建机器人()
+        机器人.机器人标志 = "robot_1"
+        主页面 = self._页面("主世界主页", "主世界", 0.96)
+        延时次数 = 0
+
+        def 待机延时(_毫秒):
+            nonlocal 延时次数
+            延时次数 += 1
+            if 延时次数 >= 2:
+                机器人.停止事件.set()
+
+        状态 = SimpleNamespace(状态数据={
+            "家乡资源": {"金币": 3_046_305, "圣水": 822_720, "黑油": 139_035}
+        })
+        上下文 = SimpleNamespace(
+            停止事件=机器人.停止事件,
+            页面恢复失败=False,
+            机器人标志="robot_1",
+            识别点击画面=Mock(return_value=主页面),
+            数据库=SimpleNamespace(
+                获取最新完整状态=Mock(return_value=状态),
+                获取近期家乡资源峰值=Mock(return_value={
+                    "金币": 31_000_000, "圣水": 31_000_000, "黑油": 480_000
+                }),
+            ),
+            置脚本状态=Mock(),
+            脚本延时=Mock(side_effect=待机延时),
+        )
+
+        with patch("线程.自动化机器人.更新家乡资源状态任务") as 更新资源, \
+                patch("线程.自动化机器人.是否目标资源打满", return_value=False) as 判断满仓:
+            更新资源.return_value.执行.return_value = True
+            结果 = 机器人._满仓待机并监测断线(上下文, Mock())
+
+        更新资源.return_value.执行.assert_called_once_with()
+        判断满仓.assert_called_once()
+        self.assertTrue(结果)
+        self.assertTrue(any(
+            "资源已从满仓状态下降" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_自动重连失败后仍只读待命并在人工回主页后接续(self):
+        机器人 = self._创建机器人()
+        断线页 = self._页面("断线弹窗")
+        主页 = self._页面("主世界主页", "主世界", 0.78)
+        上下文 = SimpleNamespace(
+            识别点击画面=Mock(side_effect=[断线页, 断线页, 主页, 主页]),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+        检测登录 = Mock()
+
+        def 重连失败(**_参数):
+            上下文.页面恢复失败 = True
+            机器人.停止事件.set()
+            return False
+
+        检测登录.执行.side_effect = 重连失败
+
+        self.assertTrue(机器人._等待人工恢复主世界(上下文, 检测登录))
+
+        self.assertEqual(上下文.识别点击画面.call_count, 4)
+        检测登录.执行.assert_called_once_with(首次登录=False)
+        self.assertFalse(机器人.停止事件.is_set())
+        self.assertTrue(上下文._主世界战斗模式选择页 is False)
 
     def test_停止事件会结束安全待命(self):
         机器人 = self._创建机器人()

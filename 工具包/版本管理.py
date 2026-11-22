@@ -1,21 +1,69 @@
+import hashlib
 import os
 import sys
 import subprocess
 import re
+from functools import lru_cache
+
+
+@lru_cache(maxsize=4)
+def _获取可执行文件短哈希(路径):
+    """流式读取当前程序文件，给打包版提供可与 EXE 核对的短标识。"""
+    摘要 = hashlib.sha256()
+    with open(路径, "rb") as 文件:
+        for 块 in iter(lambda: 文件.read(1024 * 1024), b""):
+            摘要.update(块)
+    return 摘要.hexdigest()[:8]
+
+
+def 准备版本号生成环境(项目根, 环境变量=None):
+    """优先保留项目明确记录的发布版本，显式环境变量仍可覆盖。"""
+    环境 = dict(os.environ if 环境变量 is None else 环境变量)
+    if str(环境.get("COC_RELEASE_VERSION", "") or "").strip():
+        return 环境
+
+    版本路径 = os.path.join(项目根, "版本号.txt")
+    if os.path.isfile(版本路径):
+        with open(版本路径, "r", encoding="utf-8") as 文件:
+            版本号 = 文件.read().strip()
+        if 版本号:
+            环境["COC_RELEASE_VERSION"] = 版本号
+    return 环境
+
+
+def _获取版本文件路径():
+    """返回发布版本文件路径；源码下取项目根，打包后取运行库根。"""
+    if hasattr(sys, "_MEIPASS"):
+        项目根 = sys._MEIPASS
+    else:
+        项目根 = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(项目根, "版本号.txt")
+
 
 def 获取本地版本号():
     """
-    获取版本号，优先从 git tag 获取，支持打包环境读取版本文件。
-    返回最简洁的版本号（tag 名），如果 HEAD 不在 tag 上，则返回最近 tag。
-    失败时返回本地版本文件内容或“本地版”。
+    优先读取源码/安装包声明的版本；没有版本文件时再回退到 Git 标签。
     """
     是否打包环境 = hasattr(sys, '_MEIPASS')
-    当前目录 = sys._MEIPASS if 是否打包环境 else os.path.dirname(os.path.abspath(__file__))
-    版本路径 = os.path.join(当前目录, "版本号.txt")
+    版本路径 = _获取版本文件路径()
 
     if 是否打包环境 and os.path.exists(版本路径):
         with open(版本路径, "r", encoding="utf-8") as f:
-            return f.read().strip()
+            版本号 = f.read().strip()
+        if 版本号:
+            try:
+                短哈希 = _获取可执行文件短哈希(sys.executable)
+            except OSError:
+                短哈希 = ""
+            if 短哈希:
+                return f"{版本号} · {短哈希}"
+        return 版本号
+
+    if os.path.isfile(版本路径):
+        with open(版本路径, "r", encoding="utf-8") as f:
+            版本号 = f.read().strip()
+        if 版本号:
+            return 版本号
 
     try:
         简洁版本号 = subprocess.check_output(
@@ -43,15 +91,12 @@ def 获取本地版本号():
 
 def 获取本地易读版本号():
     """
-    返回更易读的版本号字符串。
-    解析 git describe --tags --always --dirty 的输出，显示正式版或开发版说明。
-    打包环境从 VERSION.txt 读取。
+    返回与源码/安装包版本文件一致的易读版本号；缺失时回退到 Git 描述。
     """
     是否打包 = hasattr(sys, '_MEIPASS')
-    当前目录 = sys._MEIPASS if 是否打包 else os.path.dirname(os.path.abspath(__file__))
-    版本路径 = os.path.join(当前目录, "版本号.txt")
+    版本路径 = _获取版本文件路径()
 
-    if 是否打包 and os.path.exists(版本路径):
+    if os.path.exists(版本路径):
         with open(版本路径, "r", encoding="utf-8") as f:
             原始版本 = f.read().strip()
     else:

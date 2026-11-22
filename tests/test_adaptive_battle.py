@@ -15,6 +15,24 @@ from 任务流程.主世界打鱼.等待战斗结束并回营 import 等待战�
 
 
 class 自适应战斗测试(unittest.TestCase):
+    def test_连续搜索每十个候选继续降低资源门槛(self):
+        任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
+        上下文 = SimpleNamespace(置脚本状态=Mock())
+
+        第十次 = 任务.调整搜索目标(上下文, 3_000_000, 10)
+        第二十次 = 任务.调整搜索目标(上下文, 3_000_000, 20)
+
+        self.assertEqual(第十次, 2_700_000)
+        self.assertEqual(第二十次, 2_400_000)
+
+    def test_连续搜索资源门槛最低降到十万(self):
+        任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
+        上下文 = SimpleNamespace(置脚本状态=Mock())
+
+        结果 = 任务.调整搜索目标(上下文, 3_000_000, 100)
+
+        self.assertEqual(结果, 100_000)
+
     def test_进攻界面截图使用中文数据集目录仍能写入(self):
         任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
         任务.数据集目录 = Path("数据集")
@@ -189,7 +207,7 @@ class 自适应战斗测试(unittest.TestCase):
         ])
         self.assertGreaterEqual(len(set(落点)), 3)
 
-    def test_连续低表现切换探索策略(self):
+    def test_胜利打断连续低表现序列(self):
         class 数据库:
             def 获取最新完整状态(self, _标志):
                 return SimpleNamespace(状态数据={
@@ -203,9 +221,26 @@ class 自适应战斗测试(unittest.TestCase):
 
         上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
         任务 = 进攻任务.__new__(进攻任务)
+        self.assertEqual(任务.读取自适应进攻策略(上下文), "集中资源")
+
+    def test_胜利后按已保存建议保留有效进攻策略(self):
+        class 数据库:
+            def 获取最新完整状态(self, _标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {"结果": "失败", "星数": 0, "摧毁率": 32},
+                            {"结果": "胜利", "星数": 2, "摧毁率": 62},
+                        ],
+                        "下一场建议": "分散探索",
+                    }
+                })
+
+        上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
+        任务 = 进攻任务.__new__(进攻任务)
         self.assertEqual(任务.读取自适应进攻策略(上下文), "分散探索")
 
-    def test_最新减少分兵建议优先于旧的分散探索标签(self):
+    def test_结构化分散建议不被诊断文字覆盖(self):
         class 数据库:
             def 获取最新完整状态(self, _标志):
                 return SimpleNamespace(状态数据={
@@ -225,9 +260,9 @@ class 自适应战斗测试(unittest.TestCase):
 
         上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
         任务 = 进攻任务.__new__(进攻任务)
-        self.assertEqual(任务.读取自适应进攻策略(上下文), "集中主力")
+        self.assertEqual(任务.读取自适应进攻策略(上下文), "分散探索")
 
-    def test_最新提高可达评分诊断优先于旧的分散探索标签(self):
+    def test_结构化提高可达评分建议被实际读取(self):
         class 数据库:
             def 获取最新完整状态(self, _标志):
                 return SimpleNamespace(状态数据={
@@ -236,7 +271,7 @@ class 自适应战斗测试(unittest.TestCase):
                             {"结果": "失败", "星数": 0, "摧毁率": 40},
                             {"结果": "胜利", "星数": 1, "摧毁率": 50},
                         ],
-                        "下一场建议": "分散探索",
+                        "下一场建议": "提高目标可达评分",
                         "最近原因": (
                             "已获胜但星数偏低：下一场提高目标可达评分，"
                             "并在有可靠目标时分散入口"
@@ -251,6 +286,53 @@ class 自适应战斗测试(unittest.TestCase):
             任务.读取自适应进攻策略(上下文),
             "提高目标可达评分",
         )
+
+    def test_结构化集中资源建议优先于冲突诊断文字并落实集中主力(self):
+        class 数据库:
+            def 获取最新完整状态(self, _标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {"结果": "失败", "星数": 0, "摧毁率": 33},
+                            {"结果": "失败", "星数": 0, "摧毁率": 34},
+                        ],
+                        "下一场建议": "集中资源",
+                        "最近原因": (
+                            "已确认多方向实际投放但摧毁率低；"
+                            "下一场优先筛选可达评分更高的阵营"
+                        ),
+                    }
+                })
+
+        上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
+        任务 = 进攻任务.__new__(进攻任务)
+
+        self.assertEqual(任务.读取自适应进攻策略(上下文), "集中主力")
+
+    def test_单方向零星失败覆盖过期的集中建议(self):
+        class 数据库:
+            def 获取最新完整状态(self, _标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {
+                                "结果": "失败",
+                                "星数": 0,
+                                "摧毁率": 19,
+                                "进攻方向数量": 1,
+                                "实际投放方向": ["左上"],
+                                "策略": "资源聚焦/集中主力",
+                            }
+                        ],
+                        "下一场建议": "集中资源",
+                        "最近原因": "实际下兵仅覆盖1个方向；入口覆盖不足",
+                    }
+                })
+
+        上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
+        任务 = 进攻任务.__new__(进攻任务)
+
+        self.assertEqual(任务.读取自适应进攻策略(上下文), "分散探索")
 
     def test_提高目标可达评分后稳健三星在可靠入口分散至两个方向(self):
         class 数据库:
@@ -294,7 +376,52 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertIn("提高目标可达评分", 上下文.本场进攻策略)
         self.assertTrue(any("提高目标可达评分" in 文本 and "双方向探索" in 文本 for 文本 in 日志))
 
-    def test_连续一星胜利也切换探索策略(self):
+    def test_资源优先分散探索会先跨方向选目标再受兵力上限截断(self):
+        class 数据库:
+            def 获取最新完整状态(self, _标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {"结果": "失败", "星数": 0, "摧毁率": 25},
+                            {"结果": "失败", "星数": 0, "摧毁率": 25},
+                        ],
+                        "下一场建议": "分散探索",
+                    }
+                })
+
+        上下文 = SimpleNamespace(
+            数据库=数据库(),
+            机器人标志="测试",
+            设置=SimpleNamespace(
+                是否自动配兵=False,
+                自动配兵玩法="资源优先",
+                战利品优先级="均衡",
+            ),
+            当前兵栏清单=[{"类别": "雷龙", "数量": 34}],
+            置脚本状态=Mock(),
+        )
+        任务 = 进攻任务.__new__(进攻任务)
+        目标列表 = [
+            {"类别名称": "金库", "中心坐标": 坐标(160, 340), "靠近边缘": True, "置信度": 0.99},
+            {"类别名称": "圣水瓶", "中心坐标": 坐标(180, 360), "靠近边缘": True, "置信度": 0.99},
+            {"类别名称": "金库", "中心坐标": 坐标(200, 350), "靠近边缘": True, "置信度": 0.99},
+            {"类别名称": "圣水瓶", "中心坐标": 坐标(220, 370), "靠近边缘": True, "置信度": 0.99},
+            {"类别名称": "金矿", "中心坐标": 坐标(625, 345), "靠近边缘": True, "置信度": 0.99},
+            {"类别名称": "圣水采集器", "中心坐标": 坐标(660, 365), "靠近边缘": True, "置信度": 0.99},
+        ]
+
+        选择结果 = 任务.选择集中进攻目标(上下文, 目标列表)
+        选择方向 = {
+            取进攻方向(目标["中心坐标"])
+            for 目标 in 选择结果
+        }
+
+        self.assertEqual(len(选择结果), 4)
+        self.assertEqual(len(选择方向), 2)
+        self.assertEqual(set(上下文.本场进攻方向), 选择方向)
+        self.assertIn("分散探索", 上下文.本场进攻策略)
+
+    def test_一星胜利不当作低表现(self):
         class 数据库:
             def 获取最新完整状态(self, _标志):
                 return SimpleNamespace(状态数据={
@@ -308,9 +435,9 @@ class 自适应战斗测试(unittest.TestCase):
 
         上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
         任务 = 进攻任务.__new__(进攻任务)
-        self.assertEqual(任务.读取自适应进攻策略(上下文), "分散探索")
+        self.assertEqual(任务.读取自适应进攻策略(上下文), "集中资源")
 
-    def test_连续低表现时前八个候选临时提高评分与可达门槛(self):
+    def test_连续低表现时前二十个候选临时提高评分与可达门槛(self):
         class 数据库:
             def 获取最新完整状态(self, _标志):
                 return SimpleNamespace(状态数据={
@@ -328,9 +455,227 @@ class 自适应战斗测试(unittest.TestCase):
         评分, 可达比例, 说明 = 任务.获取自适应资源筛选门槛(上下文, 1)
         self.assertEqual(评分, 6.5)
         self.assertEqual(可达比例, 0.70)
-        self.assertIn("前8个候选", 说明)
+        self.assertIn("前20个候选", 说明)
 
-    def test_第九个候选开始恢复基础评分门槛(self):
+    def test_黑水优先且黑水高的候选放宽代理可达门槛(self):
+        调整 = 搜索目标敌人任务.调整黑水优先可达率门槛
+
+        self.assertEqual(调整(0.70, "黑水", 16834), 0.60)
+        self.assertEqual(调整(0.70, "黑水", 14999), 0.70)
+        self.assertEqual(调整(0.70, "金币", 16834), 0.70)
+        self.assertIsNone(调整(None, "黑水", 16834))
+
+    def test_黑水优先候选资源门槛分阶段放宽且最终取消(self):
+        获取门槛 = 搜索目标敌人任务.获取黑水优先最低候选黑油
+
+        self.assertEqual(获取门槛("黑水", 1), 15000)
+        self.assertEqual(获取门槛("黑水", 40), 15000)
+        self.assertEqual(获取门槛("黑水", 41), 8000)
+        self.assertEqual(获取门槛("黑水", 80), 8000)
+        self.assertEqual(获取门槛("黑水", 81), 0)
+        self.assertEqual(获取门槛("金币", 1), 0)
+
+    def test_未有效投兵的失败不会加严资源搜索门槛(self):
+        class 数据库:
+            def 获取最新完整状态(self, _标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {
+                                "结果": "胜利", "星数": 1, "摧毁率": 44,
+                                "可部署单位数量": 34, "实际投放数量": 26,
+                                "策略样本有效": True,
+                            },
+                            {
+                                "结果": "失败", "星数": 0, "摧毁率": 0,
+                                "可部署单位数量": 34, "实际投放数量": 0,
+                                "策略样本有效": False,
+                            },
+                            {
+                                "结果": "失败", "星数": 0, "摧毁率": 37,
+                                "可部署单位数量": 34, "实际投放数量": 34,
+                                "策略样本有效": True,
+                            },
+                        ],
+                        "下一场建议": "集中资源",
+                    }
+                })
+
+        上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
+        任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
+
+        评分, 可达比例, 说明 = 任务.获取自适应资源筛选门槛(上下文, 1)
+
+        self.assertEqual(评分, 5.0)
+        self.assertIsNone(可达比例)
+        self.assertEqual(说明, "")
+
+    def test_未有效投兵的失败不会触发分散进攻策略(self):
+        class 数据库:
+            def 获取最新完整状态(self, _标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {
+                                "结果": "失败", "星数": 0, "摧毁率": 37,
+                                "可部署单位数量": 34, "实际投放数量": 34,
+                                "策略样本有效": True,
+                            },
+                            {
+                                "结果": "失败", "星数": 0, "摧毁率": 0,
+                                "可部署单位数量": 34, "实际投放数量": 0,
+                                "实际投放方向": ["右下"],
+                                "策略样本有效": False,
+                            },
+                        ],
+                    }
+                })
+
+        上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
+        任务 = 进攻任务.__new__(进攻任务)
+
+        self.assertEqual(任务.读取自适应进攻策略(上下文), "集中资源")
+
+    def test_单个储存建筑低可达率仍会触发自适应跳过(self):
+        """只有一个储存建筑时，也不能让低可达率高价值目标漏过学习筛选。"""
+        日志 = []
+        设置 = SimpleNamespace(是否采集进攻界面图像=False)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=object())),
+            设置=设置,
+            数据库=SimpleNamespace(获取机器人设置=Mock(return_value=SimpleNamespace(
+                战利品优先级="金币",
+                欲进攻资源建筑靠近地图边缘最小比例=0.25,
+            ))),
+            机器人标志="测试",
+            置脚本状态=日志.append,
+        )
+        任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
+        任务.上下文 = 上下文
+        任务.等待下一个按钮出现 = Mock(return_value=True)
+        任务.识别当前资源 = Mock(return_value={"战利品评分": 999})
+        任务.检测器 = SimpleNamespace(检测=Mock(return_value=[]))
+        任务.计算资源易窃取评分 = Mock(return_value=(6.7, {
+            "储存建筑数": 1,
+            "高价值资源可达折算": 9.9,
+        }))
+        任务.打印状态信息 = Mock()
+        任务.获取自适应资源筛选门槛 = Mock(return_value=(5.0, 0.70, "连续低表现"))
+        任务.点击下一个按钮 = Mock(return_value=True)
+
+        with patch.object(
+            搜索目标敌人任务,
+            "是否有足够资源建筑靠近边缘",
+            return_value=True,
+        ), patch.object(
+            搜索目标敌人任务,
+            "已出现图片",
+            return_value=(False, (None, None)),
+        ):
+            结果 = 任务.执行单次搜索(上下文, 搜索次数=1, 最小资源=1)
+
+        self.assertFalse(结果)
+        任务.点击下一个按钮.assert_called_once_with(上下文)
+        self.assertTrue(any("高价值资源可达折算[10%]低于70%" in 文本 for 文本 in 日志))
+
+    def test_黑水高价值目标会通过放宽后的代理可达率(self):
+        日志 = []
+        设置 = SimpleNamespace(是否采集进攻界面图像=False)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=object())),
+            设置=设置,
+            数据库=SimpleNamespace(获取机器人设置=Mock(return_value=SimpleNamespace(
+                战利品优先级="黑水",
+                欲进攻资源建筑靠近地图边缘最小比例=0.25,
+            ))),
+            机器人标志="测试",
+            置脚本状态=日志.append,
+        )
+        任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
+        任务.上下文 = 上下文
+        任务.等待下一个按钮出现 = Mock(return_value=True)
+        任务.识别当前资源 = Mock(return_value={
+            "战利品评分": 999,
+            "黑油": 16834,
+        })
+        任务.检测器 = SimpleNamespace(检测=Mock(return_value=[]))
+        任务.计算资源易窃取评分 = Mock(return_value=(6.7, {
+            "储存建筑数": 1,
+            "高价值资源可达折算": 61.0,
+        }))
+        任务.打印状态信息 = Mock()
+        任务.获取自适应资源筛选门槛 = Mock(return_value=(5.0, 0.70, "连续低表现"))
+        任务.点击下一个按钮 = Mock(return_value=True)
+
+        with patch.object(
+            搜索目标敌人任务,
+            "是否有足够资源建筑靠近边缘",
+            return_value=True,
+        ), patch.object(
+            搜索目标敌人任务,
+            "已出现图片",
+            return_value=(False, (None, None)),
+        ):
+            结果 = 任务.执行单次搜索(上下文, 搜索次数=1, 最小资源=1)
+
+        self.assertTrue(结果)
+        任务.点击下一个按钮.assert_not_called()
+        self.assertTrue(any("放宽到60%" in 文本 for 文本 in 日志))
+
+    def test_候选预算内低黑水目标在YOLO前跳过(self):
+        日志 = []
+        设置 = SimpleNamespace(是否采集进攻界面图像=False)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=object())),
+            设置=设置,
+            数据库=SimpleNamespace(获取机器人设置=Mock(return_value=SimpleNamespace(
+                战利品优先级="黑水",
+                欲进攻资源建筑靠近地图边缘最小比例=0.25,
+            ))),
+            机器人标志="测试",
+            置脚本状态=日志.append,
+        )
+        任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
+        任务.上下文 = 上下文
+        任务.等待下一个按钮出现 = Mock(return_value=True)
+        任务.识别当前资源 = Mock(return_value={
+            "战利品评分": 999,
+            "黑油": 9072,
+        })
+        任务.检测器 = SimpleNamespace(检测=Mock(return_value=[]))
+        任务.计算资源易窃取评分 = Mock(return_value=(6.7, {}))
+        任务.打印状态信息 = Mock()
+        任务.获取自适应资源筛选门槛 = Mock(return_value=(5.0, None, ""))
+        任务.点击下一个按钮 = Mock(return_value=True)
+
+        结果 = 任务.执行单次搜索(上下文, 搜索次数=29, 最小资源=1)
+
+        self.assertFalse(结果)
+        任务.检测器.检测.assert_not_called()
+        任务.点击下一个按钮.assert_called_once_with(上下文)
+        self.assertTrue(any("最低目标黑油[15,000]" in 文本 for 文本 in 日志))
+
+    def test_胜利后不沿用之前的低表现目标筛选门槛(self):
+        class 数据库:
+            def 获取最新完整状态(self, _标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {"结果": "失败", "星数": 0, "摧毁率": 21},
+                            {"结果": "失败", "星数": 0, "摧毁率": 35},
+                            {"结果": "胜利", "星数": 2, "摧毁率": 62},
+                        ],
+                    }
+                })
+
+        上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
+        任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
+        评分, 可达比例, 说明 = 任务.获取自适应资源筛选门槛(上下文, 1)
+        self.assertEqual(评分, 5.0)
+        self.assertIsNone(可达比例)
+        self.assertEqual(说明, "")
+
+    def test_第九个候选仍保持提高目标可达评分门槛(self):
         class 数据库:
             def 获取最新完整状态(self, _标志):
                 return SimpleNamespace(状态数据={
@@ -345,7 +690,53 @@ class 自适应战斗测试(unittest.TestCase):
 
         上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
         任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
-        self.assertEqual(任务.获取自适应资源筛选门槛(上下文, 9), (5.0, None, ""))
+        评分, 可达比例, 说明 = 任务.获取自适应资源筛选门槛(上下文, 9)
+        self.assertEqual(评分, 6.5)
+        self.assertEqual(可达比例, 0.70)
+        self.assertIn("前20个候选", 说明)
+
+    def test_低表现期间更换下兵策略仍保留目标可达门槛(self):
+        for 建议 in ("集中资源", "分散探索"):
+            with self.subTest(下一场建议=建议):
+                class 数据库:
+                    def 获取最新完整状态(self, _标志):
+                        return SimpleNamespace(状态数据={
+                            "战斗学习": {
+                                "近期": [
+                                    {"结果": "失败", "星数": 0, "摧毁率": 49},
+                                    {"结果": "失败", "星数": 0, "摧毁率": 12},
+                                    {"结果": "失败", "星数": 0, "摧毁率": 24},
+                                ],
+                                "下一场建议": 建议,
+                            }
+                        })
+
+                上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
+                任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
+                评分, 可达比例, 说明 = 任务.获取自适应资源筛选门槛(上下文, 1)
+                self.assertEqual(评分, 6.5)
+                self.assertEqual(可达比例, 0.70)
+                self.assertIn("前20个候选", 说明)
+
+    def test_第二十一个候选放宽总分但继续过滤低可达目标(self):
+        class 数据库:
+            def 获取最新完整状态(self, _标志):
+                return SimpleNamespace(状态数据={
+                    "战斗学习": {
+                        "近期": [
+                            {"结果": "失败", "摧毁率": 21},
+                            {"结果": "失败", "摧毁率": 35},
+                        ],
+                        "下一场建议": "提高目标可达评分",
+                    }
+                })
+
+        上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
+        任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
+        评分, 可达比例, 说明 = 任务.获取自适应资源筛选门槛(上下文, 21)
+        self.assertEqual(评分, 5.0)
+        self.assertEqual(可达比例, 0.70)
+        self.assertIn("继续筛选高价值资源可达率", 说明)
 
     def test_自适应门槛不会低于基础评分门槛(self):
         class 数据库:
@@ -392,7 +783,7 @@ class 自适应战斗测试(unittest.TestCase):
         任务 = 进攻任务.__new__(进攻任务)
         self.assertEqual(任务.读取自适应进攻策略(上下文), "提高目标可达评分")
 
-    def test_进攻策略保留高可达失败后的集中资源建议(self):
+    def test_进攻策略将集中资源建议落实为集中主力(self):
         class 数据库:
             def 获取最新完整状态(self, _标志):
                 return SimpleNamespace(状态数据={
@@ -407,7 +798,7 @@ class 自适应战斗测试(unittest.TestCase):
 
         上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
         任务 = 进攻任务.__new__(进攻任务)
-        self.assertEqual(任务.读取自适应进攻策略(上下文), "集中资源")
+        self.assertEqual(任务.读取自适应进攻策略(上下文), "集中主力")
 
     def test_拆分OCR框仍能读取百分比(self):
         结果 = [
@@ -1447,9 +1838,62 @@ class 自适应战斗测试(unittest.TestCase):
         任务.刷新选中兵种后的下兵边界 = lambda *_参数: None
         任务.战斗是否仍在进行 = lambda *_参数: True
         任务.是否为灰色图片 = lambda *_参数: False
-        with patch.object(任务, "尝试下兵至可用位置", side_effect=[(True, (100, 100)), (True, (100, 100))]):
+        with patch.object(任务, "尝试下兵至可用位置", side_effect=[(True, (100, 100)), (True, (700, 500))]):
             任务.执行下兵流程(上下文, [{"中心坐标": 坐标(100, 100)}])
         self.assertEqual(点击记录, [(35, 35)])
+        self.assertEqual(上下文._本场已确认投放数量, 2)
+        self.assertEqual(
+            上下文._本场已确认投放方向集合,
+            {
+                取进攻方向(坐标(100, 100)),
+                取进攻方向(坐标(700, 500)),
+            },
+        )
+
+    def test_高速批次只按兵栏确认的消费数记录额外落点(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        设置 = SimpleNamespace(是否启用高速下兵=False, 下兵间隔毫秒=5)
+        上下文 = SimpleNamespace(
+            设置=设置,
+            当前兵栏清单=[
+                {"槽位": 1, "类别": "兵种", "数量": 3,
+                 "区域": (20, 20, 50, 50), "名称": "测试兵"}
+            ],
+            点击=lambda *_参数, **_关键字: True,
+            置脚本状态=lambda *_参数, **_关键字: None,
+            脚本延时=lambda _毫秒: None,
+            鼠标=SimpleNamespace(连续点击多点=lambda *_参数: None),
+            op=SimpleNamespace(
+                获取屏幕图像cv=lambda *_区域: np.full(
+                    (30, 30, 3), (0, 80, 200), dtype=np.uint8
+                )
+            ),
+        )
+        任务.准备可下兵区域 = lambda *_参数, **_关键字: None
+        任务.生成可下兵候选点 = lambda *_参数: [(100, 100)]
+        任务.记录可下兵点标记 = lambda *_参数: None
+        任务.刷新选中兵种后的下兵边界 = lambda *_参数: setattr(
+            上下文, "_部署边界已刷新", True
+        )
+        任务.战斗是否仍在进行 = lambda *_参数: True
+        任务.是否为灰色图片 = lambda *_参数: False
+        任务.尝试下兵至可用位置 = lambda *_参数: (True, (100, 100))
+        任务.取高速下兵批次 = lambda *_参数: 3
+        批量落点 = [(700, 100), (700, 500)]
+        任务.生成高速分散下兵点 = lambda *_参数: 批量落点
+        def 执行批次(上下文, *_参数, **_关键字):
+            上下文._最近高速批次使用分散 = True
+            return 2
+        任务.执行高速下兵批次 = 执行批次
+        任务.读取槽位显示兵量 = lambda *_参数, **_关键字: 0
+
+        任务.执行下兵流程(上下文, [{"中心坐标": 坐标(100, 100)}])
+
+        self.assertEqual(上下文._本场已确认投放数量, 3)
+        self.assertEqual(
+            上下文._本场已确认投放方向集合,
+            {取进攻方向(坐标(x, y)) for x, y in [(100, 100), *批量落点]},
+        )
 
     def test_实际下兵顺序把英雄前置避免战斗末段才释放技能(self):
         任务 = 进攻任务.__new__(进攻任务)

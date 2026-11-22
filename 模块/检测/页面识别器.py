@@ -289,6 +289,10 @@ class 页面识别器:
                 if (
                     面积 >= 600
                     and 宽 >= max(55, int(区域宽度 * 0.28))
+                    # 新版联赛概况页有大面积红色内容面板，会横跨整个
+                    # 左下角裁剪区；不能把这块背景当成战斗中的放弃按钮。
+                    # 实机放弃按钮仍明显窄于裁剪区宽度的82%。
+                    and 宽 <= max(55, int(区域宽度 * 0.82))
                     and 高 >= 20
                     and 宽 / max(1, 高) >= 1.5
                     and x <= max(40, int(区域宽度 * 0.25))
@@ -298,6 +302,72 @@ class 页面识别器:
         except Exception:
             return 0.0
         return 0.0
+
+    @staticmethod
+    def 定位联赛概况关闭按钮(图像: np.ndarray) -> tuple[int, int] | None:
+        """识别新版联赛概况面板，返回顶部右侧关闭 X。"""
+        if not isinstance(图像, np.ndarray) or 图像.ndim != 3 or 图像.size == 0:
+            return None
+        try:
+            原高, 原宽 = 图像.shape[:2]
+            if 原高 < 300 or 原宽 < 400:
+                return None
+            if (原宽, 原高) != (800, 600):
+                参考图 = cv2.resize(图像, (800, 600), interpolation=cv2.INTER_AREA)
+            else:
+                参考图 = 图像
+            hsv = cv2.cvtColor(参考图, cv2.COLOR_BGR2HSV)
+            红色 = (
+                ((hsv[:, :, 0] <= 12) | (hsv[:, :, 0] >= 170))
+                & (hsv[:, :, 1] >= 90)
+                & (hsv[:, :, 2] >= 80)
+            ).astype(np.uint8)
+
+            # 联赛页面主体是占据画面下半部的大型红色内容板；战场的
+            # 红色地图/按钮不会在这一区域形成同等覆盖率。
+            主体 = 红色[int(600 * 0.36):int(600 * 0.95), int(800 * 0.03):int(800 * 0.97)]
+            if 主体.size == 0 or float(np.mean(主体)) < 0.40:
+                return None
+
+            # 面板顶部有三块浅色分页标签，分别复核，避免仅凭红色背景
+            # 将结算或其它红色活动面板误当成联赛页。
+            中性浅色 = (hsv[:, :, 1] < 120) & (hsv[:, :, 2] > 130)
+            分页区域 = ((0.10, 0.37), (0.38, 0.62), (0.63, 0.90))
+            for 左比例, 右比例 in 分页区域:
+                区域 = 中性浅色[
+                    int(600 * 0.10):int(600 * 0.22),
+                    int(800 * 左比例):int(800 * 右比例),
+                ]
+                if 区域.size == 0 or float(np.mean(区域)) < 0.55:
+                    return None
+
+            # 只取最右上角红色 X 的连通区域；它是安全关闭目标，返回
+            # 点按原始截图尺寸缩放，调用方仍须双帧确认页面后才能点击。
+            x0, x1 = int(800 * 0.94), int(800 * 0.99)
+            y0, y1 = int(600 * 0.04), int(600 * 0.18)
+            _, _, 统计, 重心 = cv2.connectedComponentsWithStats(
+                红色[y0:y1, x0:x1], 8
+            )
+            候选 = []
+            for 索引 in range(1, len(统计)):
+                x, y, 宽, 高, 面积 = 统计[索引]
+                cx, cy = 重心[索引]
+                if (
+                    面积 >= 120
+                    and 宽 >= 16
+                    and 高 >= 20
+                    and x0 + cx >= 800 * 0.945
+                ):
+                    候选.append((int(面积), x0 + cx, y0 + cy))
+            if not 候选:
+                return None
+            _, 中心x, 中心y = max(候选)
+            return (
+                int(round(中心x * 原宽 / 800)),
+                int(round(中心y * 原高 / 600)),
+            )
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return None
 
     def _奖励卡片结构数量(self, 图像: np.ndarray) -> int:
         """统计奖励弹窗中央的竖向卡片，过滤普通页面的红色物体误报。"""
@@ -1115,6 +1185,116 @@ class 页面识别器:
             return None
         return self._定位战斗星级奖励确定按钮(图像)
 
+    @staticmethod
+    def _规范战后奖励文字(文字) -> str:
+        """统一新版繁简混排奖励弹窗的常见 OCR 字形。"""
+        转换 = str.maketrans({
+            "勝": "胜", "寶": "宝", "動": "动", "將": "将",
+            "獲": "获", "會": "会", "過": "过", "領": "领",
+            "畫": "画", "實": "实",
+        })
+        return "".join(str(文字 or "").translate(转换).split())
+
+    @staticmethod
+    def _OCR框中心(识别项) -> tuple[int, int] | None:
+        try:
+            框 = np.asarray(识别项[0], dtype=np.float32).reshape(-1, 2)
+            if 框.shape[0] < 4:
+                return None
+            x, y = np.mean(框, axis=0)
+            return round(float(x)), round(float(y))
+        except (IndexError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _定位跳过确认绿色按钮(图像: np.ndarray) -> tuple[int, int] | None:
+        """在跳过确认文字成立后，只找中央偏右的绿色“是”按钮。"""
+        if not isinstance(图像, np.ndarray) or 图像.ndim < 3 or not 图像.size:
+            return None
+        try:
+            高, 宽 = 图像.shape[:2]
+            hsv = cv2.cvtColor(图像, cv2.COLOR_BGR2HSV)
+            x1, x2 = round(宽 * 0.42), round(宽 * 0.78)
+            y1, y2 = round(高 * 0.54), round(高 * 0.80)
+            区域 = hsv[y1:y2, x1:x2]
+            绿色 = (
+                (区域[:, :, 0] >= 35)
+                & (区域[:, :, 0] <= 100)
+                & (区域[:, :, 1] >= 75)
+                & (区域[:, :, 2] >= 110)
+            ).astype(np.uint8)
+            绿色 = cv2.morphologyEx(
+                绿色,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)),
+            )
+            _, _, 统计, _ = cv2.connectedComponentsWithStats(绿色, 8)
+            最低面积 = max(250, int(宽 * 高 * 0.003))
+            候选 = []
+            for x, y, 按钮宽, 按钮高, 面积 in 统计[1:]:
+                中心x = x1 + x + 按钮宽 / 2
+                中心y = y1 + y + 按钮高 / 2
+                if (
+                    面积 >= 最低面积
+                    and 按钮宽 >= int(宽 * 0.12)
+                    and 按钮高 >= int(高 * 0.06)
+                    and 按钮宽 <= int(宽 * 0.30)
+                    and 按钮高 <= int(高 * 0.20)
+                    and 中心x >= 宽 * 0.54
+                    and 中心y >= 高 * 0.57
+                ):
+                    候选.append((面积, (round(中心x), round(中心y))))
+            return max(候选)[1] if 候选 else None
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return None
+
+    def 识别战后奖励按钮(
+        self,
+        图像: np.ndarray,
+        OCR结果,
+        奖励动画处理中: bool = False,
+    ) -> tuple[str, tuple[int, int]] | None:
+        """仅按战后奖励文案与按钮位置定位新奖励页的安全操作点。"""
+        if not isinstance(图像, np.ndarray) or 图像.ndim < 2 or not 图像.size:
+            return None
+        项目 = [
+            项 for 项 in (OCR结果 or [])
+            if isinstance(项, (list, tuple)) and len(项) >= 2
+        ]
+        文字 = [self._规范战后奖励文字(项[1]) for 项 in 项目]
+        合并文字 = "".join(文字)
+        高, 宽 = 图像.shape[:2]
+
+        if "跳过宝箱动画" in 合并文字 and "仍要跳过" in 合并文字:
+            确认点 = self._定位跳过确认绿色按钮(图像)
+            if 确认点 is not None:
+                return "确认跳过", 确认点
+            return None
+
+        if "已收到" in 合并文字 and "胜利之星" in 合并文字:
+            for 项, 文本 in zip(项目, 文字):
+                if "领取" not in 文本:
+                    continue
+                中心 = self._OCR框中心(项)
+                if 中心 is None:
+                    continue
+                x, y = 中心
+                if 宽 * 0.35 <= x <= 宽 * 0.70 and 高 * 0.68 <= y <= 高 * 0.90:
+                    return "领取", 中心
+            return None
+
+        if 奖励动画处理中:
+            for 项, 文本 in zip(项目, 文字):
+                if 文本 not in {"跳过", "跳过动画", "跳过宝箱动画"}:
+                    continue
+                中心 = self._OCR框中心(项)
+                if 中心 is None:
+                    continue
+                x, y = 中心
+                if x >= 宽 * 0.82 and y >= 高 * 0.80:
+                    return "跳过动画", 中心
+        return None
+
     def 识别(self, 屏幕图像: np.ndarray, 战斗中: bool = False) -> 页面识别结果:
         """识别当前页面；不确定时返回 ``页面=未知``，不触发任何输入。"""
         维护分数 = self._系统维护分数(屏幕图像)
@@ -1178,6 +1358,14 @@ class 页面识别器:
                 世界=None,
                 可信度=断线分数,
                 依据=(f"中央断线弹窗{断线分数:.2f}",),
+            )
+        联赛关闭点 = self.定位联赛概况关闭按钮(屏幕图像)
+        if 联赛关闭点 is not None:
+            return 页面识别结果(
+                页面="联赛概况弹窗",
+                世界=None,
+                可信度=0.98,
+                依据=("下半部红色联赛面板", "顶部三分页标签", "右上角红色关闭X"),
             )
         普通战斗按钮 = self.定位主世界战斗模式普通按钮(屏幕图像)
         if 普通战斗按钮 is not None:

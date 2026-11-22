@@ -79,6 +79,8 @@ class 日志面板(ttk.Frame):
         self._悬浮机器人标签 = None
         self._悬浮状态标签 = None
         self._悬浮阶段标签 = None
+        self._隐藏主界面按钮 = None
+        self._主界面已隐藏 = False
         self._最新阶段 = {}
 
         self._创建界面()
@@ -192,6 +194,10 @@ class 日志面板(ttk.Frame):
             顶栏, text="运行日志", bg="#1c2636", fg="#ffffff",
             font=("Microsoft YaHei UI", 11, "bold"),
         ).pack(side=tk.LEFT)
+        self._隐藏主界面按钮 = ttk.Button(
+            顶栏, text="隐藏主界面", command=self._隐藏主界面,
+        )
+        self._隐藏主界面按钮.pack(side=tk.RIGHT, padx=(0, 6))
         ttk.Button(顶栏, text="关闭悬浮", command=self._关闭悬浮窗).pack(side=tk.RIGHT)
         ttk.Checkbutton(顶栏, text="跟随", variable=self._自动滚动).pack(
             side=tk.RIGHT, padx=(0, 10)
@@ -240,6 +246,21 @@ class 日志面板(ttk.Frame):
         self._更新悬浮状态()
         self._渲染日志()
 
+    def _隐藏主界面(self):
+        """隐藏挡住游戏的大窗口，并重新映射置顶日志窗。"""
+        if not self._悬浮窗已打开():
+            return
+        try:
+            self._主界面已隐藏 = True
+            self.winfo_toplevel().withdraw()
+            # Windows 会随 owner 的隐藏状态收起 Toplevel；主动重新映射，
+            # 让半透明状态/日志窗继续悬浮在游戏画面上。
+            self._悬浮窗口.deiconify()
+            self._悬浮窗口.attributes("-topmost", True)
+            self._悬浮窗口.lift()
+        except tk.TclError:
+            self._主界面已隐藏 = False
+
     def _关闭悬浮窗(self):
         窗口 = self._悬浮窗口
         self._悬浮窗口 = None
@@ -250,6 +271,14 @@ class 日志面板(ttk.Frame):
         if 窗口 is not None and 窗口.winfo_exists():
             窗口.destroy()
         self._悬浮按钮.configure(text="悬浮半透明")
+        if self._主界面已隐藏:
+            self._主界面已隐藏 = False
+            try:
+                主窗口 = self.winfo_toplevel()
+                主窗口.deiconify()
+                主窗口.lift()
+            except tk.TclError:
+                pass
 
     def _定时刷新日志(self):
         """持续消费实时队列，不因当前选中机器人而丢弃消息。"""

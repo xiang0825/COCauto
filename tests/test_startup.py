@@ -1,6 +1,9 @@
 import unittest
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+
+import numpy as np
 
 from 任务流程.启动模拟器 import 启动模拟器任务
 from 任务流程.检测游戏登录状态 import 检测游戏登录状态任务
@@ -143,6 +146,73 @@ class 启动残留研究目标页测试(unittest.TestCase):
 
         self.assertTrue(上下文.页面恢复失败)
         停止事件.set.assert_called_once_with()
+
+
+class 首次启动稳定性复核测试(unittest.TestCase):
+    包名 = "com.supercell.clashofclans"
+
+    def _建立任务(self, *, 前台接口=True):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        设备 = SimpleNamespace()
+        if 前台接口:
+            设备.获取当前前台包名 = Mock(return_value=self.包名)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                设备=设备,
+                获取屏幕图像cv=Mock(return_value=屏幕),
+            ),
+            设置=SimpleNamespace(部落冲突包名=self.包名),
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+        任务 = 检测游戏登录状态任务.__new__(检测游戏登录状态任务)
+        任务.上下文 = 上下文
+        return 任务, 上下文, 屏幕
+
+    def test_缺少前台核验接口不能放行首次缩放(self):
+        任务, 上下文, _屏幕 = self._建立任务(前台接口=False)
+
+        self.assertFalse(任务._确认首次启动稳定())
+        self.assertTrue(上下文.页面恢复失败)
+        self.assertTrue(上下文.停止事件.is_set())
+
+    def test_稳定观察期间出现断线页立即失败不放行手势(self):
+        任务, 上下文, 屏幕 = self._建立任务()
+        页面识别 = Mock()
+        页面识别.识别.side_effect = [
+            SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.82),
+            SimpleNamespace(页面="断线弹窗", 世界=None, 可信度=0.98),
+        ]
+
+        with patch(
+            "任务流程.检测游戏登录状态.time.monotonic",
+            side_effect=[0.0, 0.0, 2.0],
+        ):
+            self.assertFalse(任务._确认首次启动稳定(页面识别))
+
+        self.assertTrue(上下文.页面恢复失败)
+        self.assertTrue(上下文.停止事件.is_set())
+        self.assertEqual(页面识别.识别.call_count, 2)
+        上下文.op.获取屏幕图像cv.assert_called()
+
+    def test_持续确认主世界主页才通过稳定观察(self):
+        任务, 上下文, _屏幕 = self._建立任务()
+        页面识别 = Mock()
+        页面识别.识别.return_value = SimpleNamespace(
+            页面="主世界主页", 世界="主世界", 可信度=0.82
+        )
+
+        with patch(
+            "任务流程.检测游戏登录状态.time.monotonic",
+            side_effect=[0.0, 0.0, 12.0],
+        ):
+            self.assertTrue(任务._确认首次启动稳定(页面识别))
+
+        self.assertFalse(上下文.页面恢复失败)
+        self.assertFalse(上下文.停止事件.is_set())
+        self.assertGreaterEqual(页面识别.识别.call_count, 2)
 
 
 if __name__ == "__main__":

@@ -31,9 +31,11 @@ class 假Runner:
     def __init__(self, *响应):
         self.响应 = list(响应)
         self.命令 = []
+        self.调用参数 = []
 
-    def __call__(self, 命令, **_参数):
+    def __call__(self, 命令, **参数):
         self.命令.append(命令)
+        self.调用参数.append(参数)
         if self.响应:
             return self.响应.pop(0)
         return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
@@ -117,6 +119,45 @@ class ADB设备测试(unittest.TestCase):
     def test_空序列号不能构造设备命令(self):
         with self.assertRaises(ADB错误):
             ADB设备操作类.构造设备命令(ADB, "", ["shell", "input", "tap", "1", "2"])
+
+    def test_所有ADB调用都使用独立服务端口(self):
+        self.assertEqual(ADB设备操作类.ADB服务器端口, 5038)
+
+        设备命令Runner = 假Runner(结果(b"ok"))
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=设备命令Runner)
+        设备.执行(["shell", "echo", "ok"])
+
+        服务命令Runner = 假Runner()
+        服务设备 = ADB设备操作类(ADB, "emulator-5554", runner=服务命令Runner)
+        服务设备._重置ADB服务()
+
+        恢复Runner = 假Runner()
+        恢复设备 = ADB设备操作类(ADB, "127.0.0.1:16416", runner=恢复Runner)
+        with patch.object(恢复设备, "_是MuMu连接", return_value=True), patch(
+            "模块.ADB设备操作类.time.sleep"
+        ):
+            恢复设备._连接已保存网络设备()
+            恢复设备._尝试恢复ADB连接()
+
+        扫描Runner = 假Runner(结果(在线模拟器))
+        ADB设备操作类.扫描设备(ADB, runner=扫描Runner)
+
+        连接Runner = 假Runner(结果(b"connected to 127.0.0.1:5555"))
+        ADB设备操作类.连接网络设备(ADB, "127.0.0.1:5555", runner=连接Runner)
+
+        for runner in (
+            设备命令Runner,
+            服务命令Runner,
+            恢复Runner,
+            扫描Runner,
+            连接Runner,
+        ):
+            self.assertTrue(runner.调用参数)
+            for 参数 in runner.调用参数:
+                self.assertEqual(
+                    参数.get("env", {}).get("ANDROID_ADB_SERVER_PORT"),
+                    str(ADB设备操作类.ADB服务器端口),
+                )
 
     def test_屏幕尺寸解析优先使用覆盖尺寸(self):
         self.assertEqual(ADB设备操作类.解析屏幕尺寸("Physical size: 1280x720\nOverride size: 800x600"), (800, 600))
@@ -459,27 +500,6 @@ FocusedWindows:
                 输入输出, "com.supercell.clashofclans"
             )
         )
-
-    def test_MuMu截图可读FocusedApplications游戏层但输入仍拒绝启动器焦点(self):
-        输入输出 = b"""
-FocusedApplications:
-  displayId=2, name='ActivityRecord{game u0 com.supercell.clashofclans/com.supercell.titan.GameApp t104}'
-  displayId=0, name='ActivityRecord{launcher u0 app.lawnchair/.LawnchairLauncher t2}'
-FocusedWindows:
-  displayId=0, name='e73b728 app.lawnchair/app.lawnchair.LawnchairLauncher'
-"""
-        显示输出 = b"""
-mViewports=[DisplayViewport{type=INTERNAL, valid=true, displayId=0, uniqueId='local:4619827820427265280'}, DisplayViewport{type=INTERNAL, valid=true, displayId=2, uniqueId='local:4619827767814508545'}]
-"""
-        runner = 假Runner(结果(输入输出), 结果(显示输出))
-        设备 = ADB设备操作类(
-            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
-            "127.0.0.1:16416", runner=runner, 自动检测路径=False,
-        )
-        设备.设置目标包名("com.supercell.clashofclans")
-
-        self.assertEqual(设备._获取MuMu截图显示ID(), "4619827767814508545")
-        self.assertIsNone(设备._获取MuMu输入显示ID())
 
     def test_MuMu前台与输入显示查询只读取dumpsys_input(self):
         输入输出 = b"""
@@ -939,21 +959,6 @@ Input Reader State:
         }):
             结果图 = 屏幕.获取屏幕图像cv(0, 0, 800, 600)
         self.assertEqual(结果图.shape, (600, 800, 3))
-
-    def test_ADB屏幕代理主机内存预算检查(self):
-        调用 = []
-
-        def 检查预算(*, 强制刷新=True):
-            调用.append(强制刷新)
-            return False, "low memory"
-
-        屏幕 = ADB屏幕(SimpleNamespace(检查主机内存预算=检查预算))
-
-        self.assertEqual(
-            屏幕.检查主机内存预算(强制刷新=True),
-            (False, "low memory"),
-        )
-        self.assertEqual(调用, [True])
 
     def test_ADB屏幕短窗口复用同一截图(self):
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)

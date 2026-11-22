@@ -1,4 +1,4 @@
-"""Regression coverage for the Clash of Clans 18.647.5 home HUD."""
+"""Regression coverage for recent Clash of Clans home and overlay screens."""
 from pathlib import Path
 import unittest
 
@@ -52,6 +52,29 @@ class 新版主世界页面识别测试(unittest.TestCase):
         self.assertIsNotNone(self.军队配置画面)
         页面 = self.识别器.识别(self.军队配置画面)
         self.assertEqual(页面.页面, "军队配置页", 页面.摘要())
+
+    def test_新版联赛概况弹窗不能误判为战斗并可定位安全关闭点(self):
+        """红色联赛背景和顶部标题会同时撞上旧战斗几何规则。"""
+        画面 = np.full((600, 800, 3), (52, 46, 41), dtype=np.uint8)
+        cv2.rectangle(画面, (12, 125), (788, 599), (35, 24, 132), -1)
+        cv2.rectangle(画面, (150, 190), (700, 222), (28, 22, 155), -1)
+        for 左 in (95, 300, 505):
+            cv2.rectangle(画面, (左, 70), (左 + 190, 128), (185, 175, 164), -1)
+        cv2.rectangle(画面, (760, 42), (788, 79), (20, 20, 225), -1)
+        cv2.line(画面, (767, 49), (781, 71), (255, 255, 255), 3)
+        cv2.line(画面, (781, 49), (767, 71), (255, 255, 255), 3)
+        cv2.putText(
+            画面, "LEAGUE", (325, 107), cv2.FONT_HERSHEY_SIMPLEX,
+            0.8, (255, 255, 255), 2, cv2.LINE_AA,
+        )
+
+        for 战斗中 in (False, True):
+            with self.subTest(战斗中=战斗中):
+                页面 = self.识别器.识别(画面, 战斗中=战斗中)
+                self.assertEqual(页面.页面, "联赛概况弹窗", 页面.摘要())
+
+        关闭点 = self.识别器.定位联赛概况关闭按钮(画面)
+        self.assertEqual(关闭点, (774, 61))
 
 
 if __name__ == "__main__":

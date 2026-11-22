@@ -125,13 +125,79 @@ class 检测游戏登录状态任务(基础任务):
             # 夜世界/测试服可能更换回营按钮文字或按钮皮肤，旧模板会
             # 失配，但页面识别器已经确认是结算页。只接受同一识别器
             # 通过“中央结果结构 + 底部绿色大按钮”定位出的坐标。
-            视觉坐标 = 页面识别.定位结算回营按钮(屏幕图像)
-            if 视觉坐标 is not None:
+            定位回营按钮 = getattr(页面识别, "定位结算回营按钮", None)
+            视觉坐标 = 定位回营按钮(屏幕图像) if callable(定位回营按钮) else None
+            稳定按钮点 = None
+            前一按钮点 = 视觉坐标
+            前一图像 = 屏幕图像
+            # 新版国际服的左下竖向回营卡片会随结算动画短暂改变亮度，
+            # 单帧连通区域可能漏检。立即取最多三张强制新帧；每张必须仍
+            # 独立识别为结算页，且回营坐标连续两帧稳定，才允许安全点击。
+            for _ in range(3):
+                if 前一按钮点 is not None:
+                    上下文.脚本延时(220)
+                try:
+                    try:
+                        新帧 = 上下文.op.获取屏幕图像cv(
+                            0, 0, 800, 600, 强制刷新=True
+                        )
+                    except TypeError:
+                        新帧 = 上下文.op.获取屏幕图像cv(0, 0, 800, 600)
+                except Exception as 异常:
+                    上下文.置脚本状态(
+                        f"启动时结算页新帧获取失败，保留当前画面：{异常}"
+                    )
+                    break
+
+                try:
+                    新页 = 页面识别.识别(新帧, 战斗中=False)
+                except Exception as 异常:
+                    上下文.置脚本状态(
+                        f"启动时结算页新帧页面复核失败，保留当前画面：{异常}"
+                    )
+                    break
+                if getattr(新页, "页面", "") != "战斗结算":
+                    上下文.置脚本状态(
+                        "启动时结算页复核遇到转场/其他页面，取消回营输入并继续观察"
+                    )
+                    前一按钮点 = None
+                    break
+
+                新按钮点 = (
+                    定位回营按钮(新帧)
+                    if callable(定位回营按钮)
+                    else None
+                )
+                if 新按钮点 is None:
+                    前一按钮点 = None
+                    前一图像 = 新帧
+                    continue
+                if 前一按钮点 is not None:
+                    try:
+                        前高, 前宽 = 前一图像.shape[:2]
+                        新高, 新宽 = 新帧.shape[:2]
+                    except (AttributeError, TypeError, ValueError):
+                        前一按钮点 = None
+                        前一图像 = 新帧
+                        continue
+                    最大偏差 = max(18, round(max(新宽, 新高) * 0.025))
+                    if (
+                        (前宽, 前高) == (新宽, 新高)
+                        and abs(int(新按钮点[0]) - int(前一按钮点[0])) <= 最大偏差
+                        and abs(int(新按钮点[1]) - int(前一按钮点[1])) <= 最大偏差
+                    ):
+                        稳定按钮点 = (int(新按钮点[0]), int(新按钮点[1]))
+                        break
+                前一按钮点 = 新按钮点
+                前一图像 = 新帧
+
+            if 稳定按钮点 is not None:
+                x, y = 稳定按钮点
                 上下文.置脚本状态(
-                    "启动时视觉确认结算页回营按钮，先点击回营再继续检测主页"
+                    f"启动时双帧确认结算页回营按钮位置稳定：{x},{y}；安全回营"
                 )
                 if not 上下文.点击已确认安全按钮(
-                    *视觉坐标, 延时=180
+                    x, y, 延时=180
                 ):
                     上下文.置脚本状态(
                         "启动时视觉回营按钮点击失败，保留结算页并停止任务",
@@ -142,10 +208,11 @@ class 检测游戏登录状态任务(基础任务):
                     return True
                 上下文.脚本延时(1200)
                 return True
-            上下文.置脚本状态(
-                "已识别战斗结算页但未找到回营按钮，暂不判断为主页",
-                30,
-            )
+            if not getattr(上下文, "页面恢复失败", False):
+                上下文.置脚本状态(
+                    "已识别战斗结算页；新帧未连续确认稳定回营按钮，不发送输入并立即复查",
+                    15,
+                )
             return True
         if 当前页面.页面 == "战斗星级奖励":
             # 回营后星级奖励弹窗会保留底层主页资源栏，不能让下面的
@@ -286,6 +353,54 @@ class 检测游戏登录状态任务(基础任务):
             30,
         )
         return False
+
+    @staticmethod
+    def _可信主世界页(页面结果) -> bool:
+        """登录等待结束时只接受有足够证据的主世界可续跑页面。"""
+        页面 = str(getattr(页面结果, "页面", "") or "")
+        世界 = str(getattr(页面结果, "世界", "") or "")
+        try:
+            可信度 = float(getattr(页面结果, "可信度", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return False
+        if 页面 == "主世界主页":
+            return 世界 == "主世界" and 可信度 >= 0.70
+        if 页面 == "主世界战斗模式选择":
+            return 世界 == "主世界" and 可信度 >= 0.90
+        return False
+
+    def _超时前双帧复核主世界(self, 屏幕图像, 页面识别: 页面识别器) -> bool:
+        """登录图标等待超时后，仅在连续新帧确认主页时解除安全停止。
+
+        登录页模板/OCR可能漏掉已经加载完成的新版主世界。复用当前帧并
+        强制取得一张新帧，要求两帧都高置信度识别为同一主世界页面；未知
+        页面、战斗页、结算页、断线页或取帧失败仍走原安全停止分支。
+        """
+        try:
+            第一帧页面 = 页面识别.识别(屏幕图像, 战斗中=False)
+            if not self._可信主世界页(第一帧页面):
+                return False
+
+            self.上下文.脚本延时(350)
+            try:
+                新屏幕图像 = self.上下文.op.获取屏幕图像cv(
+                    0, 0, 800, 600, 强制刷新=True
+                )
+            except TypeError:
+                新屏幕图像 = self.上下文.op.获取屏幕图像cv(0, 0, 800, 600)
+            第二帧页面 = 页面识别.识别(新屏幕图像, 战斗中=False)
+            return (
+                self._可信主世界页(第二帧页面)
+                and getattr(第一帧页面, "页面", "")
+                == getattr(第二帧页面, "页面", "")
+                and getattr(第一帧页面, "世界", "")
+                == getattr(第二帧页面, "世界", "")
+            )
+        except Exception as 异常:
+            self.上下文.置脚本状态(
+                f"登录超时后的主世界双帧复核失败：{异常}；保持安全停止"
+            )
+            return False
 
     def _启动阶段处理主世界活动弹窗(self, 屏幕图像) -> bool:
         """登录确认主页前先处理覆盖在主世界上的活动/奖励面板。
@@ -508,6 +623,17 @@ class 检测游戏登录状态任务(基础任务):
                     f"仍在等待游戏主页识别，已等待约{已等待秒数}秒；不重启游戏"
                 , 30)
             if time.monotonic() - 开始检测时间 >= 200:
+                停止事件 = getattr(上下文, "停止事件", None)
+                if not (
+                    停止事件 is not None
+                    and callable(getattr(停止事件, "is_set", None))
+                    and 停止事件.is_set()
+                ) and self._超时前双帧复核主世界(屏幕图像, 页面识别):
+                    self.第一次检测游戏登录 = False
+                    上下文.置脚本状态(
+                        "登录识别等待超时，但连续两帧确认主世界主页；继续任务，不发送游戏输入"
+                    )
+                    return True
                 # 超时画面可能已经退到 Android 启动器或其他应用。此时
                 # 发送 Android BACK/ESC 会把游戏进一步退出前台，正是
                 # “运行一半游戏自己关了”的根因；超时只能安全停机，
@@ -863,13 +989,25 @@ class 检测游戏登录状态任务(基础任务):
             return True
 
         if self.第一次检测游戏登录==True:
-            if not self._确认首次启动稳定():
+            if not self._确认首次启动稳定(页面识别):
                 return False
-            self.第一次检测游戏登录=False
-            上下文.置脚本状态("首次启动稳定性检查通过；准备执行已确认的游戏内拉远视距")
 
             # 稳定检查结束后重新取一帧，避免拿加载阶段的旧截图判断视距。
-            屏幕图像 = 上下文.op.获取屏幕图像cv(0, 0, 800, 600, 强制刷新=True)
+            try:
+                屏幕图像 = self._获取启动稳定截图()
+            except Exception as 异常:
+                return self._启动稳定性失败(
+                    f"稳定检查结束后无法刷新游戏画面：{异常}"
+                )
+            主页已确认, 页面详情 = self._启动稳定主页复核(屏幕图像, 页面识别)
+            if not 主页已确认:
+                return self._启动稳定性失败(
+                    f"稳定检查结束后主页再次复核失败（{页面详情}）"
+                )
+            self.第一次检测游戏登录 = False
+            上下文.置脚本状态(
+                "首次启动稳定性检查通过；准备执行已确认的游戏内拉远视距"
+            )
 
         # 检查视距调整
         是否匹配, (x, y), _ = 识图引擎.执行匹配(屏幕图像, "不用拉远视距[7].bmp|不用拉远视距[6].bmp|不用拉远视距[5].bmp|不用拉远视距[4].bmp|不用拉远视距[3].bmp|不用拉远视距[2].bmp|不用拉远视距[1].bmp|夜世界_不用拉远视距[1].bmp", 相似度阈值=0.7)
@@ -895,41 +1033,108 @@ class 检测游戏登录状态任务(基础任务):
 
         return True
 
-    def _确认首次启动稳定(self) -> bool:
-        """主页首次识别后静默观察，避免加载中的游戏被任务手势打断。"""
+    def _获取启动稳定截图(self) -> np.ndarray:
+        """取得用于启动稳定性复核的当前帧，不复用登录循环中的旧截图。"""
+        获取截图 = getattr(getattr(self.上下文, "op", None), "获取屏幕图像cv", None)
+        if not callable(获取截图):
+            raise RuntimeError("缺少游戏截图接口")
+        try:
+            return 获取截图(0, 0, 800, 600, 强制刷新=True)
+        except TypeError:
+            # 兼容不支持强制刷新参数的旧适配器；调用结果仍需页级复核。
+            return 获取截图(0, 0, 800, 600)
+
+    def _启动稳定主页复核(
+        self,
+        屏幕图像: np.ndarray,
+        页面识别: 页面识别器 | None,
+    ) -> tuple[bool, str]:
+        if not isinstance(屏幕图像, np.ndarray) or 屏幕图像.size == 0:
+            return False, "当前游戏截图无效"
+        if 页面识别 is None or not callable(getattr(页面识别, "识别", None)):
+            return False, "缺少页级识别接口"
+        try:
+            结果 = 页面识别.识别(屏幕图像, 战斗中=False)
+        except Exception as 异常:
+            return False, f"页级识别异常：{异常}"
+
+        页面 = str(getattr(结果, "页面", "") or "")
+        世界 = str(getattr(结果, "世界", "") or "")
+        try:
+            可信度 = float(getattr(结果, "可信度", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            可信度 = 0.0
+        if (
+            页面 == "主世界主页" and 世界 == "主世界" and 可信度 >= 0.50
+        ) or (
+            页面 == "夜世界主页" and 世界 == "夜世界" and 可信度 >= 0.50
+        ):
+            return True, 页面
+        return False, (
+            f"页面={页面 or '未知'}，世界={世界 or '未知'}，置信度={可信度:.2f}"
+        )
+
+    def _启动稳定性失败(self, 原因: str) -> bool:
+        上下文 = self.上下文
+        上下文.置脚本状态(
+            f"CoC启动稳定性检查失败：{原因}；安全停止后续游戏输入",
+            30,
+        )
+        上下文.页面恢复失败 = True
+        停止事件 = getattr(上下文, "停止事件", None)
+        if callable(getattr(停止事件, "set", None)):
+            停止事件.set()
+        return False
+
+    def _确认首次启动稳定(self, 页面识别: 页面识别器 | None = None) -> bool:
+        """12秒内每秒复核前台和真实主页；任何不确定页面均停止输入。"""
         上下文 = self.上下文
         设备 = getattr(getattr(上下文, "op", None), "设备", None)
         获取前台包名 = getattr(设备, "获取当前前台包名", None)
         目标包名 = str(getattr(getattr(上下文, "设置", None), "部落冲突包名", "") or "")
         if not callable(获取前台包名) or not 目标包名:
-            # 单元测试或旧适配器没有前台查询接口时，不能猜测页面状态；
-            # 不额外发送输入，交给现有任务护栏处理。
-            上下文.置脚本状态("首次主页稳定性检查不可用：缺少前台查询接口；不发送额外输入")
-            return True
+            return self._启动稳定性失败(
+                "缺少CoC前台查询接口或目标包名，无法证明输入目标安全"
+            )
 
-        上下文.置脚本状态("主页已识别，开始12秒无操作稳定性检查")
+        if 页面识别 is None or not callable(getattr(页面识别, "识别", None)):
+            return self._启动稳定性失败("缺少页级识别接口，无法确认稳定观察中的游戏页面")
+
+        上下文.置脚本状态("主页已识别，开始12秒前台和主页稳定性复核")
         截止时间 = time.monotonic() + 12.0
-        while time.monotonic() < 截止时间:
-            if getattr(上下文, "停止事件", None) is not None and 上下文.停止事件.is_set():
+        while True:
+            停止事件 = getattr(上下文, "停止事件", None)
+            if (
+                停止事件 is not None
+                and callable(getattr(停止事件, "is_set", None))
+                and 停止事件.is_set()
+            ):
                 return False
             try:
                 当前包名 = 获取前台包名()
             except Exception as 异常:
-                上下文.置脚本状态(f"启动稳定性检查无法读取前台：{异常}；停止后续任务")
-                上下文.页面恢复失败 = True
-                上下文.停止事件.set()
-                return False
+                return self._启动稳定性失败(f"无法读取CoC前台：{异常}")
             if 当前包名 != 目标包名:
-                上下文.置脚本状态(
-                    "CoC启动稳定性检查失败：游戏在无脚本输入期间离开前台"
-                    f"（当前={当前包名 or '未知'}）；停止任务，不重启游戏、不发送返回键"
+                return self._启动稳定性失败(
+                    "CoC在稳定观察期间离开前台"
+                    f"（当前={当前包名 or '未知'}）"
                 )
-                上下文.页面恢复失败 = True
-                上下文.停止事件.set()
-                return False
-            上下文.脚本延时(500)
+            try:
+                屏幕图像 = self._获取启动稳定截图()
+            except Exception as 异常:
+                return self._启动稳定性失败(f"无法刷新游戏画面：{异常}")
+            主页已确认, 页面详情 = self._启动稳定主页复核(屏幕图像, 页面识别)
+            if not 主页已确认:
+                return self._启动稳定性失败(
+                    f"稳定观察期间主页复核失败（{页面详情}）"
+                )
+            if time.monotonic() >= 截止时间:
+                break
+            上下文.脚本延时(1000)
 
-        上下文.置脚本状态("CoC启动稳定性检查通过：12秒内未发送任何游戏输入")
+        上下文.置脚本状态(
+            "CoC启动稳定性检查通过：12秒内前台与主/夜世界主页持续复核通过"
+        )
         return True
 
     @staticmethod
