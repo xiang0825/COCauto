@@ -36,6 +36,11 @@ def _配置高DPI():
 
 
 def main() -> int:
+    if "--自检" in sys.argv:
+        from 工具包.自检 import 运行自检
+        位置 = sys.argv.index("--自检")
+        报告 = sys.argv[位置 + 1] if len(sys.argv) > 位置 + 1 else "自检报告.txt"
+        return 运行自检(报告)
     _配置高DPI()
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
