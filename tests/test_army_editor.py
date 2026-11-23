@@ -42,9 +42,9 @@ class 兵种查找测试(unittest.TestCase):
 
     def test_返回卡片中心坐标(self):
         中心 = 找到的兵种(读图("g3"))
-        # 实机 g3：野蛮人卡在第一行，哥布林在第二行同一列右侧一列
-        self.assertEqual(中心["野蛮人"], (541, 414))
-        self.assertEqual(中心["哥布林"], (621, 521))
+        # 实机 g3：野蛮人卡在第一行，哥布林在第二行右侧一列；点击点为头像中心
+        self.assertEqual(中心["野蛮人"], (537, 405))
+        self.assertEqual(中心["哥布林"], (617, 512))
 
     def test_没有列表的画面不误报(self):
         self.assertEqual(找到的兵种(读图("m1")), {})
@@ -77,7 +77,10 @@ class 人口解析测试(unittest.TestCase):
 class 流程分支测试(unittest.TestCase):
     def _任务(self, **设置项):
         上下文 = SimpleNamespace(
-            设置=SimpleNamespace(**{"是否自动配置军队": True, "配兵兵种": ["超级哥布林"], **设置项}),
+            设置=SimpleNamespace(**{
+                "是否自动配置军队": True, "配兵兵种": ["超级哥布林"], "配兵法术": [], "配兵攻城": "",
+                "阵容预设": "自定义勾选", **设置项,
+            }),
             数据库=Mock(), 机器人标志="r", 置脚本状态=Mock(), 获取模板识别器=Mock(),
         )
         任务 = 编.编辑军队任务(上下文)
@@ -101,7 +104,7 @@ class 流程分支测试(unittest.TestCase):
         任务, 上下文 = self._任务()
         任务._配置流程 = Mock(return_value={"配置": {"超级哥布林": 117}, "人口": [352, 352]})
         self.assertTrue(任务.执行())
-        self.assertEqual(上下文._本次运行已配兵签名, "超级哥布林")
+        self.assertEqual(上下文._本次运行已配兵签名, "兵种:超级哥布林6")
         上下文.数据库.更新状态.assert_called_once()
         self.assertFalse(任务.需要配置())
 

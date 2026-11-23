@@ -4,7 +4,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QFormLayout, QFrame, QGridLayout, QLineEdit, QListWidget,
-    QScrollArea,
+    QScrollArea, QSizePolicy,
     QListWidgetItem, QPlainTextEdit, QPushButton, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -74,15 +74,29 @@ class 任务计划组件:
         self.参数说明 = 标签("", "次要", 换行=True)
         卡.布局.addWidget(self.参数标题)
         卡.布局.addWidget(self.参数说明)
+        # 参数多的页（兵种选择）会超出卡片高度：表单和提示放进可纵向滚动的区域。
+        内容 = QWidget()
+        # 宽度跟随可视区域（不横向滚动）；表单行过长时字段换到标签下方。
+        内容.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        内容布局 = QVBoxLayout(内容)
+        内容布局.setContentsMargins(0, 0, 6, 0)
         self._表单容器 = QWidget()
         self._表单 = QFormLayout(self._表单容器)
         self._表单.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._表单.setHorizontalSpacing(14)
         self._表单.setVerticalSpacing(12)
-        卡.布局.addWidget(self._表单容器)
+        self._表单.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        self._表单.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        内容布局.addWidget(self._表单容器)
         self._提示区 = QVBoxLayout()
-        卡.布局.addLayout(self._提示区)
-        卡.布局.addStretch(1)
+        内容布局.addLayout(self._提示区)
+        内容布局.addStretch(1)
+        self._参数滚动区 = QScrollArea()
+        self._参数滚动区.setWidgetResizable(True)
+        self._参数滚动区.setFrameShape(QFrame.NoFrame)
+        self._参数滚动区.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._参数滚动区.setWidget(内容)
+        卡.布局.addWidget(self._参数滚动区, 1)
         self.状态 = 标签("修改会自动保存", "弱", 换行=True)
         立即保存 = QPushButton("立即保存")
         立即保存.clicked.connect(self.保存)
@@ -213,6 +227,9 @@ class 任务计划组件:
             控件.toggled.connect(lambda _=None: self._安排保存())
         elif 字段.类型 == "choice":
             控件 = QComboBox()
+            # 选项文字较长（阵容预设名）时不撑宽表单，否则下拉箭头会被裁掉。
+            控件.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            控件.setMinimumContentsLength(8)
             控件.addItems(list(字段.选项))
             if 值 and str(值) not in 字段.选项:
                 控件.addItem(str(值))
@@ -224,7 +241,8 @@ class 任务计划组件:
             控件 = QScrollArea()
             控件.setWidgetResizable(True)
             控件.setFrameShape(QFrame.NoFrame)
-            控件.setMinimumHeight(260)
+            # 兵种多给高一点，法术少给低一点，两个列表加上下拉框要放进同一张卡片。
+            控件.setFixedHeight(190 if len(字段.选项) > 20 else 130)
             控件.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             内容 = QWidget()
             网格 = QGridLayout(内容)
@@ -237,8 +255,11 @@ class 任务计划组件:
             for 序号, 名称 in enumerate(字段.选项):
                 框 = QCheckBox(兵种资料.显示名(名称))
                 职责 = 兵种资料.职责(名称)
+                法术职责 = 兵种资料.法术职责(名称)
                 if 职责:
                     框.setToolTip(f"{职责}：{兵种资料.职责说明[职责]}")
+                elif 法术职责:
+                    框.setToolTip(f"{法术职责}：{兵种资料.法术职责说明[法术职责]}")
                 框.setChecked(名称 in 已选)
                 框.toggled.connect(lambda _=None: self._安排保存())
                 网格.addWidget(框, 序号, 0)

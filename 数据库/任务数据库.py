@@ -437,6 +437,33 @@ class 机器人设置:
         }
     )
 
+    阵容预设: str = field(
+        default="自定义勾选",
+        metadata={
+            "显示名称": "阵容预设",
+            "描述": "选择主流阵容预设，或用下面勾选的兵种/法术自定义",
+            "UI类型": "combo",
+        }
+    )
+
+    配兵法术: List[str] = field(
+        default_factory=list,
+        metadata={
+            "显示名称": "法术选择",
+            "描述": "自定义时使用的法术；按勾选平均分配法术容量",
+            "UI类型": "multi",
+        }
+    )
+
+    配兵攻城: str = field(
+        default="",
+        metadata={
+            "显示名称": "攻城器械",
+            "描述": "自定义时携带的攻城器械；留空则不改动",
+            "UI类型": "combo",
+        }
+    )
+
     官方API令牌: str = field(
         default="",
         metadata={
@@ -499,9 +526,16 @@ class 机器人设置:
         # 兼容旧配置，同时丢弃未知任务键并补齐新增任务。
         self.任务计划顺序 = 规范化任务计划顺序(self.任务计划顺序)
         # 只保留已登记的兵种并去重，旧配置或手改数据库不会带入未知名字。
-        from 任务流程.军队配置.兵种资料 import 可选兵种名称
+        from 任务流程.军队配置.兵种资料 import 可选兵种名称, 可选法术名称, 攻城列表
+        from 任务流程.军队配置.阵容预设 import 预设选项, 自定义
         已选 = self.配兵兵种 if isinstance(self.配兵兵种, list) else []
         self.配兵兵种 = [名 for 名 in dict.fromkeys(map(str, 已选)) if 名 in 可选兵种名称]
+        已选法术 = self.配兵法术 if isinstance(self.配兵法术, list) else []
+        self.配兵法术 = [名 for 名 in dict.fromkeys(map(str, 已选法术)) if 名 in 可选法术名称]
+        if self.配兵攻城 not in 攻城列表:
+            self.配兵攻城 = ""
+        if self.阵容预设 not in 预设选项:
+            self.阵容预设 = 自定义
                         # "com.tencent.tmgp.supercell.clashofclans")
 
 @dataclass
