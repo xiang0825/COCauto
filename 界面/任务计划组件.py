@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QFormLayout, QLineEdit, QListWidget,
+    QAbstractItemView, QCheckBox, QComboBox, QFormLayout, QFrame, QGridLayout, QLineEdit, QListWidget,
+    QScrollArea,
     QListWidgetItem, QPlainTextEdit, QPushButton, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -217,6 +218,31 @@ class 任务计划组件:
                 控件.addItem(str(值))
             控件.setCurrentText(str(值 or ""))
             控件.currentTextChanged.connect(lambda _=None: self._安排保存())
+        elif 字段.类型 == "multi":
+            from 任务流程.军队配置 import 兵种资料
+            # 兵种多，放进固定高度的滚动区，避免把表单行挤扁。
+            控件 = QScrollArea()
+            控件.setWidgetResizable(True)
+            控件.setFrameShape(QFrame.NoFrame)
+            控件.setMinimumHeight(260)
+            控件.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            内容 = QWidget()
+            网格 = QGridLayout(内容)
+            网格.setContentsMargins(0, 0, 8, 0)
+            网格.setHorizontalSpacing(12)
+            网格.setVerticalSpacing(6)
+            控件.setWidget(内容)
+            控件.勾选框 = {}
+            已选 = set(值 or [])
+            for 序号, 名称 in enumerate(字段.选项):
+                框 = QCheckBox(兵种资料.显示名(名称))
+                职责 = 兵种资料.职责(名称)
+                if 职责:
+                    框.setToolTip(f"{职责}：{兵种资料.职责说明[职责]}")
+                框.setChecked(名称 in 已选)
+                框.toggled.connect(lambda _=None: self._安排保存())
+                网格.addWidget(框, 序号, 0)
+                控件.勾选框[名称] = 框
         elif 字段.类型 == "list":
             控件 = QPlainTextEdit(str(值 or ""))
             控件.setFixedHeight(72)
@@ -224,6 +250,9 @@ class 任务计划组件:
             控件.textChanged.connect(lambda: self._安排保存())
         else:
             控件 = QLineEdit("" if 值 is None else str(值))
+            if 字段.类型 == "secret":
+                控件.setEchoMode(QLineEdit.Password)
+                控件.setPlaceholderText("粘贴 Token")
             if 字段.类型 in ("int", "float"):
                 控件.setMaximumWidth(200)
                 控件.setAlignment(Qt.AlignRight)
@@ -233,7 +262,9 @@ class 任务计划组件:
     def _表单值(self) -> dict:
         值 = {}
         for 名称, 控件 in self._编辑器.items():
-            if isinstance(控件, QCheckBox):
+            if hasattr(控件, "勾选框"):
+                值[名称] = [项 for 项, 框 in 控件.勾选框.items() if 框.isChecked()]
+            elif isinstance(控件, QCheckBox):
                 值[名称] = 控件.isChecked()
             elif isinstance(控件, QComboBox):
                 值[名称] = 控件.currentText()

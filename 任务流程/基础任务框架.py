@@ -2071,6 +2071,15 @@ class 任务上下文:
             # “多按钮弹窗”。只有研究流程已经确认过标题和目标结构时，
             # 才允许该流程继续点目标/确认；关闭研究面板后会清除标记。
             return False
+        if (
+            结果 is not None
+            and 结果.页面 == "多按钮弹窗"
+            and getattr(self, "_移除部队确认中", False)
+        ):
+            # 自动配兵清空普通兵种时的“移除部队？”确认框。只有编辑军队
+            # 流程已用 OCR 确认标题、且确认按钮不含宝石字样时才短暂设置，
+            # 点完立即清除；只放行这一次确认点击。
+            return False
         if 结果 is not None and 结果.页面 == "选择卡片弹窗":
             self.清理选择卡片弹窗(getattr(self, "_点击识别截图", None))
             # 无论关闭是否成功，都阻断原始输入；失败时由清理器设置
@@ -2327,7 +2336,7 @@ class 任务上下文:
         # 任务终止的跨帧回归。最近确认过结算视觉时只阻断本次输入，
         # 不发送返回键；让回营/主页状态机接管下一步。
         最近结算视觉时间 = float(getattr(self, "_最近结算视觉时间", 0.0) or 0.0)
-        if 最近结算视觉时间:
+        if 最近结算视觉时间 and not getattr(self, "_军队编辑中", False):
             结算视觉保护秒数 = 2.5
             if time.monotonic() - 最近结算视觉时间 < 结算视觉保护秒数:
                 if not getattr(self, "_结算视觉跨帧阻断日志", False):
@@ -2349,6 +2358,7 @@ class 任务上下文:
         最近页面 = getattr(getattr(self, "_最近点击页面结果", None), "页面", "")
         if (
             not getattr(self, "_战斗中", False)
+            and not getattr(self, "_军队编辑中", False)
             and (
                 bool(getattr(self, "_战斗结束已确认", False))
                 or 最近页面 in {"战斗结算", "战斗奖励选择", "战斗星级奖励"}
@@ -2508,7 +2518,12 @@ class 任务上下文:
                 except (AttributeError, TypeError):
                     pass
                 return True
-            if 页面名称 in {"战斗结算", "战斗奖励选择", "战斗星级奖励"}:
+            if (
+                页面名称 in {"战斗结算", "战斗奖励选择", "战斗星级奖励"}
+                # 编辑军队页（OCR 已确认“我的军队”）会被页面识别误判成结算页；
+                # 此时不可能处于战斗结算，跳过结算阻断，但继续下面的宝石模板检查。
+                and not getattr(self, "_军队编辑中", False)
+            ):
                 if 页面名称 == "战斗结算":
                     self._最近结算视觉时间 = time.monotonic()
                 if not getattr(self, "_非战斗结算输入已拦截", False):

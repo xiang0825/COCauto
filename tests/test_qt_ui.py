@@ -114,6 +114,54 @@ class 主窗口测试(unittest.TestCase):
             self.数据库.获取机器人设置("robot_1").欲进攻资源建筑靠近地图边缘最小比例, 5,
         )
 
+    def test_官方账号数据页可填写保存且令牌遮挡(self):
+        from PySide6.QtWidgets import QLineEdit
+        计划 = self.运行页.计划
+        for 行 in range(计划.选项列表.count()):
+            if 计划.选项列表.item(行).data(Qt.UserRole + 1) == "official_api":
+                计划.选项列表.setCurrentRow(行)
+                break
+        self.应用.processEvents()
+        self.assertEqual(计划.参数标题.text(), "官方账号数据")
+        令牌框 = 计划._编辑器["官方API令牌"]
+        self.assertEqual(令牌框.echoMode(), QLineEdit.Password)
+        令牌框.setText("测试令牌")
+        计划._编辑器["玩家标签"].setText("#ABC123")
+        计划._编辑器["官方数据同步间隔分钟"].setText("60")
+        self.assertTrue(计划.保存())
+        设置 = self.数据库.获取机器人设置("robot_1")
+        self.assertEqual((设置.官方API令牌, 设置.玩家标签, 设置.官方数据同步间隔分钟),
+                         ("测试令牌", "#ABC123", 60))
+        截图路径 = os.environ.get("COC_UI_SNAPSHOT")
+        if 截图路径:
+            self.窗口.resize(1280, 800)
+            self.应用.processEvents()
+            self.窗口.grab().save(截图路径)
+
+    def test_兵种选择页勾选可保存(self):
+        计划 = self.运行页.计划
+        for 行 in range(计划.选项列表.count()):
+            if 计划.选项列表.item(行).data(Qt.UserRole + 1) == "troop_selection":
+                计划.选项列表.setCurrentRow(行)
+                break
+        self.应用.processEvents()
+        兵种框 = 计划._编辑器["配兵兵种"].勾选框
+        self.assertIn("超级哥布林", 兵种框)
+        self.assertEqual(兵种框["超级哥布林"].text(), "隐秘哥布林（超级兵种）")
+        self.assertIn("资源", 兵种框["超级哥布林"].toolTip())
+        计划._编辑器["是否自动配置军队"].setChecked(True)
+        兵种框["超级野蛮人"].setChecked(True)
+        兵种框["超级哥布林"].setChecked(True)
+        self.assertTrue(计划.保存())
+        设置 = self.数据库.获取机器人设置("robot_1")
+        self.assertTrue(设置.是否自动配置军队)
+        self.assertEqual(设置.配兵兵种, ["超级哥布林", "超级野蛮人"])
+        截图路径 = os.environ.get("COC_UI_SNAPSHOT")
+        if 截图路径:
+            self.窗口.resize(1280, 860)
+            self.应用.processEvents()
+            self.窗口.grab().save(截图路径)
+
     def test_调整顺序与全选会保存(self):
         计划 = self.运行页.计划
         计划.任务列表.setCurrentRow(2)

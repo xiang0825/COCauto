@@ -158,8 +158,14 @@ class DesktopMobileBridge:
                 "last_step": last_step,
             }
             self._snapshots[robot_id] = snapshot
-            webhook = str(getattr(settings, "企业微信webhook", "") or "").strip()
-            self._secrets[robot_id] = (webhook,) if webhook else ()
+            self._secrets[robot_id] = tuple(
+                secret
+                for secret in (
+                    str(getattr(settings, "企业微信webhook", "") or "").strip(),
+                    str(getattr(settings, "官方API令牌", "") or "").strip(),
+                )
+                if secret
+            )
             return self._copy_snapshot(snapshot)
 
     def get_snapshot(self, robot_id: str) -> dict:

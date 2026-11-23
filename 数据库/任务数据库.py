@@ -46,7 +46,7 @@ class 任务计划定义:
 
 # 这些状态本身包含滚动统计/近期样本；每次追加都会重复保存同一批历史。
 # 其他状态（例如家乡资源）仍逐条保留，供峰值识别和历史查询使用。
-仅保留最新快照的状态类型 = frozenset({"战斗学习", "战斗胜率", "战斗资源分析"})
+仅保留最新快照的状态类型 = frozenset({"战斗学习", "战斗胜率", "战斗资源分析", "阵容学习"})
 
 
 def 规范化任务计划顺序(任务顺序) -> list[str]:
@@ -419,6 +419,54 @@ class 机器人设置:
         }
     )
 
+    是否自动配置军队: bool = field(
+        default=False,
+        metadata={
+            "显示名称": "按勾选兵种自动配兵",
+            "描述": "刷资源前进入编辑军队页，按勾选兵种和推荐比例重新配置军队",
+            "UI类型": "bool"
+        }
+    )
+
+    配兵兵种: List[str] = field(
+        default_factory=list,
+        metadata={
+            "显示名称": "兵种选择",
+            "描述": "自动配兵使用的兵种；战斗中按兵种职责安排下兵顺序",
+            "UI类型": "multi",
+        }
+    )
+
+    官方API令牌: str = field(
+        default="",
+        metadata={
+            "显示名称": "官方 API Token",
+            "描述": "developer.clashofclans.com 创建的 Key（需绑定本机公网 IP）；留空则不使用官方数据",
+            "UI类型": "entry"
+        }
+    )
+
+    玩家标签: str = field(
+        default="",
+        metadata={
+            "显示名称": "玩家标签",
+            "描述": "游戏内个人资料里的 #标签，例如 #ABC123",
+            "UI类型": "entry"
+        }
+    )
+
+    官方数据同步间隔分钟: int = field(
+        default=30,
+        metadata={
+            "显示名称": "官方数据同步间隔（分钟）",
+            "描述": "两次读取官方账号数据的最短间隔",
+            "UI类型": "spinbox",
+            "最小值": 5,
+            "最大值": 1440,
+            "步进": 5
+        }
+    )
+
     任务计划顺序: List[str] = field(
         default_factory=lambda: 默认任务计划顺序.copy(),
         metadata={
@@ -450,6 +498,10 @@ class 机器人设置:
             self.下兵间隔毫秒 = 25
         # 兼容旧配置，同时丢弃未知任务键并补齐新增任务。
         self.任务计划顺序 = 规范化任务计划顺序(self.任务计划顺序)
+        # 只保留已登记的兵种并去重，旧配置或手改数据库不会带入未知名字。
+        from 任务流程.军队配置.兵种资料 import 可选兵种名称
+        已选 = self.配兵兵种 if isinstance(self.配兵兵种, list) else []
+        self.配兵兵种 = [名 for 名 in dict.fromkeys(map(str, 已选)) if 名 in 可选兵种名称]
                         # "com.tencent.tmgp.supercell.clashofclans")
 
 @dataclass

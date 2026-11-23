@@ -85,12 +85,41 @@ def 运行自检(报告路径: str) -> int:
             "任务流程.主世界打鱼.进攻", "任务流程.主世界打鱼.等待战斗结束并回营",
             "任务流程.建筑升级", "任务流程.战宠升级", "任务流程.兵种或法术升级",
             "任务流程.夜世界.夜世界打鱼.下兵", "模块.模拟器探测", "服务.局域网控制服务",
+            "服务.官方API",
         ]
         for 名 in 名单:
             importlib.import_module(名)
         return f"{len(名单)} 个模块"
 
     记("任务模块导入", 任务模块)
+
+    def 官方API连通():
+        """确认打包版带有 HTTPS 支持并能连到官方 API；有配置时顺便验证 Token。"""
+        import ssl  # noqa: F401  缺少 ssl 时这里直接失败
+        from 数据库.任务数据库 import 任务数据库
+        from 服务 import 官方API
+        已配置 = [
+            (标志, 设置) for 标志, 设置 in 任务数据库().查询所有机器人设置().items()
+            if 设置.官方API令牌 and 设置.玩家标签
+        ]
+        if not 已配置:
+            try:
+                官方API.获取玩家("selftest-invalid-token", "#2PP", 重试次数=0)
+            except 官方API.官方API错误 as 异常:
+                if 异常.状态码 == 403:
+                    return "HTTPS 正常，可连到官方 API（尚无机器人填写 Token）"
+                raise
+            return "HTTPS 正常"
+        结果 = []
+        for 标志, 设置 in 已配置:
+            try:
+                摘要 = 官方API.同步账号(设置.官方API令牌, 设置.玩家标签)
+                结果.append(f"{标志}：{摘要.名字}（{摘要.标签}）大本营{摘要.大本营}")
+            except 官方API.官方API错误 as 异常:
+                结果.append(f"{标志}：{异常}")
+        return "；".join(结果)
+
+    记("官方 API", 官方API连通)
 
     检测结果 = 记("模拟器一键检测", lambda: _检测())
     if 检测结果 and 检测结果[0]:

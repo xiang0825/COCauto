@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
+from 任务流程.军队配置.兵种资料 import 可选兵种名称
 from 数据库.任务数据库 import (
     任务计划定义,
     任务计划定义列表,
@@ -55,7 +56,7 @@ def 生成任务计划(设置) -> list[dict[str, str]]:
 class 参数字段:
     字段: str
     标签: str
-    类型: str  # int | float | text | list | choice | bool
+    类型: str  # int | float | text | secret | list | choice | bool | multi（多选勾选框）
     选项: tuple[str, ...] = ()
     最小值: float | None = None
     最大值: float | None = None
@@ -63,6 +64,8 @@ class 参数字段:
 
     def 当前值(self, 设置) -> Any:
         值 = getattr(设置, self.字段, None)
+        if self.类型 == "multi":
+            return [项 for 项 in (值 or []) if 项 in self.选项]
         if self.类型 == "list":
             return "、".join(map(str, 值 or []))
         return 值
@@ -71,6 +74,14 @@ class 参数字段:
         """把表单值转换为设置字段的类型；不合法时抛 ValueError。"""
         if self.类型 == "bool":
             return bool(原始值)
+        if self.类型 == "multi":
+            项列表 = [原始值] if isinstance(原始值, str) else list(原始值 or [])
+            未知 = [str(项) for 项 in 项列表 if str(项) not in self.选项]
+            if 未知:
+                raise ValueError(f"{self.标签}包含未知选项：{'、'.join(未知)}")
+            # 按选项表顺序保存，界面勾选顺序不影响结果。
+            已选 = {str(项) for 项 in 项列表}
+            return [项 for 项 in self.选项 if 项 in 已选]
         if self.类型 == "list":
             文本 = str(原始值 or "")
             for 分隔 in ("\n", ",", "，", ";", "；"):
@@ -171,6 +182,14 @@ _资源参数 = (
         "高速下兵仅用于数量不少于 8 个的普通兵种；英雄、攻城器械和药水仍逐点确认。",
         "战斗结果统计强制启用（胜负、星数、摧毁率和战利品分析）。",
     )),
+    "troop_selection": 参数页("兵种选择", "勾选要带的兵种：刷资源前自动配兵，战斗中按兵种职责下兵。", (
+        参数字段("是否自动配置军队", "按勾选兵种自动配兵", "bool"),
+        参数字段("配兵兵种", "兵种", "multi", 可选兵种名称),
+    ), (
+        "开启后，每次刷资源前进入「编辑军队」页，清空普通兵种并按推荐比例用勾选的兵种填满军营；法术、攻城器械和英雄不改动。",
+        "战斗中按职责下兵：开墙→肉盾→防御型→资源→近战→空中→远程→支援（天使最后跟随地面部队）。鼠标停在兵种上可看职责。",
+        "超级兵种需要先在游戏里激活；未激活或未解锁的兵种会跳过并写入日志。不会点击任何宝石按钮。",
+    )),
     "resource_policy": 参数页("资源打满后的行为", "资源达到目标后退出任务或保持待机。", (
         参数字段("资源打满后动作", "打满后动作", "choice", ("退出", "待机")),
     ), ("退出：完成任务并停止线程；待机：保持连接和界面观察，不再继续进攻。",)),
@@ -184,10 +203,19 @@ _资源参数 = (
         参数字段("企业微信webhook", "企业微信 Webhook", "text"),
         参数字段("状态上报间隔分钟", "状态上报间隔（分钟）", "int", 最小值=0),
     )),
+    "official_api": 参数页("官方账号数据", "通过部落冲突官方 API 读取英雄、研究和战宠等级。", (
+        参数字段("官方API令牌", "官方 API Token", "secret"),
+        参数字段("玩家标签", "玩家标签", "text", 提示="游戏内个人资料里的 #标签"),
+        参数字段("官方数据同步间隔分钟", "同步间隔（分钟）", "int", 最小值=5, 最大值=1440),
+    ), (
+        "在 developer.clashofclans.com 创建 Key，IP 填本机公网 IP；公网 IP 变化后需重新创建。",
+        "填写后，研究、战宠、英雄升级前会先查官方等级：目标已满级就跳过，不再打开面板点击。",
+        "官方 API 不提供资源数量和正在进行的升级，这些仍由截图识别；读取失败时按原流程执行。",
+    )),
 }
 
 # 不属于可勾选任务、但需要配置的全局选项，按显示顺序排列。
-全局配置键 = ("startup", "combat_options", "resource_policy", "upgrade_popup", "notification")
+全局配置键 = ("startup", "combat_options", "troop_selection", "resource_policy", "upgrade_popup", "notification", "official_api")
 
 服务器选项 = ("国际服", "调试服务器")
 
