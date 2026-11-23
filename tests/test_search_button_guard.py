@@ -336,6 +336,37 @@ class 高等级阵营筛选测试(unittest.TestCase):
         self.assertTrue(结果)
         任务.点击下一个按钮.assert_not_called()
 
+    def test_低表现期间黑油达标也不放宽七成可达率门槛(self):
+        任务 = self._创建搜索任务("资源优先")
+        任务.上下文.数据库.获取机器人设置 = Mock(return_value=SimpleNamespace(
+            战利品优先级="黑水",
+            欲进攻的最小资源=100,
+            欲进攻资源建筑靠近地图边缘最小比例=0.5,
+        ))
+        任务.识别当前资源 = Mock(return_value={
+            "金币": 500_000,
+            "圣水": 500_000,
+            "黑油": 16_834,
+            "战利品评分": 1_000_000,
+        })
+        任务.计算资源易窃取评分 = Mock(return_value=(7.4, {
+            "储存建筑数": 6,
+            "高价值资源可达比例": 73.0,
+            "高价值资源可达折算": 65.2,
+        }))
+        任务.获取自适应资源筛选门槛 = Mock(
+            return_value=(6.5, 0.70, "；连续低表现筛选")
+        )
+
+        结果 = 任务.执行单次搜索(任务.上下文, 搜索次数=1, 最小资源=100)
+
+        self.assertFalse(结果)
+        任务.点击下一个按钮.assert_called_once_with(任务.上下文)
+        self.assertTrue(any(
+            "可达折算[65%]低于70%" in 调用.args[0]
+            for 调用 in 任务.上下文.置脚本状态.call_args_list
+        ))
+
 
 if __name__ == "__main__":
     unittest.main()

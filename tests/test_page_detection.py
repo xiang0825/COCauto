@@ -993,6 +993,41 @@ class 页面识别测试(unittest.TestCase):
 
         self.assertEqual(self.识别器.识别(图像, 战斗中=True).页面, "战斗中")
 
+    def test_宽屏底部结束战斗按钮与倒计时优先于卡片误判(self):
+        """16:9 新界面按钮更靠下，红色按钮仍应与倒计时组成战场证据。"""
+        图像 = np.full((576, 1024, 3), (30, 40, 50), dtype=np.uint8)
+        for x in (120, 300, 480, 660):
+            cv2.rectangle(图像, (x, 190), (x + 120, 340), (0, 0, 220), -1)
+        cv2.rectangle(图像, (850, 25), (920, 80), (0, 0, 220), -1)
+        cv2.line(图像, (862, 37), (908, 68), (255, 255, 255), 5)
+        cv2.line(图像, (908, 37), (862, 68), (255, 255, 255), 5)
+        cv2.rectangle(图像, (15, 451), (135, 491), (0, 0, 220), -1)
+        cv2.putText(
+            图像, "2:40", (460, 88), cv2.FONT_HERSHEY_SIMPLEX,
+            1.0, (255, 255, 255), 3,
+        )
+
+        self.assertGreaterEqual(self.识别器._选择卡片弹窗分数(图像), 0.90)
+        self.assertGreaterEqual(self.识别器._红色放弃按钮分数(图像), 0.90)
+        self.assertGreaterEqual(self.识别器._战斗倒计时分数(图像), 0.90)
+        self.assertEqual(self.识别器.识别(图像, 战斗中=False).页面, "战斗中")
+
+    def test_双重战斗画面证据在战斗状态未初始化时优先于卡片误判(self):
+        """进攻初始化前的点击护栏也要识别明确战场，不能误清理成卡片弹窗。"""
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        with patch.object(self.识别器, "_系统维护分数", return_value=0.0), \
+             patch.object(self.识别器, "_选择卡片弹窗分数", return_value=0.97), \
+             patch.object(self.识别器, "_升级详情弹窗分数", return_value=0.0), \
+             patch.object(self.识别器, "_断线弹窗分数", return_value=0.0), \
+             patch.object(self.识别器, "_红色放弃按钮分数", return_value=0.93), \
+             patch.object(self.识别器, "_战斗倒计时分数", return_value=0.96), \
+             patch.object(self.识别器, "_最佳分数", return_value=0.0), \
+             patch.object(self.识别器, "_结算结果视觉分数", return_value=0.0), \
+             patch.object(self.识别器, "_奖励选择横幅分数", return_value=0.0):
+            结果 = self.识别器.识别(图像, 战斗中=False)
+
+        self.assertEqual(结果.页面, "战斗中")
+
     def test_升级详情弹窗优先于主世界HUD(self):
         """升级面板露出主页徽章时不能继续读取资源或点击入口。"""
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
@@ -1011,7 +1046,7 @@ class 页面识别测试(unittest.TestCase):
         self.assertAlmostEqual(关闭点[0], 710, delta=5)
         self.assertAlmostEqual(关闭点[1], 45, delta=5)
 
-    def test_战斗双重证据不被升级详情几何误判挡住(self):
+    def test_双重战斗画面证据优先于升级详情且不依赖状态标志(self):
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         with patch.object(self.识别器, "_升级详情弹窗分数", return_value=0.96), \
              patch.object(self.识别器, "_红色放弃按钮分数", return_value=0.93), \
@@ -1020,7 +1055,7 @@ class 页面识别测试(unittest.TestCase):
              patch.object(self.识别器, "_结算结果视觉分数", return_value=0.0), \
              patch.object(self.识别器, "_奖励选择横幅分数", return_value=0.0):
             self.assertEqual(self.识别器.识别(图像, 战斗中=True).页面, "战斗中")
-            self.assertEqual(self.识别器.识别(图像, 战斗中=False).页面, "升级详情弹窗")
+            self.assertEqual(self.识别器.识别(图像, 战斗中=False).页面, "战斗中")
 
     def test_升级详情只有单一战斗证据仍须拦截(self):
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)

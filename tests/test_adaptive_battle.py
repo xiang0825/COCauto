@@ -457,14 +457,6 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertEqual(可达比例, 0.70)
         self.assertIn("前20个候选", 说明)
 
-    def test_黑水优先且黑水高的候选放宽代理可达门槛(self):
-        调整 = 搜索目标敌人任务.调整黑水优先可达率门槛
-
-        self.assertEqual(调整(0.70, "黑水", 16834), 0.60)
-        self.assertEqual(调整(0.70, "黑水", 14999), 0.70)
-        self.assertEqual(调整(0.70, "金币", 16834), 0.70)
-        self.assertIsNone(调整(None, "黑水", 16834))
-
     def test_黑水优先候选资源门槛分阶段放宽且最终取消(self):
         获取门槛 = 搜索目标敌人任务.获取黑水优先最低候选黑油
 
@@ -577,50 +569,6 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertFalse(结果)
         任务.点击下一个按钮.assert_called_once_with(上下文)
         self.assertTrue(any("高价值资源可达折算[10%]低于70%" in 文本 for 文本 in 日志))
-
-    def test_黑水高价值目标会通过放宽后的代理可达率(self):
-        日志 = []
-        设置 = SimpleNamespace(是否采集进攻界面图像=False)
-        上下文 = SimpleNamespace(
-            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=object())),
-            设置=设置,
-            数据库=SimpleNamespace(获取机器人设置=Mock(return_value=SimpleNamespace(
-                战利品优先级="黑水",
-                欲进攻资源建筑靠近地图边缘最小比例=0.25,
-            ))),
-            机器人标志="测试",
-            置脚本状态=日志.append,
-        )
-        任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
-        任务.上下文 = 上下文
-        任务.等待下一个按钮出现 = Mock(return_value=True)
-        任务.识别当前资源 = Mock(return_value={
-            "战利品评分": 999,
-            "黑油": 16834,
-        })
-        任务.检测器 = SimpleNamespace(检测=Mock(return_value=[]))
-        任务.计算资源易窃取评分 = Mock(return_value=(6.7, {
-            "储存建筑数": 1,
-            "高价值资源可达折算": 61.0,
-        }))
-        任务.打印状态信息 = Mock()
-        任务.获取自适应资源筛选门槛 = Mock(return_value=(5.0, 0.70, "连续低表现"))
-        任务.点击下一个按钮 = Mock(return_value=True)
-
-        with patch.object(
-            搜索目标敌人任务,
-            "是否有足够资源建筑靠近边缘",
-            return_value=True,
-        ), patch.object(
-            搜索目标敌人任务,
-            "已出现图片",
-            return_value=(False, (None, None)),
-        ):
-            结果 = 任务.执行单次搜索(上下文, 搜索次数=1, 最小资源=1)
-
-        self.assertTrue(结果)
-        任务.点击下一个按钮.assert_not_called()
-        self.assertTrue(any("放宽到60%" in 文本 for 文本 in 日志))
 
     def test_候选预算内低黑水目标在YOLO前跳过(self):
         日志 = []
