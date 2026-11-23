@@ -12,6 +12,7 @@ from typing import Tuple, Any, Optional
 
 from 数据库.任务数据库 import 任务数据库, 机器人设置
 from 核心.ADB屏幕 import ADB屏幕
+from 核心.异常 import 机器人停止请求
 
 from 核心.键盘操作 import 键盘控制器
 from 核心.鼠标操作 import 鼠标控制器
@@ -62,7 +63,7 @@ class 任务上下文:
     继续事件: threading.Event
     停止事件: threading.Event
     op: ADB屏幕
-    雷电模拟器: object
+    设备: object  # ADB设备操作类：唯一的游戏操作通道
     键盘:键盘控制器
     鼠标:鼠标控制器
     置脚本状态:Callable
@@ -2865,11 +2866,9 @@ class 任务上下文:
         # 异常时不能把 Android 前台从当前画面切走。尤其是战斗中、ADB
         # 截图断连和页面超时，自动打开应用可能打断战斗，甚至把模拟器
         # 切到启动器/其他应用；这些情况统一安全停止，等待人工确认。
-        安全锁标记 = (
-            "ADB", "device", "截图", "超时", "无心跳", "未找到主世界入口",
-            "未找到下一个按钮", "战斗", "不在前台",
-        )
-        禁止自动恢复 = 是否战斗中 or any(标记 in 异常文本 for 标记 in 安全锁标记)
+        from 核心.异常 import 是否禁止自动恢复
+
+        禁止自动恢复 = 是否战斗中 or 是否禁止自动恢复(异常)
 
         if 是否资源保护:
             是否重启游戏 = False
@@ -2903,7 +2902,7 @@ class 任务上下文:
             包名 = self.数据库.获取机器人设置(self.机器人标志).部落冲突包名
             self.置脚本状态("尝试恢复游戏前台（不结束游戏进程）")
             try:
-                self.雷电模拟器.打开应用(包名)
+                self.设备.打开应用(包名)
             except Exception as 恢复异常:
                 self.记录警告(f"未能恢复游戏前台：{恢复异常}")
 
@@ -2964,7 +2963,7 @@ class 任务上下文:
         while True:
             if self.停止事件.is_set():
                 self.置脚本状态("收到停止事件")
-                raise SystemExit(f"收到退出请求,主动退出线程,机器人{self.机器人标志}已关闭")
+                raise 机器人停止请求(f"收到退出请求,主动退出线程,机器人{self.机器人标志}已关闭")
 
             if not self.继续事件.is_set():
                 # 暂停时也用有界等待，这样停止事件仍能快速唤醒线程。

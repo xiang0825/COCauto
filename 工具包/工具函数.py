@@ -3,7 +3,6 @@ import time
 import unicodedata
 
 import cv2
-import tkinter as tk
 
 import os
 import subprocess
@@ -291,38 +290,3 @@ def 单行资源识别(ocr引擎, img, 允许完整识别=False, 最大值=None)
     if 最大值 is not None and int(轻量数字) > 最大值:
         return 0
     return int(轻量数字)
-
-
-from tkinter import ttk
-import tkinter as tk
-
-class 工具提示:
-    def __init__(self, 控件, 文本):
-        self.控件 = 控件
-        self.文本 = 文本
-        self.提示框 = None
-        self.定时器 = None
-        self.控件.bind("<Enter>", self.进入)
-        self.控件.bind("<Leave>", self.离开)
-
-    def 进入(self, 事件):
-        self.定时器 = self.控件.after(500, self._显示提示框)
-
-    def _显示提示框(self):
-        if self.提示框:
-            return
-        x = self.控件.winfo_rootx() + 20
-        y = self.控件.winfo_rooty() + self.控件.winfo_height() + 10
-        self.提示框 = tk.Toplevel(self.控件)
-        self.提示框.wm_overrideredirect(True)
-        self.提示框.wm_geometry(f"+{x}+{y}")
-        标签 = tk.Label(self.提示框, text=self.文本, background="#ffffe0", relief="solid", borderwidth=1, font=("微软雅黑", 12),wraplength=300)
-        标签.pack(ipadx=1)
-
-    def 离开(self, 事件):
-        if self.定时器:
-            self.控件.after_cancel(self.定时器)
-            self.定时器 = None
-        if self.提示框:
-            self.提示框.destroy()
-            self.提示框 = None

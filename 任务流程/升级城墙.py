@@ -35,6 +35,23 @@ class 城墙升级任务(基础任务):
     墙体搜索超时秒 = 75
     墙体点击后等待毫秒 = 350
     墙体关键词 = ("城墙", "城牆", "围墙", "围牆", "wall", "walls")
+    # 选中墙后标题“城墙（N级）”所在的横条。整块面板 OCR 时这个描边字体
+    # 常被漏掉“城墙”二字（实机只读出“（18级】”），单独识别这一条就稳定。
+    墙体标题区域 = (200, 355, 640, 425)
+    # 右下角“建造”按钮与打开后的“建筑和英雄”列表（800×600 逻辑坐标）。
+    建造按钮 = (747, 544)
+    建造菜单区域 = (585, 40, 800, 540)
+    建造菜单关闭按钮 = (786, 18)
+    # 城墙在列表中按组显示，如“城牆 ×207”；其它建筑最多十来个。
+    建造菜单城墙最少数量 = 15
+    建造菜单最大滑动次数 = 12
+    # 候选扫描时绝不点击的 HUD 区域：战斗按钮、底部工具栏、右下工人/建造。
+    墙体搜索禁区 = (
+        (0, 430, 130, 600),
+        (160, 500, 430, 600),
+        (560, 470, 800, 600),
+        (680, 410, 800, 600),
+    )
     墙体满级关键词 = ("已满级", "已滿級", "满级", "滿級", "最高等级", "最高等級", "maxed", "maxlevel")
 
     @property
@@ -107,6 +124,23 @@ class 城墙升级任务(基础任务):
             上下文.置脚本状态(
                 "城墙本轮未确认金币/圣水余额，不判定资源不足，不点击升级或宝石入口；稍后重试"
             )
+            return False
+
+        # 首选建造菜单定位城墙：不依赖墙的颜色/形状，成片墙阵也能找到。
+        try:
+            if self.通过建造菜单选中城墙(上下文):
+                结果 = self._升级已选中城墙(上下文, 当前金币, 当前圣水)
+                if 结果 is not None:
+                    if 结果:
+                        上下文.脚本延时(900)
+                    return bool(结果)
+                上下文.置脚本状态("建造菜单选中的目标未确认是城墙，改用地图扫描")
+                self._安全关闭非城墙选中面板(上下文)
+        except SystemExit:
+            raise
+        except Exception as 异常:
+            上下文.置脚本状态(f"建造菜单找墙失败：{异常}，改用地图扫描")
+        if getattr(上下文, "刷墙需要资源", False) or getattr(上下文, "页面恢复失败", False):
             return False
 
         # 旧实现只 OCR “城墙”文字，但文字只有在点击墙段后才会出现，
@@ -266,7 +300,11 @@ class 城墙升级任务(基础任务):
         重新走 ``上下文.点击``，所以宝石、商店、断线和未知页面仍然是
         fail-closed，不会绕过任何安全检查。
         """
-        结果 = 点击(90, 80, 延时=延时, 是否精确点击=True)
+        空白点 = self._寻找地图空白点(上下文)
+        if 空白点 is None:
+            上下文.置脚本状态("关闭面板：当前画面找不到确认为空草地的位置，不发送点击")
+            return False
+        结果 = 点击(*空白点, 延时=延时, 是否精确点击=True)
         if 结果 is not False:
             return True
 
@@ -291,7 +329,51 @@ class 城墙升级任务(基础任务):
         上下文.置脚本状态(
             "安全层已先清理主世界覆盖弹窗，重新确认主页后重试地图空白点击"
         )
-        return 点击(90, 80, 延时=延时, 是否精确点击=True) is not False
+        空白点 = self._寻找地图空白点(上下文)
+        if 空白点 is None:
+            return False
+        return 点击(*空白点, 延时=延时, 是否精确点击=True) is not False
+
+    @staticmethod
+    def 查找空白草地(屏幕图像) -> tuple[int, int] | None:
+        """在当前画面里找一块确认是纯草地的位置，用来取消选中。
+
+        旧实现固定点击左上 (90,80)；建造菜单把视角拉近到墙阵后，那里
+        恰好是商人摊位，会打开宝石商店。这里只接受 36×36 范围内全部为
+        草地绿色且纹理平坦的位置，并避开所有 HUD；找不到就返回 None，
+        调用方不点击。
+        """
+        if not isinstance(屏幕图像, np.ndarray) or 屏幕图像.ndim != 3:
+            return None
+        高度, 宽度 = 屏幕图像.shape[:2]
+        if 高度 < 400 or 宽度 < 700:
+            return None
+        hsv图像 = cv2.cvtColor(屏幕图像, cv2.COLOR_BGR2HSV)
+        灰度 = cv2.cvtColor(屏幕图像, cv2.COLOR_BGR2GRAY)
+        绿色 = (
+            (hsv图像[:, :, 0] >= 30) & (hsv图像[:, :, 0] <= 90)
+            & (hsv图像[:, :, 1] >= 70) & (hsv图像[:, :, 2] >= 70)
+        )
+        最佳 = None
+        for y in range(100, 341, 10):
+            for x in range(150, 621, 10):
+                绿块 = 绿色[y - 18:y + 18, x - 18:x + 18]
+                if 绿块.mean() < 0.98:
+                    continue
+                纹理 = float(灰度[y - 18:y + 18, x - 18:x + 18].std())
+                if 纹理 > 12:
+                    continue
+                评分 = 纹理 + abs(x - 400) / 100
+                if 最佳 is None or 评分 < 最佳[0]:
+                    最佳 = (评分, x, y)
+        return (最佳[1], 最佳[2]) if 最佳 else None
+
+    def _寻找地图空白点(self, 上下文) -> tuple[int, int] | None:
+        try:
+            图像 = 上下文.op.获取屏幕图像cv(0, 0, 800, 600)
+        except Exception:
+            return None
+        return self.查找空白草地(图像)
 
     def _安全关闭已确认面板(
         self,
@@ -641,6 +723,12 @@ class 城墙升级任务(基础任务):
                         continue
                     恢复结果.append(修复项)
                 ocr结果 = 恢复结果
+            if (
+                isinstance(屏幕图像, np.ndarray)
+                and 屏幕图像.ndim == 3
+                and not any(len(项) >= 2 and self.文本是否城墙(项[1]) for 项 in ocr结果)
+            ):
+                ocr结果 = ocr结果 + self._识别墙体标题(屏幕图像)
             上下文.置脚本状态(f"城墙OCR完成：识别到{len(ocr结果)}项")
             return ocr结果
         except Exception as e:
@@ -650,6 +738,28 @@ class 城墙升级任务(基础任务):
                 触发内存保护("城墙OCR", e)
             上下文.置脚本状态(f"OCR识别失败: {str(e)}")
             return []
+
+    def _识别墙体标题(self, 屏幕图像) -> list:
+        """只对标题横条做一次小图 OCR，返回绝对坐标结果。"""
+        左, 上, 右, 下 = self.墙体标题区域
+        高度, 宽度 = 屏幕图像.shape[:2]
+        右, 下 = min(右, 宽度), min(下, 高度)
+        if 右 <= 左 or 下 <= 上:
+            return []
+        try:
+            结果, _ = self.ocr引擎(np.ascontiguousarray(屏幕图像[上:下, 左:右]))
+        except Exception:
+            return []
+        恢复 = []
+        for 项 in 结果 or []:
+            if len(项) < 2 or not self.文本是否城墙(项[1]):
+                continue
+            try:
+                框 = [[float(点[0]) + 左, float(点[1]) + 上] for 点 in 项[0]]
+            except (TypeError, ValueError, IndexError):
+                continue
+            恢复.append([框, 项[1], 项[2] if len(项) > 2 else 0.0])
+        return 恢复
 
     @classmethod
     def 文本是否城墙(cls, 文本) -> bool:
@@ -1054,6 +1164,8 @@ class 城墙升级任务(基础任务):
         def 添加候选(x, y, 网格键=None):
             if not (区域左 <= x < 区域右 and 区域上 <= y < 区域下):
                 return False
+            if any(左 <= x < 右 and 上 <= y < 下 for 左, 上, 右, 下 in self.墙体搜索禁区):
+                return False
             if any((x - 旧x) ** 2 + (y - 旧y) ** 2 < 16 ** 2 for 旧x, 旧y in 结果):
                 return False
             结果.append((x, y))
@@ -1101,6 +1213,136 @@ class 城墙升级任务(基础任务):
                         break
 
         return 结果
+
+    @classmethod
+    def 解析建造菜单城墙条目(cls, ocr结果, 偏移=(0, 0)) -> list[dict]:
+        """从“建筑和英雄”列表 OCR 中找出城墙分组条目。
+
+        城墙名称常被 OCR 读成“城X207”“诚×108”，首字不可靠；城墙是唯一
+        以几十上百个为一组出现的建筑，因此以“×数量≥15”为准，费用取条目
+        下方同一行的数字。返回按费用从低到高排序的条目。
+        """
+        偏移x, 偏移y = 偏移
+        文本项 = []
+        for 项 in ocr结果 or []:
+            if len(项) < 2:
+                continue
+            try:
+                框 = 项[0]
+                中心x = sum(float(点[0]) for 点 in 框) / len(框) + 偏移x
+                中心y = sum(float(点[1]) for 点 in 框) / len(框) + 偏移y
+            except (TypeError, ValueError, ZeroDivisionError, IndexError):
+                continue
+            文本项.append((str(项[1] or "").replace(" ", ""), 中心x, 中心y))
+        条目 = []
+        for 文本, x, y in 文本项:
+            匹配 = re.search(r"[×xX]\s*(\d{2,4})$", 文本)
+            if not 匹配 or int(匹配.group(1)) < cls.建造菜单城墙最少数量:
+                continue
+            费用 = None
+            for 其它文本, _其它x, 其它y in 文本项:
+                if 0 < 其它y - y <= 40:
+                    数值 = cls.OCR文本数字(其它文本)
+                    if 数值 is not None and 数值 >= 1000:
+                        费用 = 数值
+                        break
+            条目.append({
+                "文本": 文本, "数量": int(匹配.group(1)),
+                "坐标": (round(x), round(y)), "费用": 费用,
+            })
+        return sorted(条目, key=lambda 项: (项["费用"] is None, 项["费用"] or 0))
+
+    def _识别建造菜单(self, 上下文) -> list:
+        左, 上, 右, 下 = self.建造菜单区域
+        图像 = 上下文.op.获取屏幕图像cv(0, 0, 800, 600)
+        try:
+            结果, _ = self.ocr引擎(np.ascontiguousarray(图像[上:下, 左:右]))
+        except Exception as 异常:
+            上下文.置脚本状态(f"建造菜单OCR失败：{异常}")
+            return []
+        恢复 = []
+        for 项 in 结果 or []:
+            try:
+                恢复.append([[[float(点[0]) + 左, float(点[1]) + 上] for 点 in 项[0]], 项[1], 项[2]])
+            except (TypeError, ValueError, IndexError):
+                continue
+        return 恢复
+
+    def _关闭建造菜单(self, 上下文) -> None:
+        上下文.点击(*self.建造菜单关闭按钮, 延时=700, 是否精确点击=True)
+
+    def 通过建造菜单选中城墙(self, 上下文) -> bool:
+        """MAA 式：右下“建造”→列表里找城墙分组→点击后游戏自动选中一段墙。
+
+        成功时城墙面板已经打开（建造菜单已关闭），可直接 OCR 和升级。
+        点击城墙分组只会选中墙段；其它建筑条目会直接弹出升级确认框，
+        所以只点击按数量确认是城墙分组的条目。
+        """
+        上下文.置脚本状态("刷墙：打开右下角建造菜单查找城墙")
+        if 上下文.点击(*self.建造按钮, 延时=1200, 是否精确点击=True) is False:
+            return False
+        结果 = self._识别建造菜单(上下文)
+        if len(结果) < 4 or not any(
+            关键词 in str(项[1])
+            for 项 in 结果
+            for 关键词 in ("升级", "升級", "建筑", "建築")
+        ):
+            上下文.置脚本状态("建造菜单未确认打开，改用地图扫描城墙")
+            return False
+        上次文本 = None
+        for _次数 in range(self.建造菜单最大滑动次数 + 1):
+            条目 = self.解析建造菜单城墙条目(结果)
+            if 条目:
+                # 低等级墙通常紧跟在后面；城墙条目贴近列表底部时再小幅
+                # 上移一次，确保同时看到所有城墙分组后再选最便宜的。
+                if max(项["坐标"][1] for 项 in 条目) > 470:
+                    上下文.滑动屏幕((692, 420), (692, 300))
+                    结果 = self._识别建造菜单(上下文)
+                    条目 = self.解析建造菜单城墙条目(结果) or 条目
+                目标 = 条目[0]
+                上下文.置脚本状态(
+                    f"建造菜单找到城墙分组：{'、'.join(项['文本'] for 项 in 条目)}；"
+                    f"选择费用最低的 {目标['文本']}（{目标['费用'] or '费用未知'}）"
+                )
+                if 上下文.点击(*目标["坐标"], 延时=1500, 是否精确点击=True) is False:
+                    return False
+                self._关闭建造菜单(上下文)
+                return True
+            当前文本 = tuple(str(项[1]) for 项 in 结果)
+            if 当前文本 == 上次文本:
+                break
+            上次文本 = 当前文本
+            上下文.滑动屏幕((692, 480), (692, 200))
+            结果 = self._识别建造菜单(上下文)
+        上下文.置脚本状态("建造菜单中没有找到城墙分组（可能已全部满级），改用地图扫描")
+        self._关闭建造菜单(上下文)
+        return False
+
+    def _升级已选中城墙(self, 上下文, 当前金币, 当前圣水):
+        """对已经选中的墙段做确认和升级。返回 None 表示画面不是城墙面板。"""
+        上下文.脚本延时(self.墙体点击后等待毫秒)
+        if not self._候选点击后确认主世界(上下文):
+            return False
+        ocr结果 = self.执行OCR识别(上下文)
+        if not any(len(项) >= 2 and self.文本是否城墙(项[1]) for 项 in ocr结果 or []):
+            return None
+        墙体状态 = self.解析城墙状态(ocr结果, 当前金币, 当前圣水)
+        上下文.置脚本状态(
+            f"建造菜单选中城墙：等级={墙体状态['等级'] or '未知'}，状态={墙体状态['状态']}，"
+            f"费用 金币={墙体状态['金币费用']} 圣水={墙体状态['圣水费用']}"
+        )
+        if 墙体状态["状态"] == "资源不足":
+            self._标记资源不足并返回主世界(
+                上下文, f"最便宜的城墙（{墙体状态['等级'] or '未知'}级）资源不足"
+            )
+            return False
+        if 墙体状态["状态"] != "可升级":
+            self._安全关闭已确认面板(上下文)
+            return False
+        if self.执行升级(上下文, 0, 0, 0, 0, 已选中=True, OCR结果=ocr结果):
+            self.记录城墙升级提交(上下文, 0, 0, 墙体状态.get("等级"))
+            return True
+        return False
 
     def 处理已选中的城墙(self, 上下文, ocr结果, 目标点: tuple[int, int]) -> bool:
         """点击候选点后确认标题确实是城墙，再读取升级面板。"""

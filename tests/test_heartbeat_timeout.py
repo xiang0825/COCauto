@@ -113,12 +113,12 @@ class 心跳超时测试(unittest.TestCase):
         上下文.置脚本状态 = Mock()
         上下文.发送企业微信通知 = Mock()
         上下文.发送死亡通知 = Mock()
-        上下文.雷电模拟器 = Mock()
+        上下文.设备 = Mock()
         上下文._战斗中 = True
 
         上下文.处理异常("进攻任务", RuntimeError("战斗页面操作超时"))
 
-        上下文.雷电模拟器.打开应用.assert_not_called()
+        上下文.设备.打开应用.assert_not_called()
         上下文.发送死亡通知.assert_called_once()
         self.assertTrue(
             any("异常恢复安全锁" in 调用.args[0]

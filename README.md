@@ -46,7 +46,7 @@ rc121 Windows 包包含桌面 EXE、完整运行库、模型与许可证，并�
 
 ## 从源码运行
 
-项目以 Windows 和 Python 3.11 为主要开发环境，依赖请见 `requirements.txt`。安装完成后运行：
+项目以 Windows 和 Python 3.11 为主要开发环境，依赖请见 `requirements.txt`（界面使用 PySide6）。代码分层：`界面/`（Qt 窗口）→ `应用/`（控制器、任务计划、日志、设备服务，无界面依赖）→ `线程/`、`任务流程/`（自动化引擎）。安装完成后运行：
 
 ```powershell
 python UI入口.py

@@ -38,13 +38,14 @@ class _Robot:
 
 
 class MobileControlBridgeTests(unittest.TestCase):
-    def test_mobile_control_panel_imports_the_exported_qr_factory(self):
+    def test_mobile_control_page_uses_the_exported_qr_factory(self):
         import importlib
+        from pathlib import Path
 
-        panel = importlib.import_module("界面.手机控制面板")
         service = importlib.import_module("服务.局域网控制服务")
-
-        self.assertIs(panel.create_pairing_qr_image, service.create_pairing_qr_image)
+        self.assertTrue(callable(service.create_pairing_qr_image))
+        源码 = Path(__file__).resolve().parents[1].joinpath("界面", "页面_手机控制.py").read_text(encoding="utf-8")
+        self.assertIn("from 服务.局域网控制服务 import create_pairing_qr_image", 源码)
 
     def setUp(self):
         self.settings = 机器人设置(

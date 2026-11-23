@@ -13,6 +13,11 @@ from 任务流程.基础任务框架 import 任务上下文
 class 刷墙识别测试(unittest.TestCase):
     def setUp(self):
         self.任务 = 城墙升级任务.__new__(城墙升级任务)
+        # 这些用例的假画面没有真实村庄图像；空白草地位置统一给出旧的
+        # (90,80)，专门的草地查找测试在 建造菜单找墙测试 中覆盖。
+        补丁 = patch.object(城墙升级任务, "_寻找地图空白点", return_value=(90, 80))
+        补丁.start()
+        self.addCleanup(补丁.stop)
 
     def test_城墙确认按钮优先于通用升级详情关闭器(self):
         """OCR确认页的合法资源确认点击不能被右上角关闭器抢先处理。"""
@@ -726,3 +731,56 @@ class 刷墙识别测试(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class 建造菜单找墙测试(unittest.TestCase):
+    """实机（MuMu 1280×720，2026-11-23）发现的问题与修复。"""
+
+    @staticmethod
+    def _读图(名称):
+        from pathlib import Path
+        路径 = Path(__file__).with_name("fixtures") / 名称
+        return cv2.imdecode(np.fromfile(str(路径), np.uint8), cv2.IMREAD_COLOR)
+
+    def test_城墙分组按数量识别并选最便宜(self):
+        框 = lambda y: [[600, y], [640, y], [640, y + 10], [600, y + 10]]
+        OCR = [
+            [框(300), "驰X207", 0.9], [框(320), "8000000", 0.9],
+            [框(345), "诚×108", 0.9], [框(365), "6000000", 0.9],
+            [框(390), "空中炸弹X7", 0.9], [框(410), "3000000", 0.9],
+        ]
+        条目 = 城墙升级任务.解析建造菜单城墙条目(OCR)
+        self.assertEqual([项["数量"] for 项 in 条目], [108, 207])
+        self.assertEqual(条目[0]["费用"], 6000000)
+
+    def test_法师塔等普通建筑不会被当成城墙(self):
+        框 = [[600, 300], [640, 300], [640, 310], [600, 310]]
+        self.assertEqual(城墙升级任务.解析建造菜单城墙条目([[框, "法師墙", 0.9], [框, "防空火箭X3", 0.9]]), [])
+
+    def test_拉近视角后左上是商人时不点击商人(self):
+        图 = self._读图("wall_zoomed_trader.png")
+        点 = 城墙升级任务.查找空白草地(图)
+        self.assertIsNotNone(点)
+        # 商人摊位在 (0~130, 60~230)；空白点必须远离它。
+        self.assertFalse(点[0] < 160 and 点[1] < 240)
+
+    def test_没有空草地时返回None不点击(self):
+        self.assertIsNone(城墙升级任务.查找空白草地(np.zeros((600, 800, 3), np.uint8)))
+
+    def test_整块面板OCR漏掉城墙二字时补读标题条(self):
+        任务 = 城墙升级任务.__new__(城墙升级任务)
+        引擎 = Mock(side_effect=[
+            ([[[[420, 390], [470, 390], [470, 405], [420, 405]], "（18级】", 0.8]], None),
+            ([[[[160, 30], [260, 30], [260, 50], [160, 50]], "城墙[18级]", 0.87]], None),
+        ])
+        任务.__dict__["ocr引擎"] = 引擎
+        结果 = 城墙升级任务.执行OCR识别(任务, SimpleNamespace(置脚本状态=Mock()), 屏幕图像=self._读图("wall_selected_panel.png"))
+        self.assertTrue(any(任务.文本是否城墙(项[1]) for 项 in 结果))
+        self.assertEqual(任务.解析城墙等级(结果), 18)
+
+    def test_候选点不落在战斗按钮和右下HUD(self):
+        图 = self._读图("wall_selected_panel.png")
+        任务 = 城墙升级任务.__new__(城墙升级任务)
+        for x, y in 任务.生成城墙候选点(图):
+            self.assertFalse(any(左 <= x < 右 and 上 <= y < 下 for 左, 上, 右, 下 in 任务.墙体搜索禁区))
+

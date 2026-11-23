@@ -53,7 +53,8 @@ class 更新工人状态任务(夜世界基础任务):
     @staticmethod
     def 解析工人计数(
         识别结果, 区域左侧: int = 0,
-        允许中心范围: tuple[int, int] = (270, 345),
+        允许中心范围: tuple[int, int] | None = (270, 345),
+        取最左: bool = False,
     ) -> tuple[int, int]:
         """从顶部工人计数 OCR 中提取合法的 ``空闲/总数``。
 
@@ -89,18 +90,24 @@ class 更新工人状态任务(夜世界基础任务):
             # 宽区域回退识别时，英雄栏也可能出现在同一张 OCR 图中。
             # 只接受顶部建筑工人计数的横向位置，避免把旁边的英雄计数
             # （例如 1/7）误当成建筑工人状态。
-            if 区域左侧 and len(项) >= 1 and isinstance(项[0], (list, tuple)) and 项[0]:
+            中心x = 0.0
+            if len(项) >= 1 and isinstance(项[0], (list, tuple)) and 项[0]:
                 try:
                     中心x = sum(float(点[0]) for 点 in 项[0]) / len(项[0]) + 区域左侧
-                    if not 允许中心范围[0] <= 中心x <= 允许中心范围[1]:
-                        continue
                 except (TypeError, ValueError, IndexError):
-                    pass
-            候选.append((置信度, 空闲工人, 工人总数, 文本))
+                    中心x = 0.0
+            if 区域左侧 and 允许中心范围 and 中心x:
+                if not 允许中心范围[0] <= 中心x <= 允许中心范围[1]:
+                    continue
+            候选.append((置信度, 空闲工人, 工人总数, 文本, 中心x))
 
         if not 候选:
             raise ValueError("未识别到合法工人计数")
-        _, 空闲工人, 工人总数, _ = max(候选, key=lambda 项: 项[0])
+        if 取最左:
+            # 右下 HUD 从左到右依次是建筑工人、建筑学徒；最左的就是工人。
+            _, 空闲工人, 工人总数, _, _ = min(候选, key=lambda 项: 项[4])
+        else:
+            _, 空闲工人, 工人总数, _, _ = max(候选, key=lambda 项: 项[0])
         return 空闲工人, 工人总数
 
     def 执行(self) -> bool:
@@ -123,19 +130,19 @@ class 更新工人状态任务(夜世界基础任务):
                     识别结果 = self.执行OCR识别(主要区域)
                     try:
                         空闲工人, 工人总数 = self.解析工人计数(
-                            识别结果, 主要区域[0], (740, 790)
+                            识别结果, 主要区域[0], None, 取最左=True
                         )
                     except ValueError:
-                        回退区域 = (720, 410, 799, 510)
+                        回退区域 = (680, 405, 799, 510)
                         回退结果 = self.执行OCR识别(回退区域)
                         try:
                             空闲工人, 工人总数 = self.解析工人计数(
-                                回退结果, 回退区域[0], (740, 790)
+                                回退结果, 回退区域[0], None, 取最左=True
                             )
                         except ValueError:
                             增强结果 = self._放大工人区域OCR(回退区域)
                             空闲工人, 工人总数 = self.解析工人计数(
-                                增强结果, 回退区域[0], (740, 790)
+                                增强结果, 回退区域[0], None, 取最左=True
                             )
                         self.上下文.置脚本状态(
                             f"建筑工人窄区域OCR未命中，已用顶部宽区域回退识别：{空闲工人}/{工人总数}"

@@ -806,29 +806,29 @@ class 工人状态容错测试(unittest.TestCase):
         任务.上下文 = SimpleNamespace(置脚本状态=Mock())
 
         self.assertTrue(任务.识别当前工人状态写入数据库())
-        任务.执行OCR识别.assert_called_once_with((735, 420, 795, 485))
+        任务.执行OCR识别.assert_called_once_with((690, 415, 799, 495))
         self.assertEqual(
             任务.数据库.更新状态.call_args.args[2]["工人总数"],
             2,
         )
 
-    def test_顶部窄区域为空时使用宽区域回退且过滤英雄栏(self):
+    def test_右下HUD取最左计数为工人而不是实验室(self):
+        # 实机（MuMu 1280×720，2026-11）：右下 HUD 左侧哥布林图标是建筑工人
+        # 1/7，右侧药水图标是实验室 1/1。必须取左侧的工人计数。
         任务 = 更新工人状态任务.__new__(更新工人状态任务)
         任务.机器人标志 = "robot_1"
         任务.执行OCR识别 = Mock(side_effect=[
             [],
             [
-                # 新版回退区域从 x=720 开始；全局中心约 765，属于工人栏。
-                ([[35, 10], [55, 10], [55, 34], [35, 34]], "1/2", 0.88),
-                # 工人 HUD 右侧边缘以外的计数不得覆盖工人状态。
-                ([[5, 10], [20, 10], [20, 34], [5, 34]], "1/7", 0.99),
+                ([[85, 10], [105, 10], [105, 34], [85, 34]], "0/1", 0.99),
+                ([[40, 10], [60, 10], [60, 34], [40, 34]], "1/7", 0.88),
             ],
         ])
         任务.数据库 = SimpleNamespace(更新状态=Mock())
         任务.上下文 = SimpleNamespace(置脚本状态=Mock())
 
         self.assertTrue(任务.识别当前工人状态写入数据库())
-        self.assertEqual(任务.执行OCR识别.call_args_list[1].args[0], (720, 410, 799, 510))
+        self.assertEqual(任务.执行OCR识别.call_args_list[1].args[0], (680, 405, 799, 510))
         self.assertEqual(
             任务.数据库.更新状态.call_args.args[2]["空闲工人"],
             1,

@@ -16,9 +16,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
+from 核心.异常 import ADB异常
 
-class ADB错误(RuntimeError):
-    pass
+
+class ADB错误(ADB异常, RuntimeError):
+    """ADB 连接/截图失败；属于安全锁异常，禁止自动恢复。"""
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,14 @@ class ADB设备信息:
         实体标记 = ("samsung", "model:sm-", "model:sm", "pixel", "xiaomi", "redmi", "oneplus",
                     "huawei", "honor", "oppo", "vivo", "motorola", "sony", "realme")
         return any(标记 in 描述 for 标记 in 实体标记)
+
+
+@dataclass(frozen=True)
+class 游戏设备评估:
+    设备: "ADB设备信息"
+    已安装: bool
+    前台: bool
+    评分: int
 
 
 def 解析ADB设备列表(文本: str) -> list[ADB设备信息]:
@@ -666,6 +676,35 @@ class ADB设备操作类:
                 "请在连接页确认模拟器已启动并开启 ADB 调试。"
             )
 
+        评估 = cls.评估游戏设备(已解析路径, 候选, 包名, runner)
+        if not 评估:
+            raise ADB错误(
+                f"无法在候选模拟器上确认游戏包 {包名}；"
+                "请在连接页手动扫描并选择设备。"
+            )
+        最高分 = 评估[0].评分
+        最佳 = [项.设备 for 项 in 评估 if 项.评分 == 最高分]
+        if len(最佳) != 1 or 最高分 <= 0:
+            并列 = "、".join(设备.显示文本 for 设备 in 最佳)
+            raise ADB错误(
+                f"自动检测到多个可能的 CoC 模拟器，无法安全选择：{并列}。"
+                "请在连接页手动选择并确认目标。"
+            )
+        return 最佳[0]
+
+    @classmethod
+    def 评估游戏设备(
+            cls,
+            已解析路径: str,
+            候选: list[ADB设备信息],
+            包名: str = "com.supercell.clashofclans",
+            runner: Callable = subprocess.run,
+    ) -> list[游戏设备评估]:
+        """对候选设备逐台检查游戏是否安装、是否在前台，按评分从高到低返回。
+
+        同一台模拟器的多个 ADB 别名（网络 serial 与 emulator-*）按 guest
+        身份合并，只保留一条。无法通信的设备直接跳过。
+        """
         def 解码(值) -> str:
             if isinstance(值, bytes):
                 return 值.decode("utf-8", errors="replace")
@@ -705,38 +744,39 @@ class ADB设备操作类:
             # MuMu 有时会同时把同一实例暴露为网络 serial 和
             # emulator-* serial。读取 guest 唯一标识后再去重，避免同一
             # 台模拟器的两个别名被错误当成“两台设备”而拒绝启动。
-            身份输出 = 解码(
-                适配器.执行(["shell", "getprop", "ro.serialno"], timeout=5)
-            ).strip().splitlines()
+            try:
+                身份输出 = 解码(
+                    适配器.执行(["shell", "getprop", "ro.serialno"], timeout=5)
+                ).strip().splitlines()
+            except (ADB错误, OSError, subprocess.TimeoutExpired):
+                身份输出 = []
             身份 = 身份输出[0].strip() if 身份输出 else ""
             if not 身份 or 身份.startswith("package:") or 身份 in {"unknown", "null"}:
                 # MuMu Android 15 的 ro.serialno 可能为空；android_id
                 # 仍能稳定标识同一 guest，用于合并网络 serial 与
                 # emulator-* serial 两个 ADB 别名。
-                身份输出 = 解码(
-                    适配器.执行(
-                        ["shell", "settings", "get", "secure", "android_id"],
-                        timeout=5,
-                    )
-                ).strip().splitlines()
+                try:
+                    身份输出 = 解码(
+                        适配器.执行(
+                            ["shell", "settings", "get", "secure", "android_id"],
+                            timeout=5,
+                        )
+                    ).strip().splitlines()
+                except (ADB错误, OSError, subprocess.TimeoutExpired):
+                    身份输出 = []
                 身份 = 身份输出[0].strip() if 身份输出 else ""
             if not 身份 or 身份.startswith("package:") or 身份 in {"unknown", "null"}:
                 身份 = ""
-            评分结果.append((评分, 设备, 身份))
+            评分结果.append((评分, 设备, 身份, 已安装, 当前前台))
 
-        if not 评分结果:
-            raise ADB错误(
-                f"无法在候选模拟器上确认游戏包 {包名}；"
-                "请在连接页手动扫描并选择设备。"
-            )
-        去重结果: dict[str, tuple[int, ADB设备信息]] = {}
-        for 分数, 设备, 身份 in 评分结果:
+        去重结果: dict[str, tuple] = {}
+        for 分数, 设备, 身份, 已安装, 当前前台 in 评分结果:
             分组键 = f"identity:{身份}" if 身份 else f"serial:{设备.序列号}"
             现有 = 去重结果.get(分组键)
             if 现有 is None:
-                去重结果[分组键] = (分数, 设备)
+                去重结果[分组键] = (分数, 设备, 已安装, 当前前台)
                 continue
-            现有分数, 现有设备 = 现有
+            现有分数, 现有设备 = 现有[0], 现有[1]
             def 序列号优先级(序列号: str) -> int:
                 if re.fullmatch(r"(?:127\.0\.0\.1|localhost):\d+", 序列号):
                     try:
@@ -755,19 +795,14 @@ class ADB设备操作类:
                     and 序列号优先级(设备.序列号) > 序列号优先级(现有设备.序列号)
                 )
             ):
-                去重结果[分组键] = (分数, 设备)
+                去重结果[分组键] = (分数, 设备, 已安装, 当前前台)
 
-        评分结果 = list(去重结果.values())
-        评分结果.sort(key=lambda 项: 项[0], reverse=True)
-        最高分 = 评分结果[0][0]
-        最佳 = [设备 for 分数, 设备 in 评分结果 if 分数 == 最高分]
-        if len(最佳) != 1 or 最高分 <= 0:
-            并列 = "、".join(设备.显示文本 for 设备 in 最佳)
-            raise ADB错误(
-                f"自动检测到多个可能的 CoC 模拟器，无法安全选择：{并列}。"
-                "请在连接页手动选择并确认目标。"
-            )
-        return 最佳[0]
+        结果 = [
+            游戏设备评估(设备=项[1], 已安装=bool(项[2]), 前台=bool(项[3]), 评分=项[0])
+            for 项 in 去重结果.values()
+        ]
+        结果.sort(key=lambda 项: 项.评分, reverse=True)
+        return 结果
 
     @staticmethod
     def _前台是否为包名(窗口状态文本: str, 包名: str) -> bool:
@@ -2157,11 +2192,3 @@ class ADB设备操作类:
             "ADB 模式不会主动关闭游戏，请从模拟器界面手动退出。"
         )
 
-    def 修改分辨率(self, 宽度: int = 800, 高度: int = 600, dpi: int = 160) -> None:
-        self.设置屏幕尺寸(宽度, 高度)
-
-    def 启动模拟器并打开应用(self, 包名: str) -> None:
-        raise ADB错误("ADB 目标未在线。请手动启动模拟器、打开 ADB 调试并重新扫描；不会操作桌面或启动其他实例。")
-
-    def 关闭雷电模拟器(self) -> None:
-        raise ADB错误("ADB 模式不会关闭模拟器窗口。请从模拟器自身界面退出。")

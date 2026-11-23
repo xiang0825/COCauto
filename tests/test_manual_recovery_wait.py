@@ -228,7 +228,7 @@ class 人工安全恢复等待测试(unittest.TestCase):
             页面恢复失败=False,
             机器人标志="robot_1",
             识别点击画面=Mock(return_value=主页面),
-            雷电模拟器=SimpleNamespace(滑动=滑动),
+            设备=SimpleNamespace(滑动=滑动),
             _满仓待机上次保活时间=100.0,
             数据库=SimpleNamespace(
                 获取最新完整状态=Mock(return_value=SimpleNamespace(状态数据={
@@ -264,7 +264,7 @@ class 人工安全恢复等待测试(unittest.TestCase):
             _战斗中=False,
             继续事件=threading.Event(),
             _满仓待机上次保活时间=100.0,
-            雷电模拟器=SimpleNamespace(滑动=滑动),
+            设备=SimpleNamespace(滑动=滑动),
             置脚本状态=Mock(),
         )
         上下文.继续事件.set()

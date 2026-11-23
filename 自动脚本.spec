@@ -43,8 +43,6 @@ def 收集数据文件(目录, 扩展名=None):
 
 数据文件 = [
     (os.path.join(项目根, "img"), "img"),
-    (os.path.join(项目根, "核心", "op-0.4.5_with_model", "tools.dll"), "op_runtime"),
-    (os.path.join(项目根, "核心", "op-0.4.5_with_model", "op_x64.dll"), "op_runtime"),
     (os.path.join(项目根, "模块", "检测", "OCR识别器", "rapidocr_onnxruntime", "config.yaml"),
      "模块/检测/OCR识别器/rapidocr_onnxruntime"),
     (os.path.join(项目根, "模块", "检测", "YOLO检测器", "模型", "best.onnx"),
@@ -59,7 +57,6 @@ def 收集数据文件(目录, 扩展名=None):
     "模块",
     扩展名={".yaml", ".yml", ".json", ".onnx", ".png", ".bmp", ".txt", ".dict"},
 )
-数据文件 += collect_data_files("sv_ttk")
 
 
 a = Analysis(
@@ -72,7 +69,8 @@ a = Analysis(
         + collect_submodules("核心")
         + collect_submodules("任务流程")
         + collect_submodules("服务")
-        + ["界面.手机控制面板"]
+        + collect_submodules("应用")
+        + collect_submodules("界面")
         # PyInstaller 会通过 pyi_rth_pkgres 导入 pkg_resources。
         # setuptools 71+ 将 vendor 模块移到 setuptools._vendor，PyInstaller
         # 自带钩子会收集它们；只显式保留入口，避免把 pkg_resources.tests
@@ -85,7 +83,8 @@ a = Analysis(
     ),
     hookspath=[],
     runtime_hooks=[os.path.join(项目根, "打包运行时.py")],
-    excludes=[],
+    # 界面已迁移到 PySide6；不再打包 Tk 运行库。
+    excludes=["tkinter", "_tkinter", "sv_ttk"],
     noarchive=False,
 )
 

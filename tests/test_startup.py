@@ -16,7 +16,7 @@ class 启动模拟器状态测试(unittest.TestCase):
         上下文 = SimpleNamespace(
             机器人标志="robot_test",
             数据库=SimpleNamespace(获取机器人设置=Mock(return_value=设置)),
-            雷电模拟器=设备,
+            设备=设备,
             置脚本状态=lambda 文本, *_参数, **_关键字: 日志.append(文本),
             脚本延时=Mock(),
         )
@@ -29,19 +29,50 @@ class 启动模拟器状态测试(unittest.TestCase):
         上下文, 日志 = self._上下文(设备)
 
         self.assertTrue(启动模拟器任务(上下文).执行())
-        设备.打开应用.assert_called_once_with("com.supercell.clashofclans")
-        self.assertTrue(any("复用当前游戏实例" in 文本 for 文本 in 日志))
+        设备.打开应用.assert_not_called()
+        self.assertTrue(any("直接接管" in 文本 for 文本 in 日志))
         上下文.脚本延时.assert_not_called()
 
     def test_启动后等待前台确认而不是立即误判未开启(self):
         设备 = Mock()
         设备.是否已启动.return_value = True
         设备.获取当前前台包名.side_effect = ["app.lawnchair", "app.lawnchair", "com.supercell.clashofclans"]
+        设备.执行.return_value = b"package:com.supercell.clashofclans\n"
         上下文, 日志 = self._上下文(设备)
 
         self.assertTrue(启动模拟器任务(上下文).执行())
-        self.assertGreaterEqual(上下文.脚本延时.call_count, 2)
-        self.assertTrue(any("进入前台" in 文本 for 文本 in 日志))
+        设备.打开应用.assert_called_once_with("com.supercell.clashofclans")
+        self.assertEqual(上下文.脚本延时.call_count, 1)
+        self.assertTrue(any("正在启动部落冲突" in 文本 for 文本 in 日志))
+
+    def test_未安装游戏时不尝试启动(self):
+        设备 = Mock()
+        设备.是否已启动.return_value = True
+        设备.获取当前前台包名.return_value = "app.lawnchair"
+        设备.执行.return_value = b""
+        上下文, 日志 = self._上下文(设备)
+        self.assertFalse(启动模拟器任务(上下文).执行())
+        设备.打开应用.assert_not_called()
+        self.assertTrue(any("没有安装" in 文本 for 文本 in 日志))
+
+    def test_关闭自动启动时不打开游戏(self):
+        设备 = Mock()
+        设备.是否已启动.return_value = True
+        设备.获取当前前台包名.return_value = "app.lawnchair"
+        上下文, 日志 = self._上下文(设备)
+        上下文.数据库.获取机器人设置.return_value.自动启动游戏 = False
+        self.assertFalse(启动模拟器任务(上下文).执行())
+        设备.打开应用.assert_not_called()
+
+    def test_一直未进入前台时安全停止(self):
+        设备 = Mock()
+        设备.是否已启动.return_value = True
+        设备.获取当前前台包名.return_value = "app.lawnchair"
+        设备.执行.return_value = b"package:com.supercell.clashofclans\n"
+        上下文, 日志 = self._上下文(设备)
+        with patch.object(启动模拟器任务, "前台等待秒", 3):
+            self.assertFalse(启动模拟器任务(上下文).执行())
+        self.assertTrue(any("仍未进入前台" in 文本 for 文本 in 日志))
 
 
 class 启动残留英雄详情测试(unittest.TestCase):

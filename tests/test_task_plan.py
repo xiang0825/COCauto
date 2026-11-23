@@ -13,8 +13,8 @@ from 数据库.任务数据库 import (
     默认任务计划顺序,
     任务计划定义列表,
 )
-from 界面.日志面板 import 日志面板
-from 界面.任务计划面板 import 生成任务计划
+from 应用.日志模型 import 去掉实时前缀
+from 应用.任务计划 import 生成任务计划
 from 任务流程.主世界打鱼.搜索敌人 import 搜索目标敌人任务
 from 线程.自动化机器人 import 自动化机器人
 from 工具包.工具函数 import 是否夜世界资源打满
@@ -736,10 +736,10 @@ class 任务计划测试(unittest.TestCase):
 
     def test_日志面板会去掉实时消息时间前缀(self):
         self.assertEqual(
-            日志面板._去掉实时前缀("[14:33:41] 下兵成功"),
+            去掉实时前缀("[14:33:41] 下兵成功"),
             "下兵成功",
         )
-        self.assertEqual(日志面板._去掉实时前缀("普通历史日志"), "普通历史日志")
+        self.assertEqual(去掉实时前缀("普通历史日志"), "普通历史日志")
 
     def test_刷墙资源不足会自动刷资源后重试一次(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
