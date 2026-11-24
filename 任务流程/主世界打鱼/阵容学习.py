@@ -158,9 +158,28 @@ def 记录战斗结果(数据库, 机器人标志, 签名: str, 结果, 星数, 
     数据库.更新状态(机器人标志, 状态类型, _裁剪(学习))
 
 
-def 记录资源收益(数据库, 机器人标志, 签名: str, 净变化: dict) -> None:
+# 一场战斗的净收益不可能大幅为负（训练兵种只花少量资源）。实机 rc132：黑油 70,303
+# 被 OCR 读成 157，记成 −70,146；黑油按 50 倍折算后把整套阵容的收益分拉成负数，
+# 学习结论变成“换回收益更低的阵容”。这类读数不进学习统计。
+单场最低可信净变化 = -20_000
+
+
+def 收益读数可信(净变化: dict) -> bool:
+    for 资源 in ("金币", "圣水", "黑油"):
+        try:
+            if int(净变化.get(资源, 0) or 0) < 单场最低可信净变化:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def 记录资源收益(数据库, 机器人标志, 签名: str, 净变化: dict) -> bool:
+    """记录一场收益；读数不可信时不记录并返回 False。"""
     if not 签名 or not isinstance(净变化, dict):
-        return
+        return False
+    if not 收益读数可信(净变化):
+        return False
     学习 = 读取(数据库, 机器人标志)
     统计 = 学习["阵容"].setdefault(签名, _空统计())
     统计["收益场次"] += 1
@@ -171,6 +190,7 @@ def 记录资源收益(数据库, 机器人标志, 签名: str, 净变化: dict)
             pass
     统计["最近时间"] = int(time.time())
     数据库.更新状态(机器人标志, 状态类型, _裁剪(学习))
+    return True
 
 
 def 收益分(统计: dict, 战利品优先级: str = "均衡") -> float | None:
