@@ -66,6 +66,9 @@ class ADB屏幕:
     def 安全清理(self):
         self.是否已绑定 = False
         self._原始截图缓存 = None
+        关闭 = getattr(self.设备, "关闭高速截图", None)
+        if callable(关闭):
+            关闭()
 
     def 检查主机内存预算(self, 强制刷新=True):
         """把只读内存预算检查委托给底层 ADB 设备。"""

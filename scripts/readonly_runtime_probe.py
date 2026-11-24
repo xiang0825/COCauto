@@ -37,8 +37,9 @@ def readonly_runner(argv, **kwargs):
                     ["shell", "dumpsys", "input"],
                     ["shell", "dumpsys", "activity", "top-resumed"],
                     ["shell", "wm", "size"])
-        or args == ['exec-out', 'screencap', '-p']
+        or args in (['exec-out', 'screencap', '-p'], ['exec-out', 'screencap'])
         or (len(args) == 5 and args[:3] == ['exec-out', 'screencap', '-d'] and args[-1] == '-p')
+        or (len(args) == 4 and args[:3] == ['exec-out', 'screencap', '-d'])
     )
     if not allowed:
         raise RuntimeError(f"Read-only probe blocked ADB command: {args!r}")

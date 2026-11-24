@@ -791,7 +791,52 @@ Input Reader State:
         }):
             裁剪 = 设备.获取屏幕图像cv(40, 50, 90, 100)
         self.assertEqual(裁剪.shape, (50, 50, 3))
-        self.assertEqual(runner.命令[1][1:], ["-s", "emulator-5554", "exec-out", "screencap", "-p"])
+        # 默认请求原始像素；设备仍返回 PNG 时也能直接解码。
+        self.assertEqual(runner.命令[1][1:], ["-s", "emulator-5554", "exec-out", "screencap"])
+
+    def _原始截图字节(self, 图像BGR, 头长=16, 前缀=b""):
+        高, 宽 = 图像BGR.shape[:2]
+        RGBA = cv2.cvtColor(图像BGR, cv2.COLOR_BGR2RGBA)
+        头 = np.array([宽, 高, 1] + ([0] if 头长 == 16 else []), dtype="<u4").tobytes()
+        return 前缀 + 头 + RGBA.tobytes()
+
+    def _内存充足(self):
+        return patch.object(ADB设备操作类, "_获取主机内存状态", return_value={
+            "内存负载": 50,
+            "可用物理内存": 8 * 1024 * 1024 * 1024,
+            "可用提交额度": 8 * 1024 * 1024 * 1024,
+        })
+
+    def test_screencap原始像素按新旧头长和前置警告都能解析(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        图像[50:100, 40:90] = (20, 100, 200)
+        警告 = b"[Warning] Multiple displays were found, but no display id was specified!\n"
+        for 头长, 前缀 in ((16, b""), (12, b""), (16, 警告)):
+            with self.subTest(头长=头长, 有警告=bool(前缀)):
+                runner = 假Runner(结果(在线模拟器), 结果(self._原始截图字节(图像, 头长, 前缀)))
+                设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+                with self._内存充足():
+                    结果图 = 设备.获取屏幕图像cv(0, 0, 2000, 2000)
+                self.assertTrue(np.array_equal(结果图, 图像))
+                self.assertFalse(设备._截图使用PNG)
+
+    def test_原始截图无法解析时改用PNG重试且之后保持PNG(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        编码成功, 编码 = cv2.imencode(".png", 图像)
+        self.assertTrue(编码成功)
+        runner = 假Runner(
+            结果(在线模拟器),
+            结果(b"\x00" * 1000),
+            结果(),
+            结果(在线模拟器),
+            结果(编码.tobytes()),
+        )
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        with self._内存充足():
+            结果图 = 设备.获取屏幕图像cv()
+        self.assertEqual(结果图.shape, (600, 800, 3))
+        self.assertTrue(设备._截图使用PNG)
+        self.assertEqual(runner.命令[-1][1:], ["-s", "emulator-5554", "exec-out", "screencap", "-p"])
 
     def test_MuMu未确认游戏显示层时拒绝退回启动器截图(self):
         设备 = ADB设备操作类(

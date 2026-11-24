@@ -197,7 +197,16 @@ class ADB设备操作类:
         # 因为本项目每次 ADB 调用都会创建 adb.exe 子进程；重试必须有界，
         # 避免在雷电卡顿时继续堆积进程拖垮宿主机。
         self._截图重试上限 = 3
-        锁键 = (os.path.normcase(os.path.abspath(self.adb路径)), self.设备序列号)
+        # 默认用 screencap 原始像素（不带 -p）：省掉设备端 PNG 压缩，
+        # MuMu 1280×720 实测约 270ms，对比 PNG 约 500ms。某台设备一旦
+        # 返回无法解析的原始数据，就永久改回 PNG，保持旧行为。
+        self._截图使用PNG = False
+        # MuMu 渲染器高速截图（约 7ms/张）。按 (序列号, 包名) 建立，第一次
+        # 使用前要和 adb 截图交叉核对一次，确认是同一个实例和显示层。
+        self._高速截图 = None
+        self._高速截图键: tuple[str, str] | None = None
+        self._高速截图已核对 = False
+        锁键 =(os.path.normcase(os.path.abspath(self.adb路径)), self.设备序列号)
         with self._设备命令锁容器锁:
             self._命令锁 = self._设备命令锁容器.setdefault(锁键, threading.RLock())
 
@@ -1612,6 +1621,89 @@ class ADB设备操作类:
                 f"目标={目标包名}）；不会点击其他应用或发送返回键。"
             )
 
+    def _获取高速截图器(self):
+        """返回可用的 MuMu 高速截图器；不满足条件时返回 None。"""
+        # 测试里的假 runner 绝不能连到本机真实模拟器。
+        if (
+            getattr(self, "_runner", None) is not subprocess.run
+            or os.environ.get("COC_DISABLE_MUMU_IPC") == "1"
+        ):
+            return None
+        if not self._目标包名 or not self._是MuMu连接():
+            return None
+        键 = (self.设备序列号, self._目标包名)
+        if self._高速截图键 != 键:
+            # 设备或目标包变化：旧连接作废，重新核对。
+            if self._高速截图 is not None:
+                self._高速截图.关闭()
+            self._高速截图 = None
+            self._高速截图键 = 键
+            self._高速截图已核对 = False
+            self._高速截图核对失败次数 = 0
+            from 模块.MuMu高速截图 import MuMu高速截图, 查找MuMu截图库, 解析MuMu实例号
+            实例号 = 解析MuMu实例号(self.设备序列号)
+            库 = 查找MuMu截图库(self.adb路径)
+            if 实例号 is not None and 库 is not None:
+                self._高速截图 = MuMu高速截图(库[0], 库[1], 实例号, self._目标包名)
+        截图器 = self._高速截图
+        if 截图器 is None or 截图器.已停用:
+            return None
+        return 截图器
+
+    def _核对高速截图(self, adb画面) -> None:
+        """用一张刚取得的 adb 截图确认高速截图连的是同一实例和显示层。"""
+        截图器 = self._获取高速截图器()
+        if 截图器 is None or self._高速截图已核对:
+            return
+        高速画面 = 截图器.截图()
+        if 高速画面 is None:
+            return
+        import numpy as np
+        if 高速画面.shape == adb画面.shape:
+            差异 = float(np.abs(高速画面.astype(np.int16) - adb画面.astype(np.int16)).mean())
+            # 两次截图之间游戏可能有动画，允许少量差异；不同实例或
+            # 不同显示层的画面差异会远大于这个阈值。
+            if 差异 < 12.0:
+                self._高速截图已核对 = True
+                return
+        # 单次不一致可能只是两次截图之间正好切换了画面；连续 3 次对不上
+        # 才判定连错了实例/显示层并停用。
+        self._高速截图核对失败次数 = getattr(self, "_高速截图核对失败次数", 0) + 1
+        if self._高速截图核对失败次数 >= 3:
+            截图器.关闭()
+
+    def 关闭高速截图(self) -> None:
+        if self._高速截图 is not None:
+            self._高速截图.关闭()
+        self._高速截图 = None
+        self._高速截图键 = None
+        self._高速截图已核对 = False
+
+    @staticmethod
+    def _解析原始截图(数据: bytes):
+        """解析 ``screencap``（不带 -p）的原始像素，返回 BGR 图像或 None。
+
+        数据格式：头部 宽、高、像素格式（各 4 字节小端），Android 12 起
+        还多一个 4 字节色彩空间，之后是 宽×高×4 字节像素。头部前面可能
+        混有 adb 打印的诊断文本，所以在开头一小段里寻找能让总长度严格
+        对上的位置；找不到就返回 None，由调用方退回 PNG。
+        """
+        import cv2
+        import numpy as np
+
+        # 1=RGBA_8888，2=RGBX_8888，5=BGRA_8888；其他格式不是每像素 4 字节。
+        转换方式 = {1: cv2.COLOR_RGBA2BGR, 2: cv2.COLOR_RGBA2BGR, 5: cv2.COLOR_BGRA2BGR}
+        总长 = len(数据)
+        for 起点 in range(0, min(总长 - 12, 4096) if 总长 > 12 else 0):
+            宽, 高, 格式 = (int(v) for v in np.frombuffer(数据, dtype="<u4", count=3, offset=起点))
+            if not (1 <= 宽 <= 8192 and 1 <= 高 <= 8192) or 格式 not in 转换方式:
+                continue
+            for 头长 in (16, 12):
+                if 总长 - 起点 - 头长 == 宽 * 高 * 4:
+                    像素 = np.frombuffer(数据, dtype=np.uint8, offset=起点 + 头长).reshape(高, 宽, 4)
+                    return cv2.cvtColor(像素, 转换方式[格式])
+        return None
+
     def 获取屏幕图像cv(self, 左边: int = 0, 顶边: int = 0, 右边: int = 2000, 底边: int = 2000):
         import cv2
         import numpy as np
@@ -1622,7 +1714,13 @@ class ADB设备操作类:
         self._验证目标()
         最后错误 = None
         图像 = None
-        for 尝试次数 in range(self._截图重试上限):
+        # MuMu 渲染器高速截图：只在已和 adb 截图核对过之后使用；拿不到
+        # 画面（CoC 不在任何显示层、IPC 出错等）就照常走下面的 adb 流程。
+        高速截图器 = self._获取高速截图器()
+        if 高速截图器 is not None and self._高速截图已核对:
+            self._检查主机内存预算()
+            图像 = 高速截图器.截图()
+        for 尝试次数 in range(0 if 图像 is not None else self._截图重试上限):
             if 尝试次数 > 0 and not self._目标已验证:
                 self.确认在线()
             # 内存保护必须在每一次重试前重新检查；不能为了等待模拟器
@@ -1642,27 +1740,38 @@ class ADB设备操作类:
                             "未确认 CoC 所在的 MuMu 游戏显示层，已拒绝使用默认 display 截图"
                         )
                     截图参数.extend(["-d", 显示ID])
-                截图参数.append("-p")
-                原始PNG = self.执行(截图参数, timeout=15, binary=True)
-                if len(原始PNG) > 20 * 1024 * 1024:
+                使用PNG = getattr(self, "_截图使用PNG", False)
+                if 使用PNG:
+                    截图参数.append("-p")
+                原始数据 = self.执行(截图参数, timeout=15, binary=True)
+                if len(原始数据) > 20 * 1024 * 1024:
                     raise ADB错误("ADB 截图数据异常过大，已拒绝继续解码以保护内存。")
-                if not 原始PNG:
+                if not 原始数据:
                     raise ADB错误(
                         "ADB 截图返回空数据；设备可能刚刚断开，已停止解码并准备重新验证。"
                     )
-                # MuMu Android 15 的 adb.exe 在 exec-out 输出 PNG 前会把
-                # “Multiple displays were found...” 警告写到 stdout，导致
-                # OpenCV 无法解码。只丢弃 PNG 签名以前的这段诊断文本，
+                # MuMu Android 15 的 adb.exe 在 exec-out 输出前会把
+                # “Multiple displays were found...” 警告写到 stdout。PNG 和
+                # 原始像素两种解析都会跳过数据前面的这段诊断文本，
                 # 不放宽大小限制，也不吞掉真正的空响应。
                 PNG签名 = b"\x89PNG\r\n\x1a\n"
-                PNG起点 = 原始PNG.find(PNG签名)
-                if PNG起点 < 0:
+                PNG起点 = 原始数据.find(PNG签名)
+                if PNG起点 >= 0:
+                    图像 = cv2.imdecode(
+                        np.frombuffer(原始数据[PNG起点:], dtype=np.uint8), cv2.IMREAD_COLOR
+                    )
+                elif 使用PNG:
                     raise ADB错误("ADB 截图返回的内容不是有效 PNG，已停止解码并准备重试。")
-                if PNG起点 > 0:
-                    原始PNG = 原始PNG[PNG起点:]
-                图像 = cv2.imdecode(np.frombuffer(原始PNG, dtype=np.uint8), cv2.IMREAD_COLOR)
+                else:
+                    图像 = self._解析原始截图(原始数据)
+                    if 图像 is None:
+                        # 下一次重试（以及之后所有截图）改回 PNG。
+                        self._截图使用PNG = True
+                        raise ADB错误("ADB 原始截图无法解析，已改用 PNG 截图并准备重试。")
                 if 图像 is None or 图像.size == 0:
                     raise ADB错误("ADB 截图无法解码；请确认设备已启动并允许 ADB 调试。")
+                if 高速截图器 is not None and not self._高速截图已核对:
+                    self._核对高速截图(图像)
                 break
             except ADB错误 as 异常:
                 最后错误 = 异常
