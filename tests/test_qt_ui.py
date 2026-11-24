@@ -99,7 +99,7 @@ class 主窗口测试(unittest.TestCase):
 
     def test_开始前先保存尚未提交的任务设置(self):
         计划 = self.运行页.计划
-        计划.任务列表.item(0).setCheckState(Qt.Checked)
+        计划.任务列表.item(1).setCheckState(Qt.Checked)
         self.assertTrue(计划.有未保存修改)
         self.窗口._主按钮点击()
         self.监控中心.启动机器人.assert_called_once_with("robot_1")
@@ -164,10 +164,10 @@ class 主窗口测试(unittest.TestCase):
 
     def test_调整顺序与全选会保存(self):
         计划 = self.运行页.计划
-        计划.任务列表.setCurrentRow(2)
+        计划.任务列表.setCurrentRow(3)
         计划._移动(-1)
         计划.保存()
-        self.assertEqual(self.数据库.获取机器人设置("robot_1").任务计划顺序[1], "wall")
+        self.assertEqual(self.数据库.获取机器人设置("robot_1").任务计划顺序[2], "wall")
         计划._全部勾选(True)
         计划.保存()
         设置 = self.数据库.获取机器人设置("robot_1")
