@@ -104,7 +104,8 @@ def 定位继续按钮(OCR结果) -> tuple[int, int] | None:
     return None
 
 
-def 开启奖励宝箱(上下文) -> bool:
+def 开启奖励宝箱(上下文, 等待出现秒: float = 0.0) -> bool:
+    """敲开宝箱。``等待出现秒`` > 0 时先等宝箱页出现（领取奖励后有一段过场）。"""
     置状态 = getattr(上下文, "置脚本状态", lambda *_a, **_k: None)
 
     def 截图():
@@ -113,8 +114,13 @@ def 开启奖励宝箱(上下文) -> bool:
     def 敲() -> bool:
         return bool(上下文.点击已确认安全按钮(*宝箱点击点, 延时=敲击间隔毫秒))
 
-    图像 = 截图()
-    根数 = 识别宝箱页(图像)
+    截止 = time.time() + max(0.0, 等待出现秒)
+    while True:
+        图像 = 截图()
+        根数 = 识别宝箱页(图像)
+        if 根数 is not None or time.time() >= 截止:
+            break
+        上下文.脚本延时(500)
     if 根数 is None:
         return False
     _保存截图(图像, f"宝箱页_{根数}根")

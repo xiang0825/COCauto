@@ -93,6 +93,22 @@ class 敲宝箱流程测试(unittest.TestCase):
         self.assertIn(3000, 上下文.延时记录)
         self.assertIn("回到主世界", 上下文.日志[-1])
 
+    def test_领取后等宝箱页出现再敲(self):
+        黑 = np.zeros((600, 800, 3), np.uint8)
+        三, 一, 奖励 = (_读(n) for n in ("宝箱页_3根.png", "宝箱页_1根.png", "奖励页_繼續.png"))
+        上下文 = 假上下文([黑, 三, 一, 奖励])
+        原截图 = 上下文._截图
+        次数 = [0]
+
+        def 截图(*a, **k):  # 头两帧还是过场黑屏，之后出现宝箱页
+            次数[0] += 1
+            if 次数[0] == 2 and len(上下文._画面) > 1 and 上下文._画面[0] is 黑:
+                上下文._画面.pop(0)
+            return 原截图()
+        上下文.op.获取屏幕图像cv = 截图
+        self.assertTrue(宝箱.开启奖励宝箱(上下文, 等待出现秒=5.0))
+        self.assertIn(500, 上下文.延时记录)
+
     def test_不是宝箱页什么都不点(self):
         上下文 = 假上下文([np.zeros((600, 800, 3), np.uint8)])
         self.assertFalse(宝箱.开启奖励宝箱(上下文))
