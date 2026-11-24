@@ -207,6 +207,26 @@ def 解析个人积分(文本: str) -> tuple[int, int] | None:
     return 当前, 上限
 
 
+def 识别卡片位置(项列表: Iterable[文字项], 配置: dict) -> list[tuple[int, int]]:
+    """用卡片下方的积分数字定位当前画面里完整露出的任务卡中心。"""
+    面板 = 配置.get("面板", {})
+    x1, y1, x2, y2 = 面板.get("卡片区ROI", (0, 0, 800, 600))
+    dx, dy = 面板.get("卡片相对积分", [-15, -50])
+    最小中心y = int(面板.get("卡片中心最小y", 120))
+    位置 = []
+    for 项 in 项列表:
+        if not (x1 <= 项.框[0] and 项.框[2] <= x2 and y1 <= 项.框[1] and 项.框[3] <= y2):
+            continue
+        if 解析积分([项]) is None:
+            continue
+        中心 = (项.中心[0] + int(dx), 项.框[1] + int(dy))
+        if 中心[1] < 最小中心y:
+            continue
+        if all(abs(中心[0] - 已有[0]) > 30 or abs(中心[1] - 已有[1]) > 30 for 已有 in 位置):
+            位置.append(中心)
+    return sorted(位置, key=lambda 点: (round(点[1] / 80), 点[0]))
+
+
 # ------------------------------------------------------------------ 选择
 @dataclass
 class 任务候选:
@@ -755,14 +775,30 @@ class 部落竞赛任务(基础任务):
             self._延时(400)
 
     def _扫描任务卡(self) -> list[任务候选]:
+        """逐页找出任务卡并点开读详情。
+
+        任务卡的数量和顺序每次都会变（接任务后进行中的卡会挪到左上角，
+        卡数也可能是 13 张），所以卡片位置按卡下方的积分数字现找；
+        找不到积分数字时才退回资源里写死的位置。同一任务在相邻两页都
+        露出来时只读一次。
+        """
         页列表 = self.配置.get("面板", {}).get("页", [])
         候选列表: list[任务候选] = []
+        已读: set[tuple[str, int | None]] = set()
         当前页 = 0
         for 页号, 页 in enumerate(页列表):
             当前页 = self._切换到页(当前页, 页号)
-            for 位置 in 页.get("卡片", []):
-                候选列表.append(self._读取详情(页号, tuple(位置)))
+            位置列表 = 识别卡片位置(self._OCR(self._截图()), self.配置) or [
+                tuple(位置) for 位置 in 页.get("卡片", [])
+            ]
+            for 位置 in 位置列表:
+                候选 = self._读取详情(页号, tuple(位置))
                 self._关闭详情()
+                键 = (候选.文本, 候选.积分)
+                if 候选.文本 and 键 in 已读:
+                    continue
+                已读.add(键)
+                候选列表.append(候选)
         self._当前页 = 当前页
         return 候选列表
 
