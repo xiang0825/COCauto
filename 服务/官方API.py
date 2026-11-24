@@ -128,6 +128,9 @@ class 账号摘要:
     研究: dict[str, tuple[int, int]] = field(default_factory=dict)
     战宠: dict[str, tuple[int, int]] = field(default_factory=dict)
     已激活超级兵种: list[str] = field(default_factory=list)
+    # 成就 “Games Champion” 的累计值 = 历次部落竞赛个人积分之和；
+    # None 表示官方数据里没有这项成就。
+    部落竞赛累计积分: int | None = None
     同步时间: float = 0.0
 
     def 是否满级(self, 类别: str, 名称: str) -> bool | None:
@@ -148,7 +151,8 @@ class 账号摘要:
             "英雄": {k: list(v) for k, v in self.英雄.items()},
             "研究": {k: list(v) for k, v in self.研究.items()},
             "战宠": {k: list(v) for k, v in self.战宠.items()},
-            "已激活超级兵种": self.已激活超级兵种, "同步时间": self.同步时间,
+            "已激活超级兵种": self.已激活超级兵种,
+            "部落竞赛累计积分": self.部落竞赛累计积分, "同步时间": self.同步时间,
         }
 
     def 日志文本(self) -> str:
@@ -183,6 +187,13 @@ def 整理账号摘要(玩家: dict) -> 账号摘要:
             摘要.战宠[战宠名称[名]] = 等级
         if 项.get("superTroopIsActive"):
             摘要.已激活超级兵种.append(名)
+    for 项 in 玩家.get("achievements", []) or []:
+        if 项.get("name") == "Games Champion":
+            try:
+                摘要.部落竞赛累计积分 = int(项.get("value") or 0)
+            except (TypeError, ValueError):
+                摘要.部落竞赛累计积分 = None
+            break
     return 摘要
 
 

@@ -597,6 +597,7 @@ class 任务计划测试(unittest.TestCase):
     def test_所有可选任务都有对应的计划入口(self):
         设置 = 机器人设置(
             是否刷主世界=True,
+            是否部落竞赛接任务=True,
             是否刷夜世界=True,
             开启刷墙=True,
             是否升级建议升级的建筑=True,
@@ -608,7 +609,7 @@ class 任务计划测试(unittest.TestCase):
 
         self.assertEqual(
             set(机器人._任务计划顺序(设置)),
-            {"main_resource", "night_resource", "wall", "building", "hero", "pet", "research"},
+            {"event", "main_resource", "night_resource", "wall", "building", "hero", "pet", "research"},
         )
 
     def test_任务注册表同时覆盖默认顺序和实际分派(self):
@@ -620,6 +621,7 @@ class 任务计划测试(unittest.TestCase):
         机器人._执行夜世界刷资源计划 = Mock(return_value=True)
         机器人._执行刷墙计划 = Mock(return_value=True)
         机器人._执行升级计划 = Mock(return_value=True)
+        机器人._执行部落竞赛计划 = Mock(return_value=True)
         上下文 = SimpleNamespace(
             _资源计划已打满=False,
             置脚本状态=Mock(),
@@ -634,6 +636,7 @@ class 任务计划测试(unittest.TestCase):
 
     def test_注册表每个任务都有可导入的实际执行入口(self):
         入口 = {
+            "event": ("任务流程.活动.部落竞赛", "部落竞赛任务"),
             "main_resource": ("任务流程.主世界打鱼", "主世界打鱼任务"),
             "night_resource": ("任务流程.夜世界.夜世界打鱼", "夜世界打鱼任务"),
             "wall": ("任务流程.升级城墙", "城墙升级任务"),
