@@ -108,6 +108,32 @@ class 流程分支测试(unittest.TestCase):
         上下文.数据库.更新状态.assert_called_once()
         self.assertFalse(任务.需要配置())
 
+    def test_重启后同一套配置不再清空重配_改了设置才重配(self):
+        import tempfile
+        from 数据库.任务数据库 import 任务数据库
+        库 = 任务数据库(os.path.join(tempfile.mkdtemp(), "t.db"))
+
+        def 新运行(预设="隐秘哥布林刷资源"):
+            上下文 = SimpleNamespace(
+                设置=SimpleNamespace(是否自动配置军队=True, 阵容预设=预设, 配兵兵种=[], 配兵法术=[], 配兵攻城=""),
+                数据库=库, 机器人标志="r", 置脚本状态=Mock(), 获取模板识别器=Mock(),
+            )
+            任务 = 编.编辑军队任务(上下文)
+            任务._退出到主世界 = Mock()
+            任务._配置流程 = Mock(return_value={"配置": {"超级哥布林": 88}, "人口": [352, 352]})
+            return 任务, 上下文
+
+        第一次, _ = 新运行()
+        self.assertTrue(第一次.执行())
+        第一次._配置流程.assert_called_once()
+        重启后, 上下文 = 新运行()
+        self.assertTrue(重启后.执行())
+        重启后._配置流程.assert_not_called()
+        self.assertIn("跳过重配", 上下文.置脚本状态.call_args[0][0])
+        改预设, _ = 新运行("根蔓骑士雪怪推进")
+        self.assertTrue(改预设.执行())
+        改预设._配置流程.assert_called_once()
+
     def test_未填满不算成功且最多尝试两次(self):
         任务, 上下文 = self._任务()
         任务._配置流程 = Mock(return_value={"配置": {"超级哥布林": 117}, "人口": [85, 352]})
