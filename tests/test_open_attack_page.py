@@ -270,6 +270,47 @@ class 打开进攻页面测试(unittest.TestCase):
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
+    def test_模式页耗掉大半窗口后点普通对战仍有完整等待窗口(self):
+        # 实机 rc128 10:37：高负载时模式页双帧确认用了约 40 秒，点击普通对战后
+        # 只剩几秒就被判“45秒内未确认”。推进一步后应重新给一个等待窗口。
+        任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
+        模式画面 = self.多人模式选择画面()
+        搜索画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+        模式页 = SimpleNamespace(
+            页面="主世界战斗模式选择", 世界="主世界", 可信度=0.96
+        )
+        时钟 = [1000.0]
+        已截 = [0]
+        帧 = iter([模式画面, 模式画面, 搜索画面, 搜索画面, 搜索画面, 搜索画面])
+
+        def 截图(*_a, **_k):
+            时钟[0] += 20.0 if 已截[0] < 2 else 8.0  # 两帧模式页已用 40 秒
+            已截[0] += 1
+            return next(帧, 搜索画面)
+
+        def 走时():
+            时钟[0] += 0.2  # 不截图的等待循环也要前进，避免测试卡死
+            return 时钟[0]
+
+        上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            op=SimpleNamespace(获取屏幕图像cv=Mock(side_effect=截图)),
+            识别点击画面=Mock(return_value=模式页),
+            点击=Mock(return_value=True),
+            点击已确认安全按钮=Mock(return_value=True),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+        任务.模板识别 = Mock()
+        任务._是否出现下一个 = Mock(side_effect=[False, False] + [True] * 20)
+
+        with patch("任务流程.主世界打鱼.打开进攻页面.time.monotonic", side_effect=走时):
+            结果 = 任务._等待并点击攻击按钮(上下文, 主世界入口已点击=True)
+        self.assertTrue(结果, [c.args[0] for c in 上下文.置脚本状态.call_args_list])
+        上下文.点击已确认安全按钮.assert_called_once_with(137, 446, 延时=700)
+
     def test_弱绿色候选不能把多人模式选择页确认成搜索页(self):
         任务 = 打开进攻页面任务.__new__(打开进攻页面任务)
         任务.模板识别 = Mock()
