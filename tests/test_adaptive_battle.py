@@ -1061,8 +1061,28 @@ class 自适应战斗测试(unittest.TestCase):
             本场进攻方向=["左上"], 点击=点击, 置脚本状态=日志.append, 脚本延时=延时,
         )
         self.assertTrue(任务.执行已识别闪电法术(上下文))
-        延时.assert_called_once_with(400)
+        延时.assert_called_once_with(500)
         self.assertTrue(any("3/3个" in 文本 for 文本 in 日志))
+
+    def test_数字迟迟不降时最多复读三次后停止(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.战斗是否仍在进行 = Mock(return_value=True)
+        任务.读取槽位显示兵量 = Mock(side_effect=[3, 3, 3, 3, 3])
+        任务.读取兵栏槽位图像 = Mock(return_value=None)
+        点击 = Mock(return_value=True)
+        延时 = Mock()
+        日志 = []
+        上下文 = SimpleNamespace(
+            当前兵栏清单=[{
+                "名称": "法术_闪电法术", "类别": "药水", "数量已确认": True,
+                "数量": 3, "区域": (320, 493, 376, 594),
+            }],
+            本场进攻方向=["左上"], 点击=点击, 置脚本状态=日志.append, 脚本延时=延时,
+        )
+        self.assertTrue(任务.执行已识别闪电法术(上下文))
+        self.assertEqual(延时.call_count, 3)
+        self.assertEqual(点击.call_count, 2)  # 选卡 + 1 次落点
+        self.assertTrue(any("未确认下降" in 文本 for 文本 in 日志))
 
     def test_闪电法术未确认数量时不盲点槽位(self):
         任务 = 进攻任务.__new__(进攻任务)
