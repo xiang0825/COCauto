@@ -187,7 +187,10 @@ class 兵栏卡片定位测试(unittest.TestCase):
         任务 = 进攻任务.__new__(进攻任务)
         任务.模板识别 = 模板匹配引擎()
         槽位 = 任务.本场兵栏槽位(SimpleNamespace(置脚本状态=lambda *_a, **_k: None), 图)
-        self.assertEqual(槽位, list(进攻任务.兵栏槽位))
+        # 固定 9 格（各格可对齐到相邻的实际卡片，见 _固定格对齐实际卡片）
+        self.assertEqual([名 for 名, _ in 槽位], [名 for 名, _ in 进攻任务.兵栏槽位])
+        for (_, 区), (_, 固定) in zip(槽位, 进攻任务.兵栏槽位):
+            self.assertLessEqual(abs(区[0] - 固定[0]), 12)
         _, (x1, y1, x2, y2) = 槽位[1]
         名称, 分数 = 任务._槽位最佳模板(图[y1:y2, x1:x2], 任务.兵种模板列表)
         self.assertEqual(名称, "兵种_超级哥布林")

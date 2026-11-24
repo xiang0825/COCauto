@@ -20,5 +20,20 @@ class 兵栏空位测试(unittest.TestCase):
         self.assertFalse(进攻任务._是兵栏空位(SimpleNamespace(), 568))
 
 
+class 固定格对齐测试(unittest.TestCase):
+    def test_第6格对齐到实际闪电卡(self):
+        卡片 = [(59, 493, 115, 594), (119, 493, 175, 594), (179, 493, 235, 594),
+              (251, 493, 307, 594), (314, 493, 370, 594), (382, 493, 438, 594)]
+        对齐 = 进攻任务._固定格对齐实际卡片(list(进攻任务.可见兵栏格子), 卡片)
+        self.assertEqual(对齐[5], ("第6格", (382, 493, 438, 594)))
+        self.assertEqual(对齐[0], ("第1格", (59, 493, 115, 594)))
+        # 没有对应卡片的空位保持固定格
+        self.assertEqual(对齐[7], 进攻任务.可见兵栏格子[7])
+
+    def test_认不出卡片时保持固定格(self):
+        self.assertEqual(进攻任务._固定格对齐实际卡片(list(进攻任务.可见兵栏格子), []),
+                         list(进攻任务.可见兵栏格子))
+
+
 if __name__ == "__main__":
     unittest.main()
