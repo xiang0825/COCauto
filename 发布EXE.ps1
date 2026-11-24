@@ -6,6 +6,9 @@
 )
 
 $ErrorActionPreference = "Stop"
+# Windows PowerShell 5.1 默认按系统代码页输出，被 Python 等调用方读取时中文报错会变成 ???。
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding = [Console]::OutputEncoding
 $脚本目录 = if ($PSScriptRoot) {
     $PSScriptRoot
 } else {
@@ -85,7 +88,8 @@ function Get-DirectoryManifest {
 $expectedExeHash = (Get-FileHash -LiteralPath $sourceExe -Algorithm SHA256).Hash
 $expectedInternalManifest = @(Get-DirectoryManifest -Directory $sourceInternal)
 $expectedInternalFileCount = $expectedInternalManifest.Count
-if ($expectedInternalFileCount -lt 1000) {
+# 实际发布包 _internal 约 470–520 个文件（rc123–rc127）；低于 300 才视为复制未完成。
+if ($expectedInternalFileCount -lt 300) {
     throw "发布包校验失败：_internal 文件数只有 $expectedInternalFileCount，疑似仍在复制或构建不完整"
 }
 

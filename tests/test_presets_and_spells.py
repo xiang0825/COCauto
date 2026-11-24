@@ -158,6 +158,56 @@ class 全部兵种法术兵栏测试(unittest.TestCase):
             self.assertEqual(任务._槽位最佳模板(格, 模板)[0], 名)
 
 
+class 兵栏卡片定位测试(unittest.TestCase):
+    """兵栏不是固定 9 格：按卡片底部亮段定位实际卡片。"""
+
+    @staticmethod
+    def _图(名):
+        路径 = os.path.join(os.path.dirname(__file__), "fixtures", "军队编辑", f"{名}.png")
+        return cv2.imdecode(np.fromfile(路径, np.uint8), cv2.IMREAD_COLOR)
+
+    def test_实机三种兵栏的卡片左边界(self):
+        from 任务流程.主世界打鱼.进攻 import 进攻任务
+        期望 = {
+            "bar_rr": [59, 119, 179, 240, 311, 375, 442, 503, 563, 624],        # 10 格
+            "bar_all1": [10, 70, 131, 191, 252, 312, 384, 447, 515, 575, 636, 696],  # 右侧半张跳过
+            "bar_all2": [39, 100, 171, 235, 303, 363, 424, 484, 544, 605, 665],      # 左侧半张跳过
+        }
+        for 名, 左边界 in 期望.items():
+            卡片 = 进攻任务.识别兵栏卡片(self._图(名))
+            self.assertEqual([区[0] for 区 in 卡片], 左边界, 名)
+            self.assertTrue(all(区[2] - 区[0] == 56 for 区 in 卡片))
+
+    def test_认不出卡片时回退固定九格(self):
+        from 任务流程.主世界打鱼.进攻 import 进攻任务
+        任务 = 进攻任务.__new__(进攻任务)
+        上下文 = SimpleNamespace(置脚本状态=lambda *_a, **_k: None)
+        槽位 = 任务.本场兵栏槽位(上下文, np.zeros((600, 800, 3), np.uint8))
+        self.assertEqual(槽位, list(进攻任务.兵栏槽位))
+        self.assertEqual(上下文.本场兵栏槽位, 槽位)
+
+    def test_十格兵栏第十格的疗伤法术能读到(self):
+        from 任务流程.主世界打鱼.进攻 import 进攻任务
+        from 模块.检测.模板匹配器 import 模板匹配引擎
+        图 = self._图("bar_rr")
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.模板识别 = 模板匹配引擎()
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=lambda *a, **_k: 图.copy() if a[2] - a[0] > 700 else 图[a[1]:a[3], a[0]:a[2]].copy()),
+            设置=SimpleNamespace(是否自动配兵=False, 自动配兵玩法="资源优先"),
+            置脚本状态=lambda *_a, **_k: None,
+        )
+        清单 = 任务.检查当前配兵(上下文)
+        类别名称 = [(项["类别"], str(项["名称"])) for 项 in 清单]
+        self.assertEqual(len(清单), 10)
+        self.assertEqual(类别名称[4], ("攻城器械", "兵种_攻城战车"))
+        self.assertEqual(类别名称[5], ("英雄", "英雄_飞龙公爵"))
+        self.assertEqual(
+            [名 for 类, 名 in 类别名称[6:]],
+            ["法术_狂暴法术", "法术_冰冻法术", "法术_急速法术", "法术_疗伤法术"],
+        )
+
+
 class 跟随法术计划测试(unittest.TestCase):
     def setUp(self):
         from 任务流程.主世界打鱼.进攻 import 进攻任务

@@ -484,6 +484,30 @@ class 检测游戏登录状态任务(基础任务):
                 停止事件.set()
         return True
 
+    @staticmethod
+    def _定位战后奖励确认按钮(上下文, 页面识别, 屏幕图像) -> tuple[str, tuple[int, int]] | None:
+        """只认胜利之星奖励的“领取”和“仍要跳过”确认（文字 + 按钮位置都要对上）。
+
+        识别器在 ``奖励动画处理中=False`` 时只返回这两种由文字确认的操作，
+        不会把普通多按钮弹窗或宝石购买框当成奖励页。
+        """
+        获取OCR = getattr(上下文, "获取OCR引擎", None)
+        识别奖励 = getattr(页面识别, "识别战后奖励按钮", None)
+        if not callable(获取OCR) or not callable(识别奖励) or not isinstance(屏幕图像, np.ndarray):
+            return None
+        try:
+            OCR返回 = 获取OCR()(屏幕图像, use_cls=False)
+            OCR结果 = OCR返回[0] if isinstance(OCR返回, tuple) else OCR返回
+            全部文字 = "".join(str(项[1]) for 项 in (OCR结果 or []) if isinstance(项, (list, tuple)) and len(项) >= 2)
+            if any(字 in 全部文字 for 字 in ("寶石", "宝石", "購買", "购买")):
+                return None
+            候选 = 识别奖励(屏幕图像, OCR结果, 奖励动画处理中=False)
+        except Exception:
+            return None
+        if not 候选 or 候选[0] not in {"确认跳过", "领取"}:
+            return None
+        return 候选
+
     def _定位欢迎回来确定按钮(self, 屏幕图像) -> tuple[int, int] | None:
         """只识别重连后的战报欢迎页，不处理其它多按钮弹窗。"""
         获取OCR = getattr(self.上下文, "获取OCR引擎", None)
@@ -728,6 +752,35 @@ class 检测游戏登录状态任务(基础任务):
                     if not 上下文.点击已确认安全按钮(*新确定点, 延时=180):
                         上下文.页面恢复失败 = True
                         上下文.置脚本状态("欢迎回来战报确定按钮输入失败，保留页面")
+                        return False
+                    开始检测时间 = time.monotonic()
+                    检测轮次 = 0
+                    continue
+                # 断线重登后游戏会补弹胜利之星奖励：先“跳过宝箱动画”，再弹出
+                # “仍要跳过”的确认框（页面识别归为多按钮弹窗）。实机 11-23 20:18
+                # 这里直接停机，整夜刷资源中断。用战后奖励识别器按文字+按钮位置
+                # 两帧确认后只点这一个确认按钮。
+                奖励操作 = self._定位战后奖励确认按钮(上下文, 页面识别, 屏幕图像)
+                if 奖励操作 is not None:
+                    上下文.脚本延时(400)
+                    try:
+                        新画面 = 上下文.op.获取屏幕图像cv(0, 0, 800, 600, 强制刷新=True)
+                    except TypeError:
+                        新画面 = 上下文.op.获取屏幕图像cv(0, 0, 800, 600)
+                    新操作 = self._定位战后奖励确认按钮(上下文, 页面识别, 新画面)
+                    if (
+                        新操作 is None
+                        or 新操作[0] != 奖励操作[0]
+                        or max(abs(新操作[1][0] - 奖励操作[1][0]), abs(新操作[1][1] - 奖励操作[1][1])) > 20
+                    ):
+                        上下文.置脚本状态("战后奖励确认框仅单帧确认，等待新页面；不点击旧坐标")
+                        continue
+                    上下文.置脚本状态(
+                        f"登录时两帧确认胜利之星奖励弹窗（{新操作[0]}），安全点击后继续登录"
+                    )
+                    if not 上下文.点击已确认安全按钮(*新操作[1], 延时=300):
+                        上下文.页面恢复失败 = True
+                        上下文.置脚本状态("战后奖励确认按钮输入失败，保留页面")
                         return False
                     开始检测时间 = time.monotonic()
                     检测轮次 = 0
