@@ -4,10 +4,14 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 
+from 核心.ADB屏幕 import 检查分辨率比例告警
 from 模块.ADB设备操作类 import ADB设备操作类, ADB错误
+
+_LOGGER = logging.getLogger(__name__)
 
 默认游戏包名 = "com.supercell.clashofclans"
 _本机地址 = re.compile(r"(?:127\.0\.0\.1|localhost):(\d{1,5})")
@@ -104,7 +108,13 @@ class 设备服务:
     def 测试截图(self, 机器人ID: str | None, 表单: 连接表单):
         """返回 BGR 图像（numpy 数组）。"""
         设备 = self._已确认设备(机器人ID, 表单)
-        return 设备.获取屏幕图像cv(0, 0, 2000, 2000)
+        图像 = 设备.获取屏幕图像cv(0, 0, 2000, 2000)
+        shape = getattr(图像, "shape", None)
+        if isinstance(shape, (tuple, list)) and len(shape) >= 2:
+            告警 = 检查分辨率比例告警(shape[1], shape[0])
+            if 告警:
+                _LOGGER.warning(告警)
+        return 图像
 
 
 # ---------------------------------------------------------------- 一键检测

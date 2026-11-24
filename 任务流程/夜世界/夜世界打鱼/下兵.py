@@ -4,6 +4,32 @@ import random
 import threading
 import time
 
+def 停止并等待英雄技能线程(上下文, 超时秒: float = 2.0) -> bool:
+    """通知后台英雄技能线程退出，并最多等待超时秒确认干净结束。"""
+    标志 = getattr(上下文, "英雄技能标志", None)
+    if 标志 is not None:
+        标志.set()
+        try:
+            delattr(上下文, "英雄技能标志")
+        except AttributeError:
+            pass
+    线程 = getattr(上下文, "英雄技能线程", None)
+    已结束 = True
+    if 线程 is not None and 线程 is not threading.current_thread():
+        try:
+            if 线程.is_alive():
+                线程.join(timeout=float(超时秒))
+            已结束 = not 线程.is_alive()
+        except Exception:
+            已结束 = False
+    if 线程 is not None:
+        try:
+            delattr(上下文, "英雄技能线程")
+        except AttributeError:
+            pass
+    return 已结束
+
+
 class 下兵(夜世界基础任务):
     # 夜世界新版兵栏的第 2 格可能是灰色/空槽；其余槽位按 800×600
     # 逻辑画布排列。这里只选择普通兵种槽，不把左侧英雄槽误当兵种。
@@ -11,6 +37,8 @@ class 下兵(夜世界基础任务):
     # 这些点位位于基地外沿，避开兵栏、放弃按钮和基地内部；每个槽位
     # 只执行有限批次，防止旧模板失配时随机点击拖满整场战斗。
     可下兵点 = ((45, 250), (400, 80), (755, 250), (45, 500), (755, 500))
+
+    停止并等待英雄技能线程 = staticmethod(停止并等待英雄技能线程)
 
     def __init__(self ,上下文: '任务上下文'):
         super().__init__(上下文)
@@ -221,6 +249,8 @@ class 下兵(夜世界基础任务):
     def 启动后台放英雄技能(self):
         if hasattr(self.上下文, '英雄技能标志'):
             return
+        if getattr(self.上下文, '英雄技能线程', None) is not None:
+            self.停止并等待英雄技能线程(self.上下文, 超时秒=2.0)
 
         标志 = self.上下文.英雄技能标志 = threading.Event()
 
@@ -237,7 +267,20 @@ class 下兵(夜世界基础任务):
                         f"夜世界英雄技能后台点击异常，停止后台技能线程：{e}"
                     )
                     标志.set()
-            try: delattr(self.上下文, '英雄技能标志')
-            except Exception: pass
+            try:
+                delattr(self.上下文, '英雄技能标志')
+            except Exception:
+                pass
+            try:
+                if getattr(self.上下文, '英雄技能线程', None) is threading.current_thread():
+                    delattr(self.上下文, '英雄技能线程')
+            except Exception:
+                pass
 
-        threading.Thread(target=_工作线程, daemon=True).start()
+        线程 = threading.Thread(
+            target=_工作线程,
+            name="夜世界英雄技能线程",
+            daemon=True,
+        )
+        self.上下文.英雄技能线程 = 线程
+        线程.start()

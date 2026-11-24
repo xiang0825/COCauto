@@ -319,6 +319,8 @@ class YOLO检测器(ONNX推理模型):
 class 线程安全YOLO检测器(ONNX推理模型):
     """YOLO目标检测器（线程安全的单例模式）"""
 
+    默认置信度阈值 = 0.35
+    跨类去重IOU阈值 = 0.60
     _实例字典 = {}  # 存储不同模型路径对应的实例
     _类锁 = threading.Lock()  # 类级别的锁
 
@@ -367,6 +369,65 @@ class 线程安全YOLO检测器(ONNX推理模型):
             self.类别数量 = len(类别列表)
             self._已初始化 = True
 
+    @staticmethod
+    def _计算框IOU(框A, 框B) -> float:
+        try:
+            ax1, ay1, ax2, ay2 = [float(v) for v in 框A]
+            bx1, by1, bx2, by2 = [float(v) for v in 框B]
+        except (TypeError, ValueError):
+            return 0.0
+        ax1, ax2 = min(ax1, ax2), max(ax1, ax2)
+        ay1, ay2 = min(ay1, ay2), max(ay1, ay2)
+        bx1, bx2 = min(bx1, bx2), max(bx1, bx2)
+        by1, by2 = min(by1, by2), max(by1, by2)
+        inter_w = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+        inter_h = max(0.0, min(ay2, by2) - max(ay1, by1))
+        inter = inter_w * inter_h
+        if inter <= 0.0:
+            return 0.0
+        area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+        area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+        union = area_a + area_b - inter
+        return inter / union if union > 0.0 else 0.0
+
+    @classmethod
+    def 跨类别重叠框去重(
+        cls,
+        检测结果列表: list,
+        iou阈值: float | None = None,
+        最低置信度: float | None = None,
+    ) -> list:
+        """按置信度降序做跨类别框去重，防止同一建筑同时被识别成金库和金矿。"""
+        if iou阈值 is None:
+            iou阈值 = cls.跨类去重IOU阈值
+        if 最低置信度 is None:
+            最低置信度 = cls.默认置信度阈值
+        有效项 = []
+        for 项 in 检测结果列表 or []:
+            if not isinstance(项, dict):
+                continue
+            框 = 项.get("裁剪坐标")
+            if not isinstance(框, (list, tuple)) or len(框) != 4:
+                continue
+            try:
+                置信度 = float(项.get("置信度", 0.0))
+            except (TypeError, ValueError):
+                置信度 = 0.0
+            if 置信度 < float(最低置信度):
+                continue
+            有效项.append((置信度, 项))
+        有效项.sort(key=lambda x: x[0], reverse=True)
+        保留 = []
+        for _, 当前项 in 有效项:
+            当前框 = 当前项["裁剪坐标"]
+            if any(
+                cls._计算框IOU(当前框, 已留["裁剪坐标"]) > float(iou阈值)
+                for 已留 in 保留
+            ):
+                continue
+            保留.append(当前项)
+        return 保留
+
     def 预处理图像(self, 输入源):
         """YOLO专用预处理（保持长宽比的填充缩放）"""
 
@@ -413,7 +474,7 @@ class 线程安全YOLO检测器(ONNX推理模型):
             原始输出 = self.推理会话.run(self.输出名称, 输入字典)[0]
 
             # 后处理
-            检测结果 = 非极大抑制处理(原始输出)
+            检测结果 = 非极大抑制处理(原始输出, 置信度阈值=self.默认置信度阈值)
 
             # 转换为易读格式
             if isinstance(输入源, (str, bytes)):
@@ -427,7 +488,11 @@ class 线程安全YOLO检测器(ONNX推理模型):
                 模型尺寸=self.模型尺寸,
                 类别列表=self.类别列表
             )
-            return 最终结果
+            return self.跨类别重叠框去重(
+                最终结果,
+                iou阈值=self.跨类去重IOU阈值,
+                最低置信度=self.默认置信度阈值,
+            )
 
     def 释放模型(self):
         """释放单例的 native session；下次构造时允许按需重新初始化。"""

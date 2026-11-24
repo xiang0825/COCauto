@@ -1,14 +1,41 @@
 """兼容任务流程接口的 ADB 截图提供器。"""
+import logging
+
 from 核心.核心异常们 import 图像获取失败
 from 模块.ADB设备操作类 import ADB错误, ADB设备操作类
 
+_LOGGER = logging.getLogger(__name__)
+
+
+def 检查分辨率比例告警(宽度: int, 高度: int, 允许误差比例: float = 0.05) -> str | None:
+    """检查设备实际分辨率是否明显偏离标准 4:3 比例（默认误差超过 5% 告警）。"""
+    try:
+        宽 = int(宽度)
+        高 = int(高度)
+    except (TypeError, ValueError):
+        return None
+    if 宽 <= 0 or 高 <= 0:
+        return None
+    实际比例 = float(宽) / float(高)
+    标准比例 = 4.0 / 3.0
+    相对误差 = abs(实际比例 - 标准比例) / 标准比例
+    if 相对误差 > float(允许误差比例):
+        return (
+            f"[警告] 检测到设备实际分辨率为 {宽}×{高}"
+            f"（长宽比 {实际比例:.2f}:1，偏离 4:3 超过 {float(允许误差比例):.0%}）；"
+            "当前仅完整验证 800×600 / 4:3，非 4:3 会产生横向拉伸并影响识别准确度"
+        )
+    return None
+
 
 class ADB屏幕:
-    def __init__(self, 设备: ADB设备操作类):
+    def __init__(self, 设备: ADB设备操作类, 日志回调=None):
         self.设备 = 设备
         self.是否已绑定 = True
         self._原始截图缓存 = None
         self._原始截图缓存时间 = 0.0
+        self._日志回调 = 日志回调
+        self._已告警分辨率: set[tuple[int, int]] = set()
         # 一张逻辑画面足以覆盖同一批点击护栏检测。限制为每秒
         # 最多约两帧，避免高频 screencap 把雷电 ADB transport 和提交额度
         # 堵死；战斗页面需要更快刷新时由上层识别节流单独控制。
@@ -17,6 +44,27 @@ class ADB屏幕:
     def 检查主机内存预算(self, 强制刷新: bool = True) -> tuple[bool, str]:
         """将恢复等待所需的宿主机内存检查转发给实际 ADB 设备。"""
         return self.设备.检查主机内存预算(强制刷新=强制刷新)
+
+    def _按需记录分辨率告警(self, 宽度: int, 高度: int) -> str | None:
+        """每个非 4:3 分辨率只告警一次，避免高频截图刷屏。"""
+        告警文本 = 检查分辨率比例告警(宽度, 高度)
+        if not 告警文本:
+            return None
+        键 = (int(宽度), int(高度))
+        已记录 = getattr(self, "_已告警分辨率", None)
+        if 已记录 is None:
+            已记录 = set()
+            self._已告警分辨率 = 已记录
+        if 键 not in 已记录:
+            已记录.add(键)
+            _LOGGER.warning(告警文本)
+            日志回调 = getattr(self, "_日志回调", None)
+            if callable(日志回调):
+                try:
+                    日志回调(告警文本)
+                except Exception:
+                    pass
+        return 告警文本
 
     def 获取屏幕图像cv(self, 左边=0, 顶边=0, 右边=2000, 底边=2000, *, 强制刷新=False):
         try:
@@ -49,6 +97,7 @@ class ADB屏幕:
                 self._原始截图缓存 = 原图
                 self._原始截图缓存时间 = 当前时间
             设备高度, 设备宽度 = 原图.shape[:2]
+            self._按需记录分辨率告警(设备宽度, 设备高度)
             设备左边 = round(左边 * 设备宽度 / 参考宽度)
             设备顶边 = round(顶边 * 设备高度 / 参考高度)
             设备右边 = round(右边 * 设备宽度 / 参考宽度)
@@ -59,6 +108,9 @@ class ADB屏幕:
                 raise ADB错误("ADB 截图缩放后区域为空。")
             if 裁剪.shape[1] != 目标尺寸[0] or 裁剪.shape[0] != 目标尺寸[1]:
                 裁剪 = cv2.resize(裁剪, 目标尺寸, interpolation=cv2.INTER_AREA)
+            else:
+                # 防止调用方原地画框/修改返回值时污染 _原始截图缓存。
+                裁剪 = 裁剪.copy()
             return 裁剪
         except ADB错误 as 异常:
             raise 图像获取失败(f"ADB 截图失败：{异常}") from 异常
@@ -69,10 +121,6 @@ class ADB屏幕:
         关闭 = getattr(self.设备, "关闭高速截图", None)
         if callable(关闭):
             关闭()
-
-    def 检查主机内存预算(self, 强制刷新=True):
-        """把只读内存预算检查委托给底层 ADB 设备。"""
-        return self.设备.检查主机内存预算(强制刷新=强制刷新)
 
     def 绑定(self, 设备, *args, **kwargs):
         if not isinstance(设备, ADB设备操作类):

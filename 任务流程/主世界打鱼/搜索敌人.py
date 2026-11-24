@@ -1,4 +1,6 @@
+import hashlib
 import time
+from collections import Counter
 from pathlib import Path
 
 import cv2
@@ -38,6 +40,18 @@ class 搜索目标敌人任务(基础任务):
     黑水优先放宽后最低黑油 = 8000
     资源评分边缘距离阈值 = 80.0
     资源评分最大边缘距离 = 220.0
+    # P1-3: 点击“下一个”后等待资源栏画面变更的超时上限，防止读旧帧
+    下一场等待变化超时秒 = 4.5
+    下一场轮询间隔秒 = 0.25
+    # P1-4: 单场敌方资源合理上限与复读次数，防止 10 倍 OCR 误读触发误进攻
+    敌方单场金币上限 = 3_000_000
+    敌方单场圣水上限 = 3_000_000
+    敌方单场黑油上限 = 30_000
+    资源异常复读最大次数 = 2
+    资源异常复读延时毫秒 = 250
+    # P1-6: 资源建筑置信度下限与跨类别重叠框去重阈值
+    资源检测最低置信度 = 0.35
+    资源跨类去重IOU阈值 = 0.60
     # 资源模式的评分只掌握资源建筑位置，无法直接看到陷阱和防御塔。
     # 因此储存建筑的可达比例必须保守折算：当大部分高价值资源仍在
     # 内圈时，不能被外围采集器和“目标数量”把总分抬过进攻门槛。
@@ -197,6 +211,16 @@ class 搜索目标敌人任务(基础任务):
         # 同一张图同时用于资源 OCR 和资源建筑评分，避免每个候选目标重复 ADB 截图。
         屏幕图像 = 上下文.op.获取屏幕图像cv(0, 0, 800, 600)
         资源数据 = self.识别当前资源(上下文, 屏幕图像)
+        if 资源数据.get("资源识别异常"):
+            上下文.置脚本状态(
+                f"搜索次数[{搜索次数}] 敌方资源OCR复读仍超过合理上限，按安全方向跳过当前阵营"
+            )
+            if not self.点击下一个按钮(上下文):
+                if self.等待搜索失效后自然回营(上下文):
+                    上下文._搜索阶段自然回营 = True
+                    return True
+                raise RuntimeError("搜索页按钮识别或点击失败，停止继续搜索")
+            return False
         设置 = getattr(上下文, "设置", None)
         战利品优先级 = str(
             getattr(设置, "战利品优先级", "") or ""
@@ -488,6 +512,78 @@ class 搜索目标敌人任务(基础任务):
             )
         return 临时评分, self.自适应最低高价值资源折算可达率, 说明
 
+    @staticmethod
+    def 计算框IOU(框A, 框B) -> float:
+        """计算两个 [x1, y1, x2, y2] 矩形框的 IoU。"""
+        try:
+            ax1, ay1, ax2, ay2 = [float(v) for v in 框A]
+            bx1, by1, bx2, by2 = [float(v) for v in 框B]
+        except (TypeError, ValueError):
+            return 0.0
+        ax1, ax2 = min(ax1, ax2), max(ax1, ax2)
+        ay1, ay2 = min(ay1, ay2), max(ay1, ay2)
+        bx1, bx2 = min(bx1, bx2), max(bx1, bx2)
+        by1, by2 = min(by1, by2), max(by1, by2)
+        交叠宽 = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+        交叠高 = max(0.0, min(ay2, by2) - max(ay1, by1))
+        交叠面积 = 交叠宽 * 交叠高
+        if 交叠面积 <= 0.0:
+            return 0.0
+        面积A = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+        面积B = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+        并集面积 = 面积A + 面积B - 交叠面积
+        return 交叠面积 / 并集面积 if 并集面积 > 0.0 else 0.0
+
+    @classmethod
+    def 过滤与去重资源检测框(
+        cls,
+        检测结果列表: list,
+        iou阈值: float = None,
+        最低置信度: float = None,
+        类别白名单=None,
+    ) -> list:
+        """过滤低置信度资源框，并对高度重叠的跨类别资源建筑框只保留最高置信度框。"""
+        if iou阈值 is None:
+            iou阈值 = cls.资源跨类去重IOU阈值
+        if 最低置信度 is None:
+            最低置信度 = cls.资源检测最低置信度
+        允许类别 = set(类别白名单) if 类别白名单 is not None else set(cls.资源建筑类别)
+
+        候选列表 = []
+        for 原始目标 in 检测结果列表 or []:
+            if not isinstance(原始目标, dict):
+                continue
+            类别 = 原始目标.get("类别名称")
+            if 类别 not in 允许类别:
+                continue
+            框 = 原始目标.get("裁剪坐标")
+            if not isinstance(框, (list, tuple)) or len(框) != 4:
+                continue
+            try:
+                左, 上, 右, 下 = [int(值) for 值 in 框]
+                置信度 = max(0.0, min(1.0, float(原始目标.get("置信度", 0.0))))
+            except (TypeError, ValueError):
+                continue
+            if 置信度 < float(最低置信度):
+                continue
+            候选列表.append((置信度, {
+                **原始目标,
+                "裁剪坐标": [左, 上, 右, 下],
+                "置信度": 置信度,
+            }))
+
+        候选列表.sort(key=lambda 项: 项[0], reverse=True)
+        保留列表 = []
+        for _, 当前目标 in 候选列表:
+            当前框 = 当前目标["裁剪坐标"]
+            if any(
+                cls.计算框IOU(当前框, 已留目标["裁剪坐标"]) > float(iou阈值)
+                for 已留目标 in 保留列表
+            ):
+                continue
+            保留列表.append(当前目标)
+        return 保留列表
+
     @classmethod
     def 计算资源易窃取评分(
             cls,
@@ -507,14 +603,11 @@ class 搜索目标敌人任务(基础任务):
             最大边缘距离 = cls.资源评分最大边缘距离
         边缘距离阈值 = float(边缘距离阈值)
         最大边缘距离 = max(边缘距离阈值 + 1.0, float(最大边缘距离))
+        去重结果列表 = cls.过滤与去重资源检测框(检测结果列表)
         资源目标 = []
 
-        for 原始目标 in 检测结果列表 or []:
-            if not isinstance(原始目标, dict):
-                continue
+        for 原始目标 in 去重结果列表:
             类别 = 原始目标.get("类别名称")
-            if 类别 not in cls.资源建筑类别:
-                continue
             try:
                 左, 上, 右, 下 = [int(值) for 值 in 原始目标.get("裁剪坐标", [])]
                 中心 = 坐标((左 + 右) // 2, (上 + 下) // 2)
@@ -677,10 +770,14 @@ class 搜索目标敌人任务(基础任务):
             全屏图像 = 上下文.op.获取屏幕图像cv(左上x, 左上y, 宽, 高)
             检测结果列表 = self.检测器.检测(全屏图像)
 
+        去重列表 = self.过滤与去重资源检测框(
+            检测结果列表,
+            类别白名单=set(self.资源建筑类别) | set(允许检测的类别),
+        )
         总资源目标数量 = 0
         靠近边缘数量 = 0
 
-        for 目标 in 检测结果列表:
+        for 目标 in 去重列表:
             类别 = 目标['类别名称']
             if 类别 not in 允许检测的类别:
                 continue
@@ -736,49 +833,140 @@ class 搜索目标敌人任务(基础任务):
         上下文.置脚本状态("等待下一个按钮超时：未进入敌方搜索页面", 超时的时间=10)
         return False
 
-    @打印运行耗时
-    def 识别当前资源(self, 上下文, 屏幕图像=None) -> dict:
-        """修复后的资源识别方法"""
-        try:
-            if 屏幕图像 is None:
-                资源图像 = 上下文.op.获取屏幕图像cv(14, 67, 151, 190)
+    @classmethod
+    def 是否存在资源异常上限(cls, 金币: int, 圣水: int, 黑油: int) -> bool:
+        """判断敌方单场资源 OCR 是否出现明显超上限（如 10 倍误读）。"""
+        return (
+            int(金币) > int(cls.敌方单场金币上限)
+            or int(圣水) > int(cls.敌方单场圣水上限)
+            or int(黑油) > int(cls.敌方单场黑油上限)
+        )
+
+    @classmethod
+    def _选择合理资源读数(
+        cls, 样本列表: list[tuple[int, int, int]]
+    ) -> tuple[int | None, int | None, int | None]:
+        """从多次 OCR 样本中按字段取上限内的多数/保守合理值，仍全超限则返回 None。"""
+        结果 = []
+        字段上限 = (
+            int(cls.敌方单场金币上限),
+            int(cls.敌方单场圣水上限),
+            int(cls.敌方单场黑油上限),
+        )
+        for 索引, 上限 in enumerate(字段上限):
+            合理值 = [int(样本[索引]) for 样本 in 样本列表 if 0 <= int(样本[索引]) <= 上限]
+            if not 合理值:
+                结果.append(None)
+                continue
+            计数 = Counter(合理值).most_common()
+            最高频 = 计数[0][1]
+            高频候选 = [值 for 值, 次数 in 计数 if 次数 == 最高频]
+            结果.append(min(高频候选))
+        return 结果[0], 结果[1], 结果[2]
+
+    def _读取单帧资源数值(
+        self, 上下文, 屏幕图像=None, *, 强制刷新: bool = False
+    ) -> tuple[int, int, int]:
+        """截取资源栏并执行单次 OCR，返回 (金币, 圣水, 黑油)。"""
+        if 屏幕图像 is None:
+            if 强制刷新:
+                try:
+                    资源图像 = 上下文.op.获取屏幕图像cv(14, 67, 151, 190, 强制刷新=True)
+                except TypeError:
+                    资源图像 = 上下文.op.获取屏幕图像cv(14, 67, 151, 190)
             else:
+                资源图像 = 上下文.op.获取屏幕图像cv(14, 67, 151, 190)
+        else:
+            高, 宽 = getattr(屏幕图像, "shape", (0, 0))[:2]
+            if 高 >= 190 and 宽 >= 151:
                 # 新版 16:9 战斗画面里黑油数字比旧裁剪下沿低；146px
                 # 会把第三行切掉，接着按 OCR 返回顺序补位就会污染学习数据。
                 资源图像 = 屏幕图像[67:190, 14:151]
-
-            # 单次OCR识别（结果按顺序对应各区域）
-            OCR返回 = self.ocr引擎(资源图像)
-            if isinstance(OCR返回, tuple):
-                result = OCR返回[0]
             else:
-                result = OCR返回
-            # RapidOCR 在空帧/模型恢复期间可能返回 (None, None)，
-            # 不能直接对 None 调 len；空结果应当作为本轮未识别，
-            # 交给调用方继续搜索或安全跳过。
-            result = result or []
-            # 不要假设 OCR 返回顺序或固定返回格式。RapidOCR 的完整结果通常是
-            # ``[四边形, 文本, 置信度]``，轻量配置也可能返回
-            # ``[文本, 置信度]``；而检测顺序在不同版本/分辨率下不一定稳定。
-            # 统一抽取文字并按屏幕 Y 坐标排序，避免把空置信度、错行文字写成
-            # 战利品，或因结果顺序变化而交换金币/圣水/黑油。
-            资源文本 = self._提取资源行文本(result)
-            金币文本 = 资源文本[0] if len(资源文本) > 0 else "0"
-            圣水文本 = 资源文本[1] if len(资源文本) > 1 else "0"
-            黑油文本 = 资源文本[2] if len(资源文本) > 2 else "0"
+                资源图像 = 屏幕图像
+
+        OCR返回 = self.ocr引擎(资源图像)
+        if isinstance(OCR返回, tuple):
+            result = OCR返回[0]
+        else:
+            result = OCR返回
+        # RapidOCR 在空帧/模型恢复期间可能返回 (None, None)，
+        # 不能直接对 None 调 len；空结果应当作为本轮未识别，
+        # 交给调用方继续搜索或安全跳过。
+        result = result or []
+        资源文本 = self._提取资源行文本(result)
+        金币文本 = 资源文本[0] if len(资源文本) > 0 else "0"
+        圣水文本 = 资源文本[1] if len(资源文本) > 1 else "0"
+        黑油文本 = 资源文本[2] if len(资源文本) > 2 else "0"
+        return (
+            self.文本转数值(金币文本),
+            self.文本转数值(圣水文本),
+            self.文本转数值(黑油文本),
+        )
+
+    @打印运行耗时
+    def 识别当前资源(self, 上下文, 屏幕图像=None) -> dict:
+        """识别敌方资源；缺失补 0，超上限疑为 10 倍误读时复读确认或安全跳过。"""
+        try:
+            金币, 圣水, 黑油 = self._读取单帧资源数值(上下文, 屏幕图像)
+            if self.是否存在资源异常上限(金币, 圣水, 黑油):
+                上下文.置脚本状态(
+                    f"[警告] 敌方资源OCR异常偏高(金币={金币:,}, 圣水={圣水:,}, 黑油={黑油:,})，"
+                    f"延时复读最多{self.资源异常复读最大次数}次确认"
+                )
+                样本列表 = [(金币, 圣水, 黑油)]
+                op = getattr(上下文, "op", None)
+                可重新截图 = op is not None and callable(getattr(op, "获取屏幕图像cv", None))
+                for _ in range(int(self.资源异常复读最大次数)):
+                    if not 可重新截图:
+                        break
+                    延时函数 = getattr(上下文, "脚本延时", None)
+                    if callable(延时函数):
+                        延时函数(self.资源异常复读延时毫秒)
+                    else:
+                        time.sleep(self.资源异常复读延时毫秒 / 1000.0)
+                    if 屏幕图像 is None:
+                        复读屏幕 = None
+                    else:
+                        try:
+                            复读屏幕 = op.获取屏幕图像cv(0, 0, 800, 600, 强制刷新=True)
+                        except TypeError:
+                            复读屏幕 = op.获取屏幕图像cv(0, 0, 800, 600)
+                    样本列表.append(
+                        self._读取单帧资源数值(上下文, 复读屏幕, 强制刷新=True)
+                    )
+                精选金, 精选水, 精选油 = self._选择合理资源读数(样本列表)
+                if 精选金 is None or 精选水 is None or 精选油 is None:
+                    上下文.置脚本状态(
+                        f"[警告] 敌方资源OCR复读{len(样本列表)}次后仍超过合理上限，按安全方向跳过"
+                    )
+                    return {
+                        "金币": 0,
+                        "圣水": 0,
+                        "黑油": 0,
+                        "总资源": 0,
+                        "战利品评分": 0,
+                        "资源易窃取评分": 0.0,
+                        "资源易窃取评分依据": {},
+                        "资源识别异常": True,
+                    }
+                金币, 圣水, 黑油 = 精选金, 精选水, 精选油
+                上下文.置脚本状态(
+                    f"敌方资源OCR复读修正完成：金币={金币:,}，圣水={圣水:,}，黑油={黑油:,}"
+                )
 
             设置 = 上下文.数据库.获取机器人设置(上下文.机器人标志)
             战利品评分 = self.计算战利品评分(
-                self.文本转数值(金币文本),
-                self.文本转数值(圣水文本),
-                self.文本转数值(黑油文本),
+                金币,
+                圣水,
+                黑油,
                 设置.战利品优先级,
             )
             return {
-                "金币": self.文本转数值(金币文本),
-                "圣水": self.文本转数值(圣水文本),
-                "黑油": self.文本转数值(黑油文本),
-                "总资源": self.文本转数值(金币文本) + self.文本转数值(圣水文本),
+                "金币": 金币,
+                "圣水": 圣水,
+                "黑油": 黑油,
+                "总资源": 金币 + 圣水,
                 "战利品评分": 战利品评分,
                 "资源易窃取评分": 0.0,
                 "资源易窃取评分依据": {},
@@ -903,6 +1091,74 @@ class 搜索目标敌人任务(基础任务):
         )
         return 新目标
 
+    @staticmethod
+    def _计算稳定区域指纹(屏幕图像) -> bytes | None:
+        """提取敌方资源栏裁剪图的轻量指纹，用于点击“下一个”后判断画面是否切换。"""
+        if (
+            屏幕图像 is None
+            or not hasattr(屏幕图像, "shape")
+            or getattr(屏幕图像, "size", 0) == 0
+        ):
+            return None
+        高, 宽 = 屏幕图像.shape[:2]
+        if 高 <= 0 or 宽 <= 0:
+            return None
+        区域 = 屏幕图像[67:190, 14:151] if (高 >= 190 and 宽 >= 151) else 屏幕图像
+        if len(区域.shape) == 3 and 区域.shape[2] >= 3:
+            灰度 = cv2.cvtColor(区域, cv2.COLOR_BGR2GRAY)
+        else:
+            灰度 = 区域
+        缩略图 = cv2.resize(灰度, (32, 32), interpolation=cv2.INTER_AREA)
+        return hashlib.blake2b(缩略图.tobytes(), digest_size=16).digest()
+
+    def _等待下一场画面变化(
+        self, 上下文, 点击前指纹: bytes | None, 超时秒: float | None = None
+    ) -> bool:
+        """点击“下一个”后等待资源栏指纹变化，避免网络延迟时重复评估上一村庄。"""
+        if 点击前指纹 is None:
+            return True
+        op = getattr(上下文, "op", None)
+        if op is None or not callable(getattr(op, "获取屏幕图像cv", None)):
+            return True
+        总超时 = float(self.下一场等待变化超时秒 if 超时秒 is None else 超时秒)
+        间隔 = max(0.01, float(getattr(self, "下一场轮询间隔秒", 0.25)))
+        截止 = time.monotonic() + max(0.0, 总超时)
+        停止事件 = getattr(上下文, "停止事件", None)
+        继续事件 = getattr(上下文, "继续事件", None)
+        while time.monotonic() < 截止:
+            if 停止事件 is not None and 停止事件.is_set():
+                return False
+            if 继续事件 is not None and not 继续事件.is_set():
+                wait_fn = getattr(继续事件, "wait", None)
+                if callable(wait_fn):
+                    wait_fn(0.2)
+                else:
+                    time.sleep(0.2)
+                continue
+            步长 = min(间隔, max(0.01, 截止 - time.monotonic()))
+            wait_fn = getattr(停止事件, "wait", None) if 停止事件 is not None else None
+            if callable(wait_fn):
+                if wait_fn(步长):
+                    return False
+            else:
+                time.sleep(步长)
+            try:
+                新画面 = op.获取屏幕图像cv(0, 0, 800, 600, 强制刷新=True)
+            except TypeError:
+                try:
+                    新画面 = op.获取屏幕图像cv(0, 0, 800, 600)
+                except Exception:
+                    break
+            except Exception:
+                break
+            新指纹 = self._计算稳定区域指纹(新画面)
+            if 新指纹 is not None and 新指纹 != 点击前指纹:
+                return True
+        状态回调 = getattr(上下文, "置脚本状态", None)
+        if callable(状态回调):
+            状态回调(f"点击下一场后 {总超时:.1f} 秒内资源栏画面未变化，安全继续后续评估")
+        return False
+
     def 点击下一个按钮(self, 上下文) -> bool:
         """再次确认搜索页后，动态点击“下一個/下一个”按钮。"""
         # 资源 OCR 完成时画面可能仍在入场过渡。旧版只试一次，低分
@@ -933,14 +1189,17 @@ class 搜索目标敌人任务(基础任务):
                 f"确认搜索页按钮后点击下一场：{中心[0]},{中心[1]}"
                 f"（{依据}，评分{分数:.2f}）"
             )
+            点击前指纹 = self._计算稳定区域指纹(屏幕图像)
             # 两张新帧再确认同一按钮并排除弹窗；不盲点绿色地图。
             专用点击 = getattr(上下文, "点击已确认搜索按钮", None)
             if callable(专用点击):
                 if 专用点击(中心[0], 中心[1]):
+                    self._等待下一场画面变化(上下文, 点击前指纹)
                     return True
             elif 上下文.点击(
                 中心[0], 中心[1], 延时=500, 是否精确点击=True
             ):
+                self._等待下一场画面变化(上下文, 点击前指纹)
                 return True
         上下文.置脚本状态("搜索按钮连续八次未通过复核，停止盲点下一场")
         return False

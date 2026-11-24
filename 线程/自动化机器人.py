@@ -1,8 +1,13 @@
-import queue
-import random
+import ctypes
+import ctypes.wintypes
 import gc
 import importlib
-
+import logging
+import logging.handlers
+import os
+import queue
+import random
+import sys
 import threading
 import time
 
@@ -81,6 +86,52 @@ def _安全控制台打印(*参数, **关键字):
         pass
 
 
+class _进程内存计数EX(ctypes.Structure):
+    _fields_ = [
+        ("cb", ctypes.wintypes.DWORD),
+        ("PageFaultCount", ctypes.wintypes.DWORD),
+        ("PeakWorkingSetSize", ctypes.c_size_t),
+        ("WorkingSetSize", ctypes.c_size_t),
+        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+        ("PagefileUsage", ctypes.c_size_t),
+        ("PeakPagefileUsage", ctypes.c_size_t),
+        ("PrivateUsage", ctypes.c_size_t),
+    ]
+
+
+def _采集进程资源指标() -> dict:
+    """采集当前进程 RSS、私有内存(MB)、线程数与句柄数，失败安全返回已有指标。"""
+    指标: dict[str, float | int | None] = {
+        "rss_mb": None,
+        "private_mb": None,
+        "threads": threading.active_count(),
+        "handles": None,
+    }
+    if sys.platform != "win32":
+        return 指标
+    try:
+        kernel32 = ctypes.windll.kernel32
+        当前进程 = kernel32.GetCurrentProcess()
+        计数 = _进程内存计数EX()
+        计数.cb = ctypes.sizeof(_进程内存计数EX)
+        get_mem = getattr(kernel32, "K32GetProcessMemoryInfo", None)
+        if get_mem is None:
+            get_mem = ctypes.windll.psapi.GetProcessMemoryInfo
+        if get_mem(当前进程, ctypes.byref(计数), 计数.cb):
+            指标["rss_mb"] = round(计数.WorkingSetSize / (1024 * 1024), 1)
+            私有字节 = 计数.PrivateUsage or 计数.PagefileUsage
+            指标["private_mb"] = round(私有字节 / (1024 * 1024), 1)
+        句柄数 = ctypes.wintypes.DWORD(0)
+        if kernel32.GetProcessHandleCount(当前进程, ctypes.byref(句柄数)):
+            指标["handles"] = int(句柄数.value)
+    except Exception:
+        pass
+    return 指标
+
+
 class 自动化机器人:
     """为单个用户提供游戏自动化服务的机器人实例"""
 
@@ -88,6 +139,73 @@ class 自动化机器人:
     # 同一秒。保留一个很短的宽限，避免在“下一条心跳正在提交”的竞态
     # 窗口内误判无心跳并反复重启机器人。
     心跳超时宽限秒数 = 5
+    资源趋势日志间隔秒 = 1800.0
+    错误日志最大字节 = 5 * 1024 * 1024
+    错误日志备份数 = 3
+
+    def _记录进程资源趋势(self, 上下文=None, *, 强制: bool = False) -> bool:
+        """每 30 分钟节流记录一次当前进程 RSS/私有内存、线程数与句柄数。"""
+        现在 = time.monotonic()
+        上次 = float(getattr(self, "_上次资源趋势时间", 0.0) or 0.0)
+        if not 强制 and 上次 > 0.0 and 现在 - 上次 < float(self.资源趋势日志间隔秒):
+            return False
+        self._上次资源趋势时间 = 现在
+        try:
+            指标 = _采集进程资源指标()
+            片段 = []
+            if 指标.get("rss_mb") is not None:
+                片段.append(f"RSS={指标['rss_mb']:.1f}MB")
+            if 指标.get("private_mb") is not None:
+                片段.append(f"私有内存={指标['private_mb']:.1f}MB")
+            if 指标.get("threads") is not None:
+                片段.append(f"线程={指标['threads']}")
+            if 指标.get("handles") is not None:
+                片段.append(f"句柄={指标['handles']}")
+            消息 = "[系统观测] 进程资源趋势：" + "，".join(片段)
+            日志函数 = getattr(上下文, "置脚本状态", None) if 上下文 is not None else None
+            if callable(日志函数):
+                日志函数(消息)
+            else:
+                self.记录日志(消息)
+            return True
+        except Exception:
+            return False
+
+    def _获取错误日志路径(self) -> str:
+        """返回基于数据库目录的 robot-error.log 绝对路径，避免依赖当前工作目录。"""
+        数据库路径 = getattr(getattr(self, "数据库", None), "文件路径", None)
+        if not 数据库路径 or str(数据库路径) == ":memory:":
+            数据库路径 = 任务数据库.默认数据库路径()
+        目录 = os.path.dirname(os.path.abspath(str(数据库路径))) or os.path.abspath(".")
+        os.makedirs(目录, exist_ok=True)
+        return os.path.join(目录, "robot-error.log")
+
+    def _写入未处理异常日志(self, 诊断信息: str) -> str | None:
+        """使用 RotatingFileHandler 把未捕获异常落盘到数据库同目录的绝对路径。"""
+        try:
+            日志路径 = self._获取错误日志路径()
+            记录器 = logging.getLogger(f"coc_robot.error.{id(self)}")
+            记录器.setLevel(logging.ERROR)
+            记录器.propagate = False
+            处理器 = logging.handlers.RotatingFileHandler(
+                日志路径,
+                maxBytes=int(self.错误日志最大字节),
+                backupCount=int(self.错误日志备份数),
+                encoding="utf-8",
+                delay=True,
+            )
+            try:
+                处理器.setFormatter(
+                    logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+                )
+                记录器.addHandler(处理器)
+                记录器.error(诊断信息.rstrip("\r\n"))
+            finally:
+                记录器.removeHandler(处理器)
+                处理器.close()
+            return 日志路径
+        except OSError:
+            return None
 
     def __init__(self, 机器人标志: str, 消息队列: queue.Queue, 数据库: 任务数据库, 日志队列: queue.Queue):
         # 基础属性
@@ -1509,7 +1627,7 @@ class 自动化机器人:
             内存保护提交额度阈值MB=getattr(设置, "内存保护提交额度阈值MB", 1536),
         )
         self.设备.设置目标包名(设置.部落冲突包名)
-        self.op = ADB屏幕(self.设备)
+        self.op = ADB屏幕(self.设备, 日志回调=self.记录日志)
         企业微信通知器实例 = None
         if 设置.企业微信webhook:
             try:
@@ -2068,6 +2186,7 @@ class 自动化机器人:
                     是否有资源打满 = False
                     重新开始本轮 = False
                     任务轮次 += 1
+                    self._记录进程资源趋势(上下文)
                     if 任务轮次 > 1:
                         上下文.置脚本状态(
                             f"第{任务轮次}轮任务计划开始：上一轮未达到结束条件，继续执行"
@@ -2212,7 +2331,7 @@ class 自动化机器人:
         except 图像获取失败 as e:
             self.停止原因 = f"图像获取失败：{e}"
             上下文.发送死亡通知(f"异常: {str(e)}")
-            _安全控制台打印("-"*10+F"{self.机器人标志} 线程因为异常而消亡"+"-"*10+f"异常: {str(e)}")
+            _安全控制台打印("-"*10+F"{self.机器人标志} 任务线程因图像异常退出"+"-"*10+f"异常: {str(e)}")
         except 主机内存保护暂停请求 as e:
             if not self.停止原因:
                 self.停止原因 = f"宿主机内存保护退出：{e}"
@@ -2221,7 +2340,7 @@ class 自动化机器人:
         except SystemExit as e:
             if not self.停止原因:
                 self.停止原因 = "收到外部停止事件"
-            _安全控制台打印("-"*10+F"{self.机器人标志} 线程因为捕获到退出而消亡"+"-"*10)
+            _安全控制台打印("-"*10+F"{self.机器人标志} 任务线程收到停止信号退出"+"-"*10)
             _安全控制台打印(F"具体信息:{str(e)}")
         except Exception as e:
             self.停止原因 = f"未处理异常：{e}"
@@ -2229,11 +2348,7 @@ class 自动化机器人:
             诊断信息 = "".join(traceback.format_exception(type(e), e, e.__traceback__))
             _安全控制台打印(诊断信息)
             self.记录日志(f"[错误] 初始化或任务执行失败：{e}", 300, "错误")
-            try:
-                with open("robot-error.log", "a", encoding="utf-8") as 日志文件:
-                    日志文件.write(诊断信息 + "\n")
-            except OSError:
-                pass
+            self._写入未处理异常日志(诊断信息)
             self.停止事件.set()
         finally:
             # 早期检查直接 return、截图异常和任务分支主动退出都必须把

@@ -1,8 +1,13 @@
+import time
+
 from 任务流程.基础任务框架 import 任务上下文
 from 任务流程.夜世界.夜世界打鱼.夜世界基础任务类 import 夜世界基础任务
 
 
 class 打开进攻页面(夜世界基础任务):
+    进攻等待超时秒 = 60.0
+    进攻等待轮询毫秒 = 500
+
     def __init__(self ,上下文: '任务上下文'):
         super().__init__(上下文)
 
@@ -16,9 +21,19 @@ class 打开进攻页面(夜世界基础任务):
             if not self.是否出现开始进攻():
                 raise RuntimeError("打开进攻页面失败")
 
+            等待开始时间 = time.monotonic()
             while self.是否出现进攻需要等待():
+                停止事件 = getattr(self.上下文, "停止事件", None)
+                if 停止事件 is not None and 停止事件.is_set():
+                    self.上下文.置脚本状态("收到停止信号，终止夜世界进攻等待")
+                    return False
+                if time.monotonic() - 等待开始时间 >= float(self.进攻等待超时秒):
+                    self.上下文.置脚本状态(
+                        f"夜世界进攻需要等待超过{int(self.进攻等待超时秒)}秒仍未结束，安全返回失败"
+                    )
+                    return False
                 self.上下文.置脚本状态("出现进攻需要等待页面,等待倒计时结束中……")
-                self.上下文.脚本延时(500)
+                self.上下文.脚本延时(self.进攻等待轮询毫秒)
 
             # 夜世界按钮在不同语言包/缩放下文字和中心都会变化。先从
             # OCR 找按钮中心，找不到时才使用经过实机确认的参考坐标。

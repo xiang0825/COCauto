@@ -7,7 +7,11 @@
 - 左键按下 + 移动 + 左键抬起 → 未移动时 tap，移动过则 swipe
 - 连续点击 / 长按 → 设备提供的批量触控和长按
 """
+import threading
 import time
+
+
+_锁初始化锁 = threading.Lock()
 
 
 class 鼠标控制器:
@@ -15,6 +19,7 @@ class 鼠标控制器:
         if not (hasattr(设备, "触控") and hasattr(设备, "滑动")):
             raise TypeError("鼠标控制器只能绑定 ADB 设备（需要 触控/滑动 接口）")
         self._设备 = 设备
+        self._锁 = threading.RLock()
         self._x = 0
         self._y = 0
         self._按下起点 = None
@@ -22,6 +27,16 @@ class 鼠标控制器:
         self._按下时间 = 0.0
         # 由任务上下文注入；返回 True 表示当前输入必须被阻断。
         self._安全点击检查回调 = None
+
+    def _获取锁(self) -> threading.RLock:
+        锁 = getattr(self, "_锁", None)
+        if 锁 is None:
+            with _锁初始化锁:
+                锁 = getattr(self, "_锁", None)
+                if 锁 is None:
+                    锁 = threading.RLock()
+                    self._锁 = 锁
+        return 锁
 
     # ------------------------------------------------------------ 安全
     def _允许鼠标按下(self):
@@ -36,43 +51,47 @@ class 鼠标控制器:
 
     # ------------------------------------------------------------ 位置
     def 移动到(self, x, y):
-        self._x, self._y = int(x), int(y)
-        if self._按下起点 is not None:
-            self._有移动 = self._有移动 or (self._x, self._y) != self._按下起点
-        return 1
+        with self._获取锁():
+            self._x, self._y = int(x), int(y)
+            if self._按下起点 is not None:
+                self._有移动 = self._有移动 or (self._x, self._y) != self._按下起点
+            return 1
 
     def 移动相对位置(self, rx, ry):
-        self._x += int(rx)
-        self._y += int(ry)
-        if self._按下起点 is not None:
-            self._有移动 = True
-        return 1
+        with self._获取锁():
+            self._x += int(rx)
+            self._y += int(ry)
+            if self._按下起点 is not None:
+                self._有移动 = True
+            return 1
 
     # ------------------------------------------------------------ 点击
     def _左键点击内部(self):
         return self._设备.触控(self._x, self._y)
 
     def 左键点击(self):
-        if not self._允许鼠标按下():
-            return False
-        return self._左键点击内部()
+        with self._获取锁():
+            if not self._允许鼠标按下():
+                return False
+            return self._左键点击内部()
 
     def 连续点击(self, x, y, 次数=1, 间隔毫秒=0, 是否精确点击=True):
         """连续点击同一点；优先复用设备的一次 shell 会话。"""
         次数 = max(0, min(32, int(次数)))
         if 次数 == 0:
             return True
-        if not self._允许鼠标按下():
-            return False
-        if hasattr(self._设备, "连续触控"):
-            return self._设备.连续触控([(int(x), int(y))] * 次数, 间隔毫秒=间隔毫秒)
-        for 序号 in range(次数):
-            self.移动到(x, y)
-            if not self._左键点击内部():
+        with self._获取锁():
+            if not self._允许鼠标按下():
                 return False
-            if 序号 < 次数 - 1 and 间隔毫秒 > 0:
-                time.sleep(max(0, int(间隔毫秒)) / 1000)
-        return True
+            if hasattr(self._设备, "连续触控"):
+                return self._设备.连续触控([(int(x), int(y))] * 次数, 间隔毫秒=间隔毫秒)
+            for 序号 in range(次数):
+                self.移动到(x, y)
+                if not self._左键点击内部():
+                    return False
+                if 序号 < 次数 - 1 and 间隔毫秒 > 0:
+                    time.sleep(max(0, int(间隔毫秒)) / 1000)
+            return True
 
     def 连续点击多点(self, 位置列表, 间隔毫秒=0, 是否精确点击=True):
         """在一批已经预检通过的坐标上连续点击（战斗部署专用）。
@@ -87,29 +106,31 @@ class 鼠标控制器:
         点位 = 点位[:32]
         if not 点位:
             return True
-        if not self._允许鼠标按下():
-            return False
-        if hasattr(self._设备, "连续触控"):
-            return bool(self._设备.连续触控(点位, 间隔毫秒=间隔毫秒))
-        for 序号, (x, y) in enumerate(点位):
-            self.移动到(x, y)
-            if not self._左键点击内部():
+        with self._获取锁():
+            if not self._允许鼠标按下():
                 return False
-            if 序号 < len(点位) - 1 and 间隔毫秒 > 0:
-                time.sleep(max(0, int(间隔毫秒)) / 1000)
-        return True
+            if hasattr(self._设备, "连续触控"):
+                return bool(self._设备.连续触控(点位, 间隔毫秒=间隔毫秒))
+            for 序号, (x, y) in enumerate(点位):
+                self.移动到(x, y)
+                if not self._左键点击内部():
+                    return False
+                if 序号 < len(点位) - 1 and 间隔毫秒 > 0:
+                    time.sleep(max(0, int(间隔毫秒)) / 1000)
+            return True
 
     def 长按(self, x, y, 时长毫秒=220, 是否精确点击=True):
         """同点长按；设备使用 input swipe 保持触点。"""
         x, y = int(x), int(y)
-        if not self._允许鼠标按下():
-            return False
-        self.移动到(x, y)
-        if hasattr(self._设备, "长按触控"):
-            return self._设备.长按触控(x, y, 时长毫秒=时长毫秒)
-        self._左键按下内部()
-        time.sleep(max(0, int(时长毫秒)) / 1000)
-        return bool(self.左键抬起())
+        with self._获取锁():
+            if not self._允许鼠标按下():
+                return False
+            self.移动到(x, y)
+            if hasattr(self._设备, "长按触控"):
+                return self._设备.长按触控(x, y, 时长毫秒=时长毫秒)
+            self._左键按下内部()
+            time.sleep(max(0, int(时长毫秒)) / 1000)
+            return bool(self.左键抬起())
 
     # ------------------------------------------------------------ 拖动
     def _左键按下内部(self):
@@ -119,16 +140,18 @@ class 鼠标控制器:
         return 1
 
     def 左键按下(self):
-        if not self._允许鼠标按下():
-            return False
-        return self._左键按下内部()
+        with self._获取锁():
+            if not self._允许鼠标按下():
+                return False
+            return self._左键按下内部()
 
     def 左键抬起(self):
-        起点 = self._按下起点
-        self._按下起点 = None
-        if 起点 is None:
-            return 1
-        if not self._有移动:
-            return self._设备.触控(self._x, self._y)
-        时长 = max(40, min(1500, int((time.monotonic() - self._按下时间) * 1000)))
-        return self._设备.滑动(起点, (self._x, self._y), 时长)
+        with self._获取锁():
+            起点 = self._按下起点
+            self._按下起点 = None
+            if 起点 is None:
+                return 1
+            if not self._有移动:
+                return self._设备.触控(self._x, self._y)
+            时长 = max(40, min(1500, int((time.monotonic() - self._按下时间) * 1000)))
+            return self._设备.滑动(起点, (self._x, self._y), 时长)

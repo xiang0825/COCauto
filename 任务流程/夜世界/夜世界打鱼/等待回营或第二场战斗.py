@@ -1,6 +1,7 @@
 import time
 from 任务流程.基础任务框架 import 任务上下文
 from 任务流程.夜世界.夜世界打鱼 import 下兵
+from 任务流程.夜世界.夜世界打鱼.下兵 import 停止并等待英雄技能线程
 from 任务流程.夜世界.夜世界打鱼.夜世界基础任务类 import 夜世界基础任务
 
 
@@ -54,8 +55,7 @@ class 等待回营或第二次战斗(夜世界基础任务):
                     not 有页面识别 and self.是否出现换兵种箭头()
                 ):
 
-                    if hasattr(self.上下文, '英雄技能标志'):
-                        self.上下文.英雄技能标志.set()
+                    停止并等待英雄技能线程(self.上下文, 超时秒=2.0)
 
                     self.上下文.置脚本状态("第二次战斗")
                     self.上下文.置脚本状态("开始下兵逻辑",3*60)
@@ -78,10 +78,7 @@ class 等待回营或第二次战斗(夜世界基础任务):
             self.异常处理(e)
             return False
         finally:
-            if hasattr(self.上下文, '英雄技能标志'):
-                self.上下文.英雄技能标志.set()
-                try: delattr(self.上下文, '英雄技能标志')
-                except Exception: pass
+            停止并等待英雄技能线程(self.上下文, 超时秒=2.0)
 
     def _读取页面状态(self):
         """返回页面识别结果和“是否有真实页面识别器”标志。"""

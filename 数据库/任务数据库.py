@@ -733,6 +733,8 @@ class 任务数据库:
 
     _最后日志缓存: dict = {}
     _最后日志锁 = threading.Lock()
+    _已初始化WAL路径集合: set[str] = set()
+    _WAL初始化锁 = threading.Lock()
 
     @property
     def _缓存键(self) -> str:
@@ -743,6 +745,23 @@ class 任务数据库:
         self._初始化表结构()
         self._执行数据迁移()
 
+    def _按需初始化WAL(self, conn: sqlite3.Connection) -> None:
+        """同一数据库路径仅在首次初始化时执行一次 WAL/synchronous/autocheckpoint 设置。"""
+        路径文本 = str(self.文件路径)
+        if 路径文本 == ":memory:":
+            conn.execute("PRAGMA synchronous=NORMAL")
+            return
+        键 = self._缓存键
+        if 键 in self._已初始化WAL路径集合:
+            return
+        with self._WAL初始化锁:
+            if 键 in self._已初始化WAL路径集合:
+                return
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA wal_autocheckpoint=1000")
+            self._已初始化WAL路径集合.add(键)
+
     @contextmanager
     def _获取连接(self):
         """获取线程安全连接，并在每次数据库操作结束后关闭它。"""
@@ -752,12 +771,7 @@ class 任务数据库:
             timeout=15
         )
         try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            # 日志是高频读写路径；固定 checkpoint 和 NORMAL 同步模式，
-            # 避免 WAL 在长期运行/异常断线时无限膨胀，同时降低每条日志
-            # 都打开连接所产生的磁盘同步压力。
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA wal_autocheckpoint=1000")
+            self._按需初始化WAL(conn)
             yield conn
         finally:
             conn.close()
