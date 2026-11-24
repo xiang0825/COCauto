@@ -26,7 +26,10 @@ Det:
 
     model_path: models/ch_PP-OCRv4_det_infer.onnx
 
-    limit_side_len: 736
+    # min 模式会把短边放大到该值。736 会把 70x42 的兵种格放大到约
+    # 1200x736，单次 OCR 约 450ms 且数字更易误读；实测 320 时小区域
+    # 约 90ms，数字识别率 149/152（736 为 139/152）。800x600 全屏不再放大。
+    limit_side_len: 320
     limit_type: min
     std: [ 0.5, 0.5, 0.5 ]
     mean: [ 0.5, 0.5, 0.5 ]
