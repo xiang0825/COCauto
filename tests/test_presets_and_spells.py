@@ -255,6 +255,12 @@ class 跟随法术计划测试(unittest.TestCase):
         self.assertLess(max(到中心(点) for 点 in 冰冻), min(到中心(点) for 点 in 第一批))
         self.assertEqual(len(set(冰冻)), 3)
 
+    def test_数量为0的槽位不施放_读不到数量按1个(self):
+        空格 = self._项("狂暴法术", 0)
+        未知 = {"类别": "药水", "名称": "法术_急速法术", "数量": None, "区域": (0, 0, 1, 1)}
+        计划 = self.任务.跟随控制法术计划([空格, 未知], [(150, 250)])
+        self.assertEqual([项["名称"] for 项, _, _ in 计划], ["法术_急速法术"])
+
     def test_复苏和回溯不自动施放(self):
         计划 = self.任务.跟随控制法术计划(
             [self._项("复苏法术", 1), self._项("回溯法术", 1), self._项("隐形法术", 1)], [(150, 250)]
