@@ -51,12 +51,18 @@ class 搜索目标敌人任务(基础任务):
         "圣水瓶": 2.0,
     }
 
+    默认最大搜索次数 = 150
+    默认最长搜索分钟 = 15
+    默认YOLO连续失败熔断次数 = 10
+
     def __init__(self, 上下文):
         super().__init__(上下文)
         # 创建数据集目录
         self.数据集目录 = Path("数据集")
         self.数据集目录.mkdir(parents=True, exist_ok=True)
         self.目录文件数 = len(list(self.数据集目录.glob("*.png")))
+        self._连续YOLO失败次数 = 0
+        self._搜索熔断原因 = ""
 
     def 采集当前画面(self):
         """采集当前屏幕并保存"""
@@ -68,8 +74,6 @@ class 搜索目标敌人任务(基础任务):
         # 生成唯一文件名（时间戳 + 计数）
         时间戳 = int(time.time() * 1000)
         文件名 = self.数据集目录 / f"img_{时间戳}_{self.目录文件数 + 1:05d}.png"
-
-
 
         # Windows 版 OpenCV 的 imwrite 对包含中文目录的路径可能静默
         # 返回 False（例如“数据集”），但旧代码仍然把采集计数写成成功。
@@ -88,18 +92,87 @@ class 搜索目标敌人任务(基础任务):
 
         self.目录文件数 = len(list(self.数据集目录.glob("*.png")))
 
+    @classmethod
+    def _读取搜索限制配置(cls, 上下文) -> tuple[int, float, int]:
+        """读取最大搜索次数、最长搜索分钟与 YOLO 连续失败熔断阈值。"""
+        设置 = getattr(上下文, "设置", None)
+        if 设置 is None and getattr(上下文, "数据库", None) is not None:
+            try:
+                设置 = 上下文.数据库.获取机器人设置(上下文.机器人标志)
+            except Exception:
+                设置 = None
+
+        def 正整数(字段名: str, 默认值: int) -> int:
+            try:
+                原始值 = getattr(设置, 字段名, 默认值)
+                return max(1, int(默认值 if 原始值 is None else 原始值))
+            except (TypeError, ValueError, OverflowError):
+                return 默认值
+
+        最大次数 = 正整数("最大搜索次数", cls.默认最大搜索次数)
+        最长分钟 = 正整数("最长搜索分钟", cls.默认最长搜索分钟)
+        熔断次数 = 正整数("YOLO连续失败熔断次数", cls.默认YOLO连续失败熔断次数)
+        return 最大次数, 最长分钟 * 60.0, 熔断次数
+
+    @staticmethod
+    def _触发搜索安全退出(上下文, 原因: str) -> None:
+        """达到上限或熔断后安全退出搜索、记日志并触发待命/通知。"""
+        try:
+            上下文.页面恢复失败 = True
+        except Exception:
+            pass
+        日志文本 = f"[搜索保护] {原因}；安全退出搜索并转入待命，不放宽评分或盲目进攻"
+        置状态 = getattr(上下文, "置脚本状态", None)
+        if callable(置状态):
+            try:
+                置状态(日志文本)
+            except Exception:
+                pass
+        通知 = getattr(上下文, "发送企业微信通知", None)
+        if callable(通知):
+            try:
+                通知(f"⚠️ 主世界搜索已安全退出\n原因：{原因}", 包含截图=True)
+            except Exception:
+                pass
+
     def 执行(self) -> bool:
         try:
             上下文 = self.上下文
             搜索次数 = 1
             最小资源 = 上下文.数据库.获取机器人设置(上下文.机器人标志).欲进攻的最小资源
             原始目标 = 最小资源
+            最大次数, 最长秒数, _ = self._读取搜索限制配置(上下文)
+            开始时间 = time.monotonic()
+            self._连续YOLO失败次数 = 0
+            self._搜索熔断原因 = ""
 
             while True:
+                停止事件 = getattr(上下文, "停止事件", None)
+                if 停止事件 is not None and 停止事件.is_set():
+                    return False
 
-                if  self.执行单次搜索(上下文, 搜索次数, 最小资源):
+                if 搜索次数 > 最大次数:
+                    self._触发搜索安全退出(
+                        上下文,
+                        f"已达最大搜索次数上限（{最大次数}次）",
+                    )
+                    return False
+
+                已耗时秒 = time.monotonic() - 开始时间
+                if 已耗时秒 >= 最长秒数:
+                    self._触发搜索安全退出(
+                        上下文,
+                        f"已达最长搜索时间上限（{int(最长秒数 // 60)}分钟）",
+                    )
+                    return False
+
+                if self.执行单次搜索(上下文, 搜索次数, 最小资源):
                     上下文.脚本延时(500)
                     return True
+
+                if getattr(self, "_搜索熔断原因", ""):
+                    self._触发搜索安全退出(上下文, self._搜索熔断原因)
+                    return False
 
                 # 每10次降低目标
                 if 搜索次数 % 10 == 0:
@@ -158,14 +231,28 @@ class 搜索目标敌人任务(基础任务):
                         return True
                     raise RuntimeError("搜索页按钮识别或点击失败，停止继续搜索")
                 return False
+        YOLO异常 = False
         try:
             检测结果列表 = self.检测器.检测(屏幕图像)
         except Exception as 异常:
             # 单个候选的 YOLO 失败不能误进攻，按 0 分跳过并继续搜索。
+            YOLO异常 = True
             检测结果列表 = []
             上下文.置脚本状态(f"资源阵营识别失败：{异常}；本次评分按0分处理")
 
         易窃取评分, 评分依据 = self.计算资源易窃取评分(检测结果列表)
+        _, _, 熔断次数 = self._读取搜索限制配置(上下文)
+        资源建筑数 = int(评分依据.get("资源建筑数", 0) or 0)
+        if YOLO异常 or 资源建筑数 <= 0:
+            self._连续YOLO失败次数 = int(getattr(self, "_连续YOLO失败次数", 0)) + 1
+        else:
+            self._连续YOLO失败次数 = 0
+        if self._连续YOLO失败次数 >= 熔断次数:
+            self._搜索熔断原因 = (
+                f"YOLO 连续 {self._连续YOLO失败次数} 次抛异常或未识别到任何资源建筑（熔断阈值 {熔断次数}）"
+            )
+            上下文.置脚本状态(self._搜索熔断原因)
+            return False
         资源数据["资源易窃取评分"] = 易窃取评分
         资源数据["资源易窃取评分依据"] = 评分依据
         上下文.本场资源易窃取评分 = 易窃取评分

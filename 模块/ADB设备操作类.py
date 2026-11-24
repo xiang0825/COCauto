@@ -138,11 +138,15 @@ class ADB设备操作类:
             设备序列号: str = "",
             runner: Callable = subprocess.run,
             自动检测路径: bool = True,
+            内存保护提交额度阈值MB: int = 1536,
     ):
         self.自动检测路径 = bool(自动检测路径)
         self.adb路径 = self.解析ADB路径(adb路径, 自动检测=self.自动检测路径)
         self.设备序列号 = (设备序列号 or "").strip()
         self._runner = runner
+        self.内存保护提交额度阈值MB = self._规范化内存保护提交额度阈值MB(
+            内存保护提交额度阈值MB
+        )
         self._屏幕尺寸: tuple[int, int] | None = None
         self._截图显示ID: str | None = None
         self._截图显示ID更新时间 = 0.0
@@ -1831,6 +1835,14 @@ class ADB设备操作类:
             interpolation=cv2.INTER_AREA,
         )
 
+    @staticmethod
+    def _规范化内存保护提交额度阈值MB(阈值: object) -> int:
+        try:
+            数值 = int(阈值)
+        except (TypeError, ValueError, OverflowError):
+            数值 = 1536
+        return max(256, min(32768, 数值))
+
     def _检查主机内存预算(self) -> None:
         """在创建 screencap/OCR 临时缓冲前拒绝低内存状态。
 
@@ -1846,8 +1858,11 @@ class ADB设备操作类:
         if not 状态:
             return
         MB = 1024 * 1024
+        提交额度阈值MB = self._规范化内存保护提交额度阈值MB(
+            getattr(self, "内存保护提交额度阈值MB", 1536)
+        )
         物理内存不足 = 状态["可用物理内存"] < 900 * MB
-        提交额度不足 = 状态["可用提交额度"] < 1536 * MB
+        提交额度不足 = 状态["可用提交额度"] < 提交额度阈值MB * MB
         负载过高 = 状态["内存负载"] >= 92
         if 物理内存不足 or 提交额度不足 or 负载过高:
             raise ADB错误(

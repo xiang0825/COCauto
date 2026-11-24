@@ -1,18 +1,20 @@
 
 
+import gc
+import importlib
+import os
 import queue
 import random
 import threading
 import time
-import gc
-import importlib
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Tuple, Any, Optional
 
 from 数据库.任务数据库 import 任务数据库, 机器人设置
 from 核心.ADB屏幕 import ADB屏幕
-from 核心.异常 import 机器人停止请求
+from 核心.异常 import 主机内存保护暂停请求, 机器人停止请求
 
 from 核心.键盘操作 import 键盘控制器
 from 核心.鼠标操作 import 鼠标控制器
@@ -72,6 +74,8 @@ class 任务上下文:
     上报间隔秒: int = 0  # 新增：上报间隔（秒）
     上次检查上报时间: float = 0.0  # 新增：上次检查上报的时间戳（避免频繁检查）
     任务计划等待秒: float = 0.0  # 当前轮任务请求的下一次检查等待时间
+    内存保护标志: threading.Event = field(default_factory=threading.Event)
+    待命通知回调: Optional[Callable[..., Any]] = None
 
     def 请求任务计划等待(self, 秒数: float, 原因: str = "") -> None:
         """请求任务计划在本轮结束后延迟再次检查。
@@ -240,20 +244,30 @@ class 任务上下文:
         self._内存保护已触发 = False
         self._主机内存保护可恢复 = False
         self._主机内存恢复连续正常次数 = 0
+        标志 = getattr(self, "内存保护标志", None)
+        if isinstance(标志, threading.Event):
+            标志.clear()
 
     def 触发内存保护(self, 来源: str, 异常: Exception | str) -> None:
         """内存故障后只释放本进程资源并停止输入，绝不重启游戏。"""
         if getattr(self, "_内存保护已触发", False):
             return
         self._内存保护已触发 = True
-        self._主机内存保护可恢复 = "主机内存保护已触发" in str(异常 or "")
+        可恢复 = "主机内存保护已触发" in str(异常 or "")
+        self._主机内存保护可恢复 = 可恢复
         self._主机内存恢复连续正常次数 = 0
+        标志 = getattr(self, "内存保护标志", None)
+        if isinstance(标志, threading.Event):
+            标志.set()
         self.释放识别模型()
         self.页面恢复失败 = True
-        try:
-            self.停止事件.set()
-        except Exception:
-            pass
+        if not 可恢复:
+            # 非宿主机预算保护的内存错误（如 bad allocation）没有可验证的
+            # 自动恢复条件，仍需立即设置停止事件终止任务。
+            try:
+                self.停止事件.set()
+            except Exception:
+                pass
         self.置脚本状态(
             f"[资源保护] {来源}检测到内存异常：{异常}；"
             "已释放OCR/YOLO与截图缓存，停止所有后续截图和点击；"
@@ -2863,6 +2877,111 @@ class 任务上下文:
         # 立即设置停止事件，让线程在下一个延时点退出
         self.停止事件.set()
 
+    def 保存待命现场截图并通知(
+        self,
+        原因: str,
+        屏幕图像=None,
+        *,
+        截图目录=None,
+        最大留图数: int = 50,
+    ) -> Optional[Path]:
+        """待命超阈值时保存现场截图（限制留图上限）并发送通知（不抛异常）。"""
+        保存路径: Optional[Path] = None
+        if 屏幕图像 is None and not getattr(self, "_内存保护已触发", False):
+            屏幕图像 = getattr(self, "_点击识别截图", None)
+            if 屏幕图像 is None:
+                op = getattr(self, "op", None)
+                取图 = getattr(op, "获取屏幕图像cv", None)
+                if callable(取图):
+                    try:
+                        屏幕图像 = 取图(0, 0, 800, 600)
+                    except Exception:
+                        屏幕图像 = None
+
+        if 屏幕图像 is not None and hasattr(屏幕图像, "shape"):
+            try:
+                目标目录 = Path(截图目录) if 截图目录 else Path("数据集") / "待命现场"
+                目标目录.mkdir(parents=True, exist_ok=True)
+                上限 = max(1, int(最大留图数))
+                # 达到上限后不再新增，也绝不自动删除已有现场截图；
+                # 清理由用户人工决定。
+                已有数量 = sum(1 for _ in 目标目录.glob("standby_*.png"))
+                编码成功, PNG数据 = (
+                    cv2.imencode(".png", 屏幕图像) if 已有数量 < 上限 else (False, None)
+                )
+                if 已有数量 >= 上限:
+                    self.置脚本状态(
+                        f"待命现场截图已达上限{上限}张，本次不再保存（不会自动删除旧图）"
+                    )
+                if 编码成功:
+                    序号 = int(getattr(self, "_待命现场截图序号", 0)) + 1
+                    self._待命现场截图序号 = 序号
+                    时间戳 = time.strftime("%Y%m%d_%H%M%S")
+                    毫秒 = int((time.time() % 1) * 1000)
+                    文件名 = f"standby_{时间戳}_{毫秒:03d}_{序号:04d}.png"
+                    候选路径 = 目标目录 / 文件名
+                    候选路径.write_bytes(PNG数据.tobytes())
+                    保存路径 = 候选路径
+            except Exception as 异常:
+                try:
+                    self.置脚本状态(f"待命现场截图保存失败（不影响继续待命）：{异常}")
+                except Exception:
+                    pass
+
+        通知内容 = (
+            f"⚠️ 机器人进入安全待命告警\n"
+            f"原因: {原因}\n"
+            + (f"现场截图: {保存路径}\n" if 保存路径 else "现场截图: 未获取\n")
+            + f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        try:
+            self.置脚本状态(
+                f"[待命告警] {原因}"
+                + (f"；已保存现场截图至 {保存路径}" if 保存路径 else "")
+            )
+        except Exception:
+            pass
+
+        通知器 = getattr(self, "企业微信通知器", None)
+        if 通知器 is not None:
+            try:
+                通知器.发送状态消息(
+                    机器人标志=getattr(self, "机器人标志", "robot"),
+                    状态文本=通知内容,
+                    截图=屏幕图像,
+                )
+            except Exception as 异常:
+                try:
+                    self.记录警告(f"待命超时企业微信通知发送失败: {异常}")
+                except Exception:
+                    pass
+
+        回调 = getattr(self, "待命通知回调", None)
+        if callable(回调):
+            try:
+                回调(
+                    标题="部落冲突机器人待命告警",
+                    内容=通知内容,
+                    截图路径=str(保存路径) if 保存路径 else None,
+                )
+            except Exception:
+                pass
+
+        队列 = getattr(self, "消息队列", None)
+        入队 = getattr(队列, "put_nowait", None)
+        if callable(入队):
+            try:
+                入队({
+                    "类型": "待命超时通知",
+                    "机器人标志": getattr(self, "机器人标志", "robot"),
+                    "原因": 原因,
+                    "截图路径": str(保存路径) if 保存路径 else "",
+                })
+            except Exception:
+                pass
+
+        return 保存路径
+
     def 发送企业微信通知(self, 状态文本: str, 包含截图: bool = True):
         """发送企业微信状态通知（任务代码可随时调用）
 
@@ -2917,6 +3036,10 @@ class 任务上下文:
         if 是否资源保护:
             是否重启游戏 = False
             是否重启机器人 = False
+            if "主机内存保护已触发" in 异常文本:
+                触发保护 = getattr(self, "触发内存保护", None)
+                if callable(触发保护):
+                    触发保护(任务名, 异常)
             self.置脚本状态(
                 "资源保护安全锁：保留当前游戏和模拟器，不启动、切换或关闭任何应用；"
                 "请先释放模拟器内存后再手动启动任务"
@@ -3008,6 +3131,9 @@ class 任务上下文:
             if self.停止事件.is_set():
                 self.置脚本状态("收到停止事件")
                 raise 机器人停止请求(f"收到退出请求,主动退出线程,机器人{self.机器人标志}已关闭")
+            检查可恢复内存 = getattr(self, "是否可自动恢复主机内存保护", None)
+            if callable(检查可恢复内存) and 检查可恢复内存():
+                raise 主机内存保护暂停请求("宿主机内存保护已触发，暂停当前任务并等待恢复")
 
             if not self.继续事件.is_set():
                 # 暂停时也用有界等待，这样停止事件仍能快速唤醒线程。
@@ -3132,6 +3258,13 @@ class 任务上下文:
         # 所有任务共用这一入口；危险页面一旦被识别，ESC 并确认主页，
         # 取消当前点击，但允许上层任务继续走任务计划。
         if self.检查宝石商店危险页面():
+            检查可恢复内存 = getattr(self, "是否可自动恢复主机内存保护", None)
+            if (
+                callable(检查可恢复内存)
+                and 检查可恢复内存()
+                and not self.停止事件.is_set()
+            ):
+                raise 主机内存保护暂停请求("宿主机内存保护已触发，暂停点击并等待恢复")
             return False
 
         # 战斗结算页可能刚好出现在两次下兵之间。识别到结算后只阻止

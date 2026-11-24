@@ -18,6 +18,15 @@ class 机器人停止请求(SystemExit):
     """
 
 
+class 主机内存保护暂停请求(BaseException):
+    """宿主机内存预算不足时暂停当前任务并进入只读恢复等待。
+
+    继承 ``BaseException`` 而非 ``Exception`` 或 ``SystemExit``，确保
+    业务层的 ``except Exception:`` 不会意外吞掉，同时也不会被
+    ``except SystemExit:`` 当作用户退出而直接结束机器人线程。
+    """
+
+
 class 机器人异常(Exception):
     """机器人业务异常基类。``允许自动恢复`` 为 False 时只安全停止。"""
 
@@ -85,7 +94,7 @@ def 是否禁止自动恢复(异常: BaseException | str | None) -> bool:
     """
     if 异常 is None:
         return True
-    if isinstance(异常, 机器人停止请求):
+    if isinstance(异常, (机器人停止请求, 主机内存保护暂停请求)):
         return True
     if isinstance(异常, 机器人异常):
         if not 异常.允许自动恢复:
