@@ -519,6 +519,53 @@ class 任务计划测试(unittest.TestCase):
         self.assertTrue(getattr(上下文, "_资源计划已打满", False))
         打鱼.return_value.执行.assert_not_called()
 
+    def test_满仓且设置继续打鱼时照常发起进攻(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = threading.Event()
+        机器人.机器人标志 = "测试机器人"
+        机器人.数据库 = SimpleNamespace(
+            获取机器人设置=Mock(return_value=机器人设置(
+                战利品优先级="均衡", 资源打满后动作="继续打鱼",
+            ))
+        )
+        状态 = SimpleNamespace(状态数据={"家乡资源": {
+            "金币": 31_000_000, "圣水": 31_000_000, "黑油": 500_000, "识别成功": True,
+        }})
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            机器人标志="测试机器人",
+            数据库=SimpleNamespace(
+                获取最新完整状态=Mock(return_value=状态),
+                获取近期家乡资源峰值=Mock(return_value={}),
+            ),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+        机器人._进入并确认主世界 = Mock(return_value=True)
+        机器人._断线时恢复游戏连接 = Mock(return_value=True)
+
+        def 打一场后停止():
+            机器人.停止事件.set()
+            return True
+
+        with patch("线程.自动化机器人.收集资源任务") as 收集资源, \
+                patch("线程.自动化机器人.更新家乡资源状态任务") as 更新资源, \
+                patch("线程.自动化机器人.主世界打鱼任务") as 打鱼, \
+                patch("线程.自动化机器人.是否目标资源打满", return_value=True):
+            收集资源.return_value.执行.return_value = True
+            更新资源.return_value.执行.return_value = True
+            打鱼.return_value.执行.side_effect = 打一场后停止
+            机器人._执行主世界刷资源计划(上下文, Mock())
+
+        self.assertFalse(getattr(上下文, "_资源计划已打满", False))
+        打鱼.return_value.执行.assert_called()
+        日志 = " ".join(str(调用) for 调用 in 上下文.置脚本状态.call_args_list)
+        self.assertIn("继续打鱼", 日志)
+
+    def test_资源打满后动作接受继续打鱼(self):
+        self.assertEqual(机器人设置(资源打满后动作="继续打鱼").资源打满后动作, "继续打鱼")
+        self.assertEqual(机器人设置(资源打满后动作="乱填").资源打满后动作, "退出")
+
     def test_启动时已有战斗先回营再执行任务计划(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
         机器人.停止事件 = threading.Event()
