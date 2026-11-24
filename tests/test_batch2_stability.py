@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import logging
 import os
+import sys
 import sqlite3
 import tempfile
 import threading
@@ -577,3 +578,14 @@ class 第二批审查修正测试(unittest.TestCase):
                 with 库._获取连接() as conn:
                     self.assertEqual(conn.execute("PRAGMA synchronous").fetchone()[0], 1)
                     self.assertEqual(conn.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+
+
+class 进程资源指标真实采集测试(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "仅 Windows")
+    def test_Windows下真实采集到内存与句柄数(self):
+        from 线程.自动化机器人 import _采集进程资源指标
+        指标 = _采集进程资源指标()
+        self.assertIsNotNone(指标["rss_mb"])
+        self.assertGreater(指标["rss_mb"], 0)
+        self.assertIsNotNone(指标["private_mb"])
+        self.assertGreater(指标["handles"] or 0, 0)

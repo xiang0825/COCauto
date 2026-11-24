@@ -111,13 +111,22 @@ def _采集进程资源指标() -> dict:
     if sys.platform != "win32":
         return 指标
     try:
-        kernel32 = ctypes.windll.kernel32
+        # 独立 WinDLL 实例并声明 64 位 HANDLE 原型：默认 c_int 会把
+        # GetCurrentProcess 的伪句柄截成 32 位，调用全部静默失败。
+        wt = ctypes.wintypes
+        kernel32 = ctypes.WinDLL("kernel32")
+        kernel32.GetCurrentProcess.restype = wt.HANDLE
+        kernel32.GetCurrentProcess.argtypes = []
+        kernel32.GetProcessHandleCount.restype = wt.BOOL
+        kernel32.GetProcessHandleCount.argtypes = [wt.HANDLE, ctypes.POINTER(wt.DWORD)]
         当前进程 = kernel32.GetCurrentProcess()
         计数 = _进程内存计数EX()
         计数.cb = ctypes.sizeof(_进程内存计数EX)
         get_mem = getattr(kernel32, "K32GetProcessMemoryInfo", None)
         if get_mem is None:
-            get_mem = ctypes.windll.psapi.GetProcessMemoryInfo
+            get_mem = ctypes.WinDLL("psapi").GetProcessMemoryInfo
+        get_mem.restype = wt.BOOL
+        get_mem.argtypes = [wt.HANDLE, ctypes.c_void_p, wt.DWORD]
         if get_mem(当前进程, ctypes.byref(计数), 计数.cb):
             指标["rss_mb"] = round(计数.WorkingSetSize / (1024 * 1024), 1)
             私有字节 = 计数.PrivateUsage or 计数.PagefileUsage
@@ -852,6 +861,8 @@ class 自动化机器人:
                     "下一场资源读取前英雄详情未安全关闭，禁止进攻"
                 )
                 return False
+            if not self._打鱼间隙检查部落竞赛(上下文):
+                return False
             本轮资源识别成功 = 更新家乡资源状态任务(上下文).执行()
             当前状态 = 上下文.数据库.获取最新完整状态(self.机器人标志)
             家乡资源 = self._取已确认家乡资源(当前状态)
@@ -1517,6 +1528,19 @@ class 自动化机器人:
             )
             上下文._满仓继续打鱼已提示 = set(已提示) | {世界}
         return True
+
+    def _打鱼间隙检查部落竞赛(self, 上下文) -> bool:
+        """连续打鱼时主世界刷资源不会结束本轮，任务计划里的 event 项
+        就再也轮不到。每场进攻前（已在主页）顺带检查一次：模块自带
+        冷却，未到时间只读一次数据库、不做任何点击。"""
+        启用任务 = getattr(上下文, "_启用任务键集合", None)
+        if not 启用任务 or "event" not in 启用任务:
+            return True
+        if self._执行部落竞赛计划(上下文):
+            return True
+        上下文.页面恢复失败 = True
+        上下文.置脚本状态("打鱼间隙的部落竞赛检查未能确认回到主页，禁止进攻")
+        return False
 
     def _执行部落竞赛计划(self, 上下文) -> bool:
         """部落竞赛接任务；冷却、活动结束、识别不清都返回 True 让打鱼继续。"""

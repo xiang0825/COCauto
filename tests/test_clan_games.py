@@ -10,7 +10,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -499,3 +499,37 @@ class 辅助函数测试(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class 打鱼间隙检查部落竞赛测试(unittest.TestCase):
+    def _机器人(self, 结果=True):
+        from 线程.自动化机器人 import 自动化机器人
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人._执行部落竞赛计划 = Mock(return_value=结果)
+        return 机器人
+
+    def test_未启用event时不检查(self):
+        机器人 = self._机器人()
+        上下文 = SimpleNamespace(_启用任务键集合=frozenset({"main_resource"}), 置脚本状态=Mock())
+        self.assertTrue(机器人._打鱼间隙检查部落竞赛(上下文))
+        机器人._执行部落竞赛计划.assert_not_called()
+
+    def test_启用event时每场前都交给模块按冷却判断(self):
+        机器人 = self._机器人()
+        上下文 = SimpleNamespace(_启用任务键集合=frozenset({"event", "main_resource"}), 置脚本状态=Mock())
+        self.assertTrue(机器人._打鱼间隙检查部落竞赛(上下文))
+        self.assertTrue(机器人._打鱼间隙检查部落竞赛(上下文))
+        self.assertEqual(机器人._执行部落竞赛计划.call_count, 2)
+
+    def test_检查失败时禁止进攻并标记页面恢复失败(self):
+        机器人 = self._机器人(结果=False)
+        上下文 = SimpleNamespace(
+            _启用任务键集合=frozenset({"event"}), 置脚本状态=Mock(), 页面恢复失败=False
+        )
+        self.assertFalse(机器人._打鱼间隙检查部落竞赛(上下文))
+        self.assertTrue(上下文.页面恢复失败)
+
+    def test_没有启用任务集合的旧调用方不检查(self):
+        机器人 = self._机器人()
+        self.assertTrue(机器人._打鱼间隙检查部落竞赛(SimpleNamespace()))
+        机器人._执行部落竞赛计划.assert_not_called()
