@@ -1023,7 +1023,7 @@ class 自适应战斗测试(unittest.TestCase):
     def test_战中OCR暂不可读但数字确实变化可继续投放(self):
         任务 = 进攻任务.__new__(进攻任务)
         任务.战斗是否仍在进行 = Mock(return_value=True)
-        任务.读取槽位显示兵量 = Mock(side_effect=[None, None, None])
+        任务.读取槽位显示兵量 = Mock(return_value=None)
         任务.读取兵栏槽位图像 = Mock(side_effect=[
             np.zeros((90, 60, 3), dtype=np.uint8),
             np.pad(np.ones((10, 10, 3), dtype=np.uint8) * 255,
@@ -1042,6 +1042,27 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertTrue(任务.执行已识别闪电法术(上下文))
         self.assertEqual(点击.call_count, 3)
         self.assertTrue(any("2/2个" in 文本 for 文本 in 日志))
+
+    def test_点击后数字刷新慢时等一下复读再继续(self):
+        # rc131 实机：OCR 提速后点完立刻读到旧数字，两场都停在 8/11。
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.战斗是否仍在进行 = Mock(return_value=True)
+        # 开战读 3；第 1 次点后读到旧的 3，等待后复读到 2；之后正常下降
+        任务.读取槽位显示兵量 = Mock(side_effect=[3, 3, 2, 1, 0])
+        任务.读取兵栏槽位图像 = Mock(return_value=None)
+        点击 = Mock(return_value=True)
+        延时 = Mock()
+        日志 = []
+        上下文 = SimpleNamespace(
+            当前兵栏清单=[{
+                "名称": "法术_闪电法术", "类别": "药水", "数量已确认": True,
+                "数量": 3, "区域": (320, 493, 376, 594),
+            }],
+            本场进攻方向=["左上"], 点击=点击, 置脚本状态=日志.append, 脚本延时=延时,
+        )
+        self.assertTrue(任务.执行已识别闪电法术(上下文))
+        延时.assert_called_once_with(400)
+        self.assertTrue(any("3/3个" in 文本 for 文本 in 日志))
 
     def test_闪电法术未确认数量时不盲点槽位(self):
         任务 = 进攻任务.__new__(进攻任务)
