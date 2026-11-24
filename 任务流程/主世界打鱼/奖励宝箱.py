@@ -1,31 +1,71 @@
-"""胜利之星奖励宝箱：领取后手动敲开宝箱，而不是跳过动画。
+"""胜利之星奖励宝箱：回营后出现的敲宝箱页面。
 
-用户描述的实机流程（2026-11-24）：领取奖励后出现宝箱 → 点击宝箱；点击成功后
-宝箱下方出现类似锤子的计数，计数减少到 3 → 再连续点击 3 次 → 等待 3 秒 →
-再点击 1 次 → 确认回到主世界。
+实机流程（2026-11-24 rc135 截图校准）：
+1. 点“回营”后出现宝箱页：宝箱在画面中央，下方一条深色底栏里有 4 根黄色擀面杖
+   （用户说的“类似锤子”）；右下角有“跳過”。
+2. 每敲一下宝箱，最左边一根黄色变暗。用户规则：黄色减少到 3 根 → 再敲 3 次 →
+   等 3 秒 → 再点一次 → 确认回到主世界。
+3. 宝箱打开后是奖励页（例如“4倍戰鬥糕點 / 物品已運送到臨時倉庫”），点中间没反应，
+   “再点一次”要点下方绿色“繼續”按钮。
 
-这个页面机器人之前从未实际走过（一直点“跳过动画”），所以：
-- 每一步都保存截图到 ``数据集/奖励宝箱``，用于之后校准位置；
-- 每次点击前用 OCR 检查画面上没有宝石/购买字样；
-- 读不到锤子计数、计数一直不下降、或最后没回到主世界时返回 False，
-  调用方照旧走“跳过动画”的兜底流程。
+识别不到宝箱页、敲了没变化、找不到“繼續”或最后没回主世界时返回 False，
+调用方照旧按原流程等待/待命。每一步都存截图到 ``数据集/奖励宝箱``。
 """
 from __future__ import annotations
 
-import re
 import time
 from pathlib import Path
 
 import cv2
+import numpy as np
 
-宝箱点击点 = (400, 300)               # 800×600 画面中央的宝箱
-锤子计数OCR区域 = (200, 360, 600, 580)  # 宝箱下方
-目标计数 = 3
-最多敲击次数 = 12
+宝箱点击点 = (390, 300)                 # 800×600 画面中央的宝箱
+擀面杖区域 = (318, 478, 478, 530)        # 左, 上, 右, 下
+擀面杖槽位x = (17, 52, 88, 123)          # 区域内 4 根擀面杖的左边界
+槽位容差 = 6
+底栏最大平均亮度 = 95                     # 底栏是深色半透明条
+目标根数 = 3
+最多敲击次数 = 8
 敲击间隔毫秒 = 600
 开箱等待毫秒 = 3000
+继续按钮文字 = ("繼續", "继续")
+继续按钮默认点 = (392, 513)
+继续按钮等待秒 = 10.0
 回主世界等待秒 = 15.0
 危险文字 = ("寶石", "宝石", "購買", "购买")
+
+
+def 识别宝箱页(图像) -> int | None:
+    """是宝箱页时返回剩余黄色擀面杖根数（1–4），否则 None。"""
+    try:
+        左, 上, 右, 下 = 擀面杖区域
+        区域 = 图像[上:下, 左:右]
+        if 区域.size == 0 or float(区域.mean()) > 底栏最大平均亮度:
+            return None
+        遮罩 = cv2.inRange(
+            cv2.cvtColor(区域, cv2.COLOR_BGR2HSV),
+            np.array([18, 120, 150], np.uint8), np.array([35, 255, 255], np.uint8),
+        )
+        轮廓, _ = cv2.findContours(遮罩, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    except (cv2.error, TypeError, AttributeError, IndexError, ValueError):
+        return None
+    命中槽位 = set()
+    for 项 in 轮廓:
+        if cv2.contourArea(项) < 25:
+            continue
+        x, _y, 宽, 高 = cv2.boundingRect(项)
+        if not (12 <= 宽 <= 22 and 16 <= 高 <= 26):
+            return None
+        槽 = next((i for i, 槽x in enumerate(擀面杖槽位x) if abs(x - 槽x) <= 槽位容差), None)
+        if 槽 is None:
+            return None
+        命中槽位.add(槽)
+    if not 命中槽位:
+        return None
+    # 暗下去的总是左边的：剩下的必须是连续的右侧槽位
+    if 命中槽位 != set(range(4 - len(命中槽位), 4)):
+        return None
+    return len(命中槽位)
 
 
 def _保存截图(图像, 步骤: str) -> None:
@@ -50,62 +90,74 @@ def _OCR(上下文, 图像) -> list:
     return [项 for 项 in (结果 or []) if isinstance(项, (list, tuple)) and len(项) >= 2]
 
 
-def 读取锤子计数(OCR结果) -> int | None:
-    """从宝箱下方区域的 OCR 结果里取单独的个位数（如 “3”“x3”“×3”）。"""
-    候选 = []
+def 定位继续按钮(OCR结果) -> tuple[int, int] | None:
+    """在奖励页 OCR 结果里找“繼續”按钮中心；画面有宝石/购买字样时不返回。"""
+    if any(字 in str(项[1]) for 项 in OCR结果 for 字 in 危险文字):
+        return None
     for 项 in OCR结果:
-        文本 = str(项[1]).strip().replace(" ", "")
-        匹配 = re.fullmatch(r"[xX×]?(\d)", 文本)
-        if 匹配:
-            候选.append(int(匹配.group(1)))
-    return min(候选) if 候选 else None
+        if any(字 in str(项[1]) for 字 in 继续按钮文字):
+            try:
+                点 = np.asarray(项[0], dtype=float)
+                return int(点[:, 0].mean()), int(点[:, 1].mean())
+            except (TypeError, ValueError, IndexError):
+                return 继续按钮默认点
+    return None
 
 
 def 开启奖励宝箱(上下文) -> bool:
-    """按用户描述敲开宝箱并确认回到主世界；任何一步确认不了返回 False。"""
     置状态 = getattr(上下文, "置脚本状态", lambda *_a, **_k: None)
 
     def 截图():
         return 上下文.op.获取屏幕图像cv(0, 0, 800, 600, 强制刷新=True)
 
-    def 画面安全(图像) -> bool:
-        文字 = "".join(str(项[1]) for 项 in _OCR(上下文, 图像))
-        return not any(字 in 文字 for 字 in 危险文字)
-
-    def 敲一下(步骤: str) -> bool:
-        图像 = 截图()
-        if not 画面安全(图像):
-            _保存截图(图像, f"{步骤}_宝石字样")
-            置状态("奖励宝箱：画面出现宝石/购买字样，停止敲宝箱")
-            return False
+    def 敲() -> bool:
         return bool(上下文.点击已确认安全按钮(*宝箱点击点, 延时=敲击间隔毫秒))
 
-    # 1. 点宝箱，直到下方锤子计数降到 3
-    计数 = None
-    for 次 in range(最多敲击次数):
-        if not 敲一下(f"敲{次 + 1}"):
-            return False
-        图像 = 截图()
-        _保存截图(图像, f"敲{次 + 1}后")
-        x1, y1, x2, y2 = 锤子计数OCR区域
-        计数 = 读取锤子计数(_OCR(上下文, 图像[y1:y2, x1:x2]))
-        if 计数 is not None and 计数 <= 目标计数:
-            break
-    else:
-        置状态(f"奖励宝箱：敲了 {最多敲击次数} 次仍未读到锤子计数降到 {目标计数}（最后读数 {计数}），改走跳过动画")
+    图像 = 截图()
+    根数 = 识别宝箱页(图像)
+    if 根数 is None:
         return False
-    置状态(f"奖励宝箱：锤子计数 {计数}，继续敲 3 次后等待 3 秒")
+    _保存截图(图像, f"宝箱页_{根数}根")
+    置状态(f"奖励宝箱：识别到宝箱页，黄色擀面杖 {根数} 根，开始敲宝箱")
 
-    # 2. 再敲 3 次 → 等 3 秒 → 再敲 1 次
-    for 次 in range(3):
-        if not 敲一下(f"补敲{次 + 1}"):
+    # 1. 敲到黄色擀面杖剩 3 根
+    次数 = 0
+    while 根数 is not None and 根数 > 目标根数:
+        if 次数 >= 最多敲击次数:
+            置状态(f"奖励宝箱：敲了 {次数} 次擀面杖仍是 {根数} 根，停止")
+            return False
+        if not 敲():
+            return False
+        次数 += 1
+        图像 = 截图()
+        新根数 = 识别宝箱页(图像)
+        _保存截图(图像, f"敲{次数}后_{新根数}根")
+        根数 = 新根数
+    置状态(f"奖励宝箱：擀面杖剩 {根数 if 根数 is not None else '?'} 根，继续敲 3 次后等待 3 秒")
+
+    # 2. 再敲 3 次 → 等 3 秒
+    for i in range(3):
+        if not 敲():
             return False
     上下文.脚本延时(开箱等待毫秒)
-    _保存截图(截图(), "等待后")
-    if not 敲一下("收尾"):
+
+    # 3. 再点一次：奖励页的“繼續”按钮
+    截止 = time.time() + 继续按钮等待秒
+    按钮 = None
+    while time.time() < 截止:
+        图像 = 截图()
+        按钮 = 定位继续按钮(_OCR(上下文, 图像))
+        if 按钮 is not None:
+            break
+        上下文.脚本延时(800)
+    _保存截图(图像, "奖励页")
+    if 按钮 is None:
+        置状态("奖励宝箱：开箱后没找到“繼續”按钮，交给原流程处理")
+        return False
+    if not 上下文.点击已确认安全按钮(*按钮, 延时=800):
         return False
 
-    # 3. 确认回到主世界
+    # 4. 确认回到主世界
     截止 = time.time() + 回主世界等待秒
     while time.time() < 截止:
         上下文.脚本延时(1000)
@@ -115,8 +167,8 @@ def 开启奖励宝箱(上下文) -> bool:
         except Exception:
             结果 = None
         if getattr(结果, "页面", "") == "主世界主页":
-            置状态("奖励宝箱：已敲开宝箱并确认回到主世界")
+            置状态("奖励宝箱：已开箱、点击繼續并确认回到主世界")
             return True
     _保存截图(截图(), "未回主世界")
-    置状态("奖励宝箱：敲完后未确认回到主世界，交给原有奖励流程继续处理")
+    置状态("奖励宝箱：点击繼續后未确认回到主世界，交给原流程继续处理")
     return False

@@ -1,38 +1,68 @@
-"""胜利之星奖励宝箱：敲到锤子计数 3 → 再敲 3 次 → 等 3 秒 → 敲 1 次 → 确认回到主世界。"""
-
+"""胜利之星奖励宝箱：按实机截图校准的识别与敲开流程。"""
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import cv2
 import numpy as np
 
 from 任务流程.主世界打鱼 import 奖励宝箱 as 宝箱
 
+素材 = Path(__file__).parent / "fixtures" / "奖励宝箱"
 
-def _框():
-    return [[0, 0], [10, 0], [10, 10], [0, 10]]
+
+def _读(名称):
+    return cv2.imdecode(np.fromfile(str(素材 / 名称), np.uint8), cv2.IMREAD_COLOR)
+
+
+def _框(x1, y1, x2, y2):
+    return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+
+
+class 宝箱页识别测试(unittest.TestCase):
+    def test_实机截图的黄色擀面杖根数(self):
+        self.assertEqual(宝箱.识别宝箱页(_读("宝箱页_4根.png")), 4)
+        self.assertEqual(宝箱.识别宝箱页(_读("宝箱页_3根.png")), 3)
+        self.assertEqual(宝箱.识别宝箱页(_读("宝箱页_1根.png")), 1)
+
+    def test_奖励页和其他画面不是宝箱页(self):
+        self.assertIsNone(宝箱.识别宝箱页(_读("奖励页_繼續.png")))
+        self.assertIsNone(宝箱.识别宝箱页(np.zeros((600, 800, 3), np.uint8)))
+        self.assertIsNone(宝箱.识别宝箱页(np.full((600, 800, 3), 200, np.uint8)))
+
+    def test_定位继续按钮(self):
+        结果 = [(_框(300, 440, 480, 470), "物品已運送到臨時倉庫。", 0.9),
+              (_框(360, 500, 420, 525), "繼續", 0.95)]
+        self.assertEqual(宝箱.定位继续按钮(结果), (390, 512))
+        self.assertIsNone(宝箱.定位继续按钮([(_框(0, 0, 9, 9), "繼續", 0.9),
+                                        (_框(0, 0, 9, 9), "使用寶石", 0.9)]))
+        self.assertIsNone(宝箱.定位继续按钮([(_框(0, 0, 9, 9), "4倍戰鬥糕點", 0.9)]))
 
 
 class 假上下文:
-    def __init__(self, 计数序列, 全屏文字="", 回主世界=True):
+    """按点击推进画面：4 根 → 3 根 → 1 根（再敲不变）→ 开箱后奖励页。"""
+
+    def __init__(self, 画面序列, 奖励页OCR=None, 回主世界=True):
         self.点击记录, self.延时记录, self.日志 = [], [], []
-        self._计数 = list(计数序列)
-        self._全屏文字 = 全屏文字
+        self._画面 = list(画面序列)
+        self._奖励页OCR = 奖励页OCR if 奖励页OCR is not None else [
+            (_框(360, 500, 420, 525), "繼續", 0.95)]
         self._回主世界 = 回主世界
-        self.op = SimpleNamespace(获取屏幕图像cv=lambda *_a, **_k: np.zeros((600, 800, 3), np.uint8))
+        self.op = SimpleNamespace(获取屏幕图像cv=self._截图)
+
+    def _截图(self, *_a, **_k):
+        return self._画面[0]
 
     def 获取OCR引擎(self):
-        def 识别(图像, **_k):
-            if 图像.shape[:2] == (600, 800):  # 全屏：只用于宝石字样检查
-                return ([(_框(), self._全屏文字, 0.9)] if self._全屏文字 else [], None)
-            值 = self._计数.pop(0) if self._计数 else None
-            return ([(_框(), str(值), 0.9)] if 值 is not None else [], None)
-        return 识别
+        return lambda *_a, **_k: (self._奖励页OCR, None)
 
     def 点击已确认安全按钮(self, x, y, 延时=100):
         self.点击记录.append((x, y))
+        if len(self._画面) > 1:
+            self._画面.pop(0)
         return True
 
     def 脚本延时(self, 毫秒):
@@ -45,49 +75,48 @@ class 假上下文:
         return SimpleNamespace(页面="主世界主页" if self._回主世界 else "未知")
 
 
-class 奖励宝箱测试(unittest.TestCase):
+class 敲宝箱流程测试(unittest.TestCase):
     def setUp(self):
         self._旧目录 = os.getcwd()
-        os.chdir(tempfile.mkdtemp())  # 截图写到临时目录
+        os.chdir(tempfile.mkdtemp())
 
     def tearDown(self):
         os.chdir(self._旧目录)
 
-    def test_计数降到3后再敲3次_等3秒_敲1次_回到主世界(self):
-        上下文 = 假上下文(["5", "4", "x3"])
+    def test_敲到3根_再敲3次_等3秒_点繼續_回主世界(self):
+        四, 三, 一, 奖励 = (_读(n) for n in ("宝箱页_4根.png", "宝箱页_3根.png", "宝箱页_1根.png", "奖励页_繼續.png"))
+        上下文 = 假上下文([四, 三, 一, 一, 奖励])
         self.assertTrue(宝箱.开启奖励宝箱(上下文))
-        # 3 次敲到计数 3 + 补敲 3 次 + 收尾 1 次
-        self.assertEqual(len(上下文.点击记录), 7)
-        self.assertTrue(all(点 == 宝箱.宝箱点击点 for 点 in 上下文.点击记录))
+        敲宝箱 = [点 for 点 in 上下文.点击记录 if 点 == 宝箱.宝箱点击点]
+        self.assertEqual(len(敲宝箱), 1 + 3)           # 敲到 3 根 1 次 + 补敲 3 次
+        self.assertEqual(上下文.点击记录[-1], (390, 512))  # 最后点“繼續”
         self.assertIn(3000, 上下文.延时记录)
-        self.assertIn("已敲开宝箱并确认回到主世界", 上下文.日志[-1])
-        self.assertTrue(any(f.endswith("等待后.png") for f in os.listdir(os.path.join("数据集", "奖励宝箱"))))
+        self.assertIn("回到主世界", 上下文.日志[-1])
 
-    def test_第一下就读到3(self):
-        上下文 = 假上下文(["3"])
-        self.assertTrue(宝箱.开启奖励宝箱(上下文))
-        self.assertEqual(len(上下文.点击记录), 5)
-
-    def test_画面有宝石字样不敲(self):
-        上下文 = 假上下文(["3"], 全屏文字="使用宝石立即开启")
+    def test_不是宝箱页什么都不点(self):
+        上下文 = 假上下文([np.zeros((600, 800, 3), np.uint8)])
         self.assertFalse(宝箱.开启奖励宝箱(上下文))
         self.assertEqual(上下文.点击记录, [])
 
-    def test_计数一直不下降时放弃改走跳过(self):
-        上下文 = 假上下文(["7"] * 20)
+    def test_敲了不变化时有上限(self):
+        四 = _读("宝箱页_4根.png")
+        上下文 = 假上下文([四])
         self.assertFalse(宝箱.开启奖励宝箱(上下文))
         self.assertEqual(len(上下文.点击记录), 宝箱.最多敲击次数)
-        self.assertIn("改走跳过动画", 上下文.日志[-1])
 
-    def test_敲完没回主世界返回失败(self):
-        上下文 = 假上下文(["3"], 回主世界=False)
-        with patch.object(宝箱, "回主世界等待秒", 0.01):
+    def test_找不到繼續按钮不乱点(self):
+        三, 奖励 = _读("宝箱页_3根.png"), _读("奖励页_繼續.png")
+        上下文 = 假上下文([三, 奖励], 奖励页OCR=[])
+        with patch.object(宝箱, "继续按钮等待秒", 0.01):
             self.assertFalse(宝箱.开启奖励宝箱(上下文))
+        self.assertEqual(len(上下文.点击记录), 3)  # 只有补敲 3 次
 
-    def test_读取锤子计数(self):
-        self.assertEqual(宝箱.读取锤子计数([(_框(), "×3", 0.9)]), 3)
-        self.assertEqual(宝箱.读取锤子计数([(_框(), "12", 0.9), (_框(), "4", 0.9)]), 4)
-        self.assertIsNone(宝箱.读取锤子计数([(_框(), "领取", 0.9)]))
+    def test_奖励页有宝石字样不点(self):
+        三, 奖励 = _读("宝箱页_3根.png"), _读("奖励页_繼續.png")
+        上下文 = 假上下文([三, 奖励], 奖励页OCR=[(_框(0, 0, 9, 9), "繼續", 0.9),
+                                            (_框(0, 0, 9, 9), "購買", 0.9)])
+        with patch.object(宝箱, "继续按钮等待秒", 0.01):
+            self.assertFalse(宝箱.开启奖励宝箱(上下文))
 
 
 if __name__ == "__main__":
