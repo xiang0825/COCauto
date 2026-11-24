@@ -425,40 +425,118 @@ class 未知页面待命通知与现场截图测试(unittest.TestCase):
             self.assertEqual(消息队列.qsize(), 1)
             self.assertEqual(消息队列.get_nowait()["类型"], "待命超时通知")
 
-    def test_待命现场截图超过上限时自动裁剪旧图且支持企微发送(self):
+    def _截图上下文(self, 通知器=None):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.机器人标志 = "robot_cap"
+        上下文.企业微信通知器 = 通知器
+        上下文.消息队列 = queue.Queue()
+        上下文.待命通知回调 = None
+        上下文.置脚本状态 = Mock()
+        上下文.记录警告 = Mock()
+        return 上下文
+
+    def test_待命现场截图达到上限后不再保存且不删除任何旧图(self):
         with tempfile.TemporaryDirectory() as 临时目录:
             目录 = Path(临时目录)
-            for 序号 in range(52):
-                文件 = 目录 / f"old_{序号:03d}.png"
-                文件.write_bytes(b"png")
-                os.utime(文件, (1000 + 序号, 1000 + 序号))
-
+            for 序号 in range(50):
+                (目录 / f"standby_old_{序号:03d}.png").write_bytes(b"png")
+            (目录 / "user_note.png").write_bytes(b"png")
             通知器 = SimpleNamespace(发送状态消息=Mock(return_value=True))
-            上下文 = 任务上下文.__new__(任务上下文)
-            上下文.机器人标志 = "robot_cap"
-            上下文.企业微信通知器 = 通知器
-            上下文.消息队列 = queue.Queue()
-            上下文.待命通知回调 = None
-            上下文.置脚本状态 = Mock()
-            上下文.记录警告 = Mock()
+            上下文 = self._截图上下文(通知器)
 
-            图像 = np.full((60, 80, 3), 120, dtype=np.uint8)
             保存路径 = 上下文.保存待命现场截图并通知(
                 "未知页面待命超3分钟",
-                屏幕图像=图像,
+                屏幕图像=np.full((60, 80, 3), 120, dtype=np.uint8),
                 截图目录=目录,
                 最大留图数=50,
             )
 
-            self.assertIsNotNone(保存路径)
-            self.assertTrue(保存路径.is_file())
-            剩余 = sorted(p.name for p in 目录.glob("*.png"))
-            self.assertEqual(len(剩余), 50)
-            self.assertNotIn("old_000.png", 剩余)
-            self.assertNotIn("old_001.png", 剩余)
-            self.assertNotIn("old_002.png", 剩余)
-            self.assertIn(保存路径.name, 剩余)
+            self.assertIsNone(保存路径)
+            self.assertEqual(len(list(目录.glob("*.png"))), 51)
+            self.assertTrue((目录 / "standby_old_000.png").is_file())
+            self.assertTrue((目录 / "user_note.png").is_file())
+            # 未保存截图时仍发出通知（附内存中的截图）。
             通知器.发送状态消息.assert_called_once()
+
+    def test_待命现场截图未达上限时保存且不删除旧图(self):
+        with tempfile.TemporaryDirectory() as 临时目录:
+            目录 = Path(临时目录)
+            for 序号 in range(3):
+                (目录 / f"standby_old_{序号:03d}.png").write_bytes(b"png")
+            上下文 = self._截图上下文()
+            保存路径 = 上下文.保存待命现场截图并通知(
+                "未知页面待命超3分钟",
+                屏幕图像=np.full((60, 80, 3), 120, dtype=np.uint8),
+                截图目录=目录,
+                最大留图数=4,
+            )
+            self.assertTrue(保存路径.is_file())
+            self.assertEqual(len(list(目录.glob("*.png"))), 4)
+            # 上限 4 已满，下一次不再保存。
+            self.assertIsNone(上下文.保存待命现场截图并通知(
+                "再次待命",
+                屏幕图像=np.full((60, 80, 3), 120, dtype=np.uint8),
+                截图目录=目录,
+                最大留图数=4,
+            ))
+            self.assertEqual(len(list(目录.glob("*.png"))), 4)
+
+    def test_未配置通知时安静跳过不写未配置日志(self):
+        with tempfile.TemporaryDirectory() as 临时目录:
+            上下文 = self._截图上下文(None)
+            上下文.保存待命现场截图并通知(
+                "待命",
+                屏幕图像=np.full((60, 80, 3), 120, dtype=np.uint8),
+                截图目录=临时目录,
+            )
+            日志 = " ".join(str(c.args[0]) for c in 上下文.置脚本状态.call_args_list)
+            self.assertNotIn("webhook", 日志)
+            上下文.记录警告.assert_not_called()
+
+
+class 待命期间再次触发内存保护测试(unittest.TestCase):
+    def _机器人(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.机器人标志 = "robot_again"
+        机器人.停止事件 = threading.Event()
+        机器人.继续事件 = threading.Event()
+        机器人.继续事件.set()
+        机器人.停止原因 = ""
+        机器人.记录日志 = Mock()
+        return 机器人
+
+    def test_待命内部抛出内存暂停请求时回到待命而不是结束线程(self):
+        机器人 = self._机器人()
+        上下文 = SimpleNamespace(置脚本状态=Mock(), 页面恢复失败=False)
+        次数 = {"n": 0}
+
+        def 单次(_ctx, _登录):
+            次数["n"] += 1
+            if 次数["n"] == 1:
+                raise 主机内存保护暂停请求("断线重连时再次触发")
+            return True
+
+        机器人._安全待命单次 = 单次
+        self.assertTrue(机器人._等待人工恢复主世界(上下文, Mock()))
+        self.assertEqual(次数["n"], 2)
+        self.assertFalse(机器人.停止事件.is_set())
+
+    def test_待命内部内存暂停时用户已停止则立即返回(self):
+        机器人 = self._机器人()
+        上下文 = SimpleNamespace(置脚本状态=Mock(), 页面恢复失败=False)
+        调用 = Mock(side_effect=主机内存保护暂停请求("x"))
+        机器人._安全待命单次 = 调用
+        机器人.停止原因 = "用户停止"
+        机器人.停止事件.set()
+        self.assertFalse(机器人._等待人工恢复主世界(上下文, Mock()))
+        self.assertEqual(调用.call_count, 1)
+
+    def test_待命内部反复触发内存暂停有上限并保持停止(self):
+        机器人 = self._机器人()
+        上下文 = SimpleNamespace(置脚本状态=Mock(), 页面恢复失败=False)
+        机器人._安全待命单次 = Mock(side_effect=主机内存保护暂停请求("x"))
+        self.assertFalse(机器人._等待人工恢复主世界(上下文, Mock()))
+        self.assertTrue(机器人.停止事件.is_set())
 
 
 class 建筑升级收尾复核测试(unittest.TestCase):

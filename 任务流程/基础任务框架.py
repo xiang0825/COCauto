@@ -2889,7 +2889,17 @@ class 任务上下文:
             try:
                 目标目录 = Path(截图目录) if 截图目录 else Path("数据集") / "待命现场"
                 目标目录.mkdir(parents=True, exist_ok=True)
-                编码成功, PNG数据 = cv2.imencode(".png", 屏幕图像)
+                上限 = max(1, int(最大留图数))
+                # 达到上限后不再新增，也绝不自动删除已有现场截图；
+                # 清理由用户人工决定。
+                已有数量 = sum(1 for _ in 目标目录.glob("standby_*.png"))
+                编码成功, PNG数据 = (
+                    cv2.imencode(".png", 屏幕图像) if 已有数量 < 上限 else (False, None)
+                )
+                if 已有数量 >= 上限:
+                    self.置脚本状态(
+                        f"待命现场截图已达上限{上限}张，本次不再保存（不会自动删除旧图）"
+                    )
                 if 编码成功:
                     序号 = int(getattr(self, "_待命现场截图序号", 0)) + 1
                     self._待命现场截图序号 = 序号
@@ -2899,16 +2909,6 @@ class 任务上下文:
                     候选路径 = 目标目录 / 文件名
                     候选路径.write_bytes(PNG数据.tobytes())
                     保存路径 = 候选路径
-                    上限 = max(1, int(最大留图数))
-                    现有文件 = sorted(
-                        目标目录.glob("*.png"),
-                        key=lambda 路径: (路径.stat().st_mtime, 路径.name),
-                    )
-                    for 旧文件 in 现有文件[: max(0, len(现有文件) - 上限)]:
-                        try:
-                            旧文件.unlink()
-                        except OSError:
-                            pass
             except Exception as 异常:
                 try:
                     self.置脚本状态(f"待命现场截图保存失败（不影响继续待命）：{异常}")
@@ -2942,11 +2942,6 @@ class 任务上下文:
                     self.记录警告(f"待命超时企业微信通知发送失败: {异常}")
                 except Exception:
                     pass
-        else:
-            try:
-                self.置脚本状态("未配置企业微信 webhook，待命告警改走本地日志与回调兜底")
-            except Exception:
-                pass
 
         回调 = getattr(self, "待命通知回调", None)
         if callable(回调):
