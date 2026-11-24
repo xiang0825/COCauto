@@ -747,9 +747,11 @@ class 任务数据库:
 
     def _按需初始化WAL(self, conn: sqlite3.Connection) -> None:
         """同一数据库路径仅在首次初始化时执行一次 WAL/synchronous/autocheckpoint 设置。"""
+        # synchronous 是连接级设置，每个新连接都必须设；只有持久化到
+        # 文件的 journal_mode=WAL 才需要每个路径执行一次。
+        conn.execute("PRAGMA synchronous=NORMAL")
         路径文本 = str(self.文件路径)
         if 路径文本 == ":memory:":
-            conn.execute("PRAGMA synchronous=NORMAL")
             return
         键 = self._缓存键
         if 键 in self._已初始化WAL路径集合:
@@ -758,7 +760,6 @@ class 任务数据库:
             if 键 in self._已初始化WAL路径集合:
                 return
             conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA wal_autocheckpoint=1000")
             self._已初始化WAL路径集合.add(键)
 

@@ -522,11 +522,58 @@ class 第二批稳定性优化测试(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(其他目录, "robot-error.log")))
             self.assertIn("Traceback: test error", Path(预期路径).read_text(encoding="utf-8"))
 
-            # 验证使用 RotatingFileHandler（配置 5MB 上限）
-            源码 = Path(inspect.getsourcefile(自动化机器人)).read_text(encoding="utf-8")
-            self.assertIn("RotatingFileHandler", 源码)
             self.assertEqual(自动化机器人.错误日志最大字节, 5 * 1024 * 1024)
+
+    def test_P2_10_error日志超过上限时改名归档且绝不删除旧日志(self):
+        with tempfile.TemporaryDirectory(prefix="coc-errlog-") as db目录:
+            机器人 = 自动化机器人.__new__(自动化机器人)
+            机器人.数据库 = SimpleNamespace(文件路径=os.path.join(db目录, "任务系统.db"))
+            机器人.错误日志最大字节 = 100
+            旧归档 = Path(db目录, "robot-error.20200101_000000.log")
+            旧归档.write_text("old archive", encoding="utf-8")
+            Path(db目录, "robot-error.log").write_text("x" * 200, encoding="utf-8")
+
+            路径 = 机器人._写入未处理异常日志("Traceback: new error\n")
+
+            文件 = sorted(p.name for p in Path(db目录).glob("robot-error*.log"))
+            self.assertEqual(len(文件), 3)
+            self.assertTrue(旧归档.is_file())
+            self.assertIn("Traceback: new error", Path(路径).read_text(encoding="utf-8"))
+            self.assertNotIn("xxx", Path(路径).read_text(encoding="utf-8"))
+            归档 = [n for n in 文件 if n not in ("robot-error.log", 旧归档.name)]
+            self.assertEqual(Path(db目录, 归档[0]).read_text(encoding="utf-8"), "x" * 200)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class 第二批审查修正测试(unittest.TestCase):
+    def test_YOLO检测器保持原始阈值且不做全局跨类去重(self):
+        from 模块.检测.YOLO检测器.yolo import 线程安全YOLO检测器 as 检测器类
+        self.assertEqual(检测器类.默认置信度阈值, 0.25)
+        源码 = inspect.getsource(检测器类.检测)
+        self.assertNotIn("跨类别重叠框去重(", 源码)
+
+    def test_敌方资源上限按线上数据放行真实大鱼并拦截十倍误读(self):
+        from 任务流程.主世界打鱼.搜索敌人 import 搜索目标敌人任务 as 任务类
+        # 线上真实读数：金币 3,450,179 / 圣水 3,357,185 / 黑油 28,000 级
+        self.assertFalse(任务类.是否存在资源异常上限(3_450_179, 3_357_185, 28_000))
+        # 线上明确误读：圣水 19,291,248；金币 5,228,051；黑油错行 2,087,305
+        self.assertTrue(任务类.是否存在资源异常上限(500_000, 19_291_248, 5_000))
+        self.assertTrue(任务类.是否存在资源异常上限(5_228_051, 500_000, 5_000))
+        self.assertTrue(任务类.是否存在资源异常上限(2_088, 383, 2_087_305))
+
+    def test_下一场画面轮询不超过每秒约两帧(self):
+        from 任务流程.主世界打鱼.搜索敌人 import 搜索目标敌人任务 as 任务类
+        self.assertGreaterEqual(任务类.下一场轮询间隔秒, 0.5)
+
+    def test_每个新连接都设置synchronous为NORMAL(self):
+        import sqlite3
+        from 数据库.任务数据库 import 任务数据库
+        with tempfile.TemporaryDirectory() as 目录:
+            库 = 任务数据库(os.path.join(目录, "t.db"))
+            for _ in range(2):
+                with 库._获取连接() as conn:
+                    self.assertEqual(conn.execute("PRAGMA synchronous").fetchone()[0], 1)
+                    self.assertEqual(conn.execute("PRAGMA journal_mode").fetchone()[0], "wal")

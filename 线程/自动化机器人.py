@@ -2,8 +2,6 @@ import ctypes
 import ctypes.wintypes
 import gc
 import importlib
-import logging
-import logging.handlers
 import os
 import queue
 import random
@@ -141,7 +139,6 @@ class 自动化机器人:
     心跳超时宽限秒数 = 5
     资源趋势日志间隔秒 = 1800.0
     错误日志最大字节 = 5 * 1024 * 1024
-    错误日志备份数 = 3
 
     def _记录进程资源趋势(self, 上下文=None, *, 强制: bool = False) -> bool:
         """每 30 分钟节流记录一次当前进程 RSS/私有内存、线程数与句柄数。"""
@@ -181,28 +178,26 @@ class 自动化机器人:
         return os.path.join(目录, "robot-error.log")
 
     def _写入未处理异常日志(self, 诊断信息: str) -> str | None:
-        """使用 RotatingFileHandler 把未捕获异常落盘到数据库同目录的绝对路径。"""
+        """把未捕获异常追加到数据库同目录的 robot-error.log（绝对路径）。
+
+        超过大小上限时把旧文件改名为 robot-error.<时间戳>.log 再写新文件；
+        不使用 RotatingFileHandler 的 backupCount，绝不自动删除旧日志。
+        """
         try:
             日志路径 = self._获取错误日志路径()
-            记录器 = logging.getLogger(f"coc_robot.error.{id(self)}")
-            记录器.setLevel(logging.ERROR)
-            记录器.propagate = False
-            处理器 = logging.handlers.RotatingFileHandler(
-                日志路径,
-                maxBytes=int(self.错误日志最大字节),
-                backupCount=int(self.错误日志备份数),
-                encoding="utf-8",
-                delay=True,
-            )
             try:
-                处理器.setFormatter(
-                    logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+                if os.path.getsize(日志路径) >= int(self.错误日志最大字节):
+                    根, 扩展名 = os.path.splitext(日志路径)
+                    归档路径 = f"{根}.{time.strftime('%Y%m%d_%H%M%S')}{扩展名}"
+                    if not os.path.exists(归档路径):
+                        os.replace(日志路径, 归档路径)
+            except OSError:
+                pass
+            with open(日志路径, "a", encoding="utf-8") as 日志文件:
+                日志文件.write(
+                    f"{time.strftime('%Y-%m-%d %H:%M:%S')} [ERROR] "
+                    + 诊断信息.rstrip("\r\n") + "\n"
                 )
-                记录器.addHandler(处理器)
-                记录器.error(诊断信息.rstrip("\r\n"))
-            finally:
-                记录器.removeHandler(处理器)
-                处理器.close()
             return 日志路径
         except OSError:
             return None
