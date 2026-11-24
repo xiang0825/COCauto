@@ -243,25 +243,6 @@ class 建筑升级任务(夜世界基础任务):
             self.上下文.置脚本状态("升级收尾无法执行主页复核，禁止继续点击")
             return False
 
-    def _清理残留研究目标页(self) -> bool:
-        """只清理 OCR 已确认的研究目标页，不发送盲目 ESC/BACK。"""
-        if not callable(getattr(self.上下文, "点击", None)):
-            return True
-        try:
-            清理任务 = 打开研究面板任务(self.上下文)
-            结果 = 清理任务._清理残留研究面板()
-            if 结果:
-                return True
-            self.上下文.页面恢复失败 = True
-            self.上下文.置脚本状态(
-                "残留研究目标页清理失败，保留当前页面并停止建筑任务"
-            )
-            return False
-        except Exception as 异常:
-            self.上下文.页面恢复失败 = True
-            self.上下文.置脚本状态(f"残留研究目标页检查失败，停止建筑任务：{异常}")
-            return False
-
         连续确认 = 0
         for _ in range(2):
             try:
@@ -289,3 +270,22 @@ class 建筑升级任务(夜世界基础任务):
 
         self.上下文.置脚本状态("升级收尾未连续确认主世界，保留画面并停止后续操作")
         return False
+
+    def _清理残留研究目标页(self) -> bool:
+        """只清理 OCR 已确认的研究目标页，不发送盲目 ESC/BACK。"""
+        if not callable(getattr(self.上下文, "点击", None)):
+            return True
+        try:
+            清理任务 = 打开研究面板任务(self.上下文)
+            结果 = 清理任务._清理残留研究面板()
+            if 结果:
+                return True
+            self.上下文.页面恢复失败 = True
+            self.上下文.置脚本状态(
+                "残留研究目标页清理失败，保留当前页面并停止建筑任务"
+            )
+            return False
+        except Exception as 异常:
+            self.上下文.页面恢复失败 = True
+            self.上下文.置脚本状态(f"残留研究目标页检查失败，停止建筑任务：{异常}")
+            return False
