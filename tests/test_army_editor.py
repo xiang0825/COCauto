@@ -7,6 +7,7 @@ m3/s1/s2 军营满员时的灰色卡列表；g3/w1 军营清空后的彩色卡�
 
 import os
 import unittest
+import unittest.mock
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -107,6 +108,17 @@ class 流程分支测试(unittest.TestCase):
         self.assertEqual(上下文._本次运行已配兵签名, "兵种:超级哥布林6")
         上下文.数据库.更新状态.assert_called_once()
         self.assertFalse(任务.需要配置())
+
+    def test_法术容量已满就停止逐个添加(self):
+        任务, 上下文 = self._任务()
+        上下文.点击 = Mock(return_value=True)
+        任务._逐页 = Mock(return_value=iter([(0, np.zeros((600, 800, 3), np.uint8))] * 8))
+        任务._列表中容量 = Mock(return_value=(11, 11))
+        任务._截图 = Mock(return_value=np.zeros((600, 800, 3), np.uint8))
+        with unittest.mock.patch.object(编, "查找兵种卡片", return_value=((100, 400), 0.99)):
+            任务._逐个添加("法术", {"急速法术": 5, "狂暴法术": 3})
+        上下文.点击.assert_not_called()
+        self.assertIn("容量已满", 上下文.置脚本状态.call_args[0][0])
 
     def test_重启后同一套配置不再清空重配_改了设置才重配(self):
         import tempfile
