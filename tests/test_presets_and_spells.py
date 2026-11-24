@@ -178,6 +178,26 @@ class 兵栏卡片定位测试(unittest.TestCase):
             self.assertEqual([区[0] for 区 in 卡片], 左边界, 名)
             self.assertTrue(all(区[2] - 区[0] == 56 for 区 in 卡片))
 
+    def test_九格以内用固定网格_哥布林暗红卡不漏(self):
+        # 实机 rc128：暗红色的隐秘哥布林卡底部偏暗，亮段检测漏了它；9 格以内一律用
+        # 长期验证过的固定网格，哥布林在第 2 格。
+        from 任务流程.主世界打鱼.进攻 import 进攻任务
+        from 模块.检测.模板匹配器 import 模板匹配引擎
+        图 = self._图("bar_live_goblin")
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.模板识别 = 模板匹配引擎()
+        槽位 = 任务.本场兵栏槽位(SimpleNamespace(置脚本状态=lambda *_a, **_k: None), 图)
+        self.assertEqual(槽位, list(进攻任务.兵栏槽位))
+        _, (x1, y1, x2, y2) = 槽位[1]
+        名称, 分数 = 任务._槽位最佳模板(图[y1:y2, x1:x2], 任务.兵种模板列表)
+        self.assertEqual(名称, "兵种_超级哥布林")
+
+    def test_间距过大时补回漏检的卡(self):
+        from 任务流程.主世界打鱼.进攻 import 进攻任务
+        卡片 = 进攻任务.识别兵栏卡片(self._图("bar_live_goblin"))
+        左边界 = [区[0] for 区 in 卡片]
+        self.assertTrue(any(110 <= x <= 125 for x in 左边界), 左边界)
+
     def test_认不出卡片时回退固定九格(self):
         from 任务流程.主世界打鱼.进攻 import 进攻任务
         任务 = 进攻任务.__new__(进攻任务)
