@@ -3359,6 +3359,22 @@ class 进攻任务(基础任务):
 
             上下文.脚本延时(random.randint(30, 90))
 
+    @staticmethod
+    def _保存闪电诊断图(上下文, 槽位图像, 已使用: int) -> None:
+        """闪电停在中途时保存当时的槽位小图和全屏，供离线排查 OCR 为何读不到。"""
+        try:
+            from pathlib import Path
+            目录 = Path("数据集") / "闪电诊断"
+            目录.mkdir(parents=True, exist_ok=True)
+            前缀 = 目录 / f"{int(time.time() * 1000)}_已用{已使用}"
+            if isinstance(槽位图像, np.ndarray) and 槽位图像.size:
+                cv2.imencode(".png", 槽位图像)[1].tofile(f"{前缀}_槽位.png")
+            全屏 = 上下文.op.获取屏幕图像cv(0, 0, 800, 600)
+            if isinstance(全屏, np.ndarray) and 全屏.size:
+                cv2.imencode(".png", 全屏)[1].tofile(f"{前缀}_全屏.png")
+        except Exception:
+            pass
+
     def 执行已识别闪电法术(self, 上下文: 任务上下文) -> bool:
         """模板失配时按已确认的真实槽位下闪电，并逐次复核数量。"""
         法术项 = next((
@@ -3428,6 +3444,7 @@ class 进攻任务(基础任务):
                     "闪电法术点击后数量未确认下降，停止重复点击"
                     f"（已用{已使用}，点前读数{剩余}，点后读数{新剩余}，落点{目标}）"
                 )
+                self._保存闪电诊断图(上下文, 投放后图像, 已使用)
                 break
             已使用 += 剩余 - 新剩余
             剩余 = 新剩余
