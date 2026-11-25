@@ -444,7 +444,8 @@ class 寻找建筑(夜世界基础任务):
             鼠标.移动到(700, 150)
             if 已停止或暂停():
                 return False
-            鼠标.左键按下()
+            if 鼠标.左键按下() is False:
+                return False
             try:
                 for _ in range(32):
                     if 已停止或暂停():

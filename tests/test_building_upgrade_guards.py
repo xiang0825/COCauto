@@ -1193,6 +1193,29 @@ class 英雄升级确认页测试(unittest.TestCase):
         鼠标.移动相对位置.assert_called_once_with(0, 8)
         鼠标.左键抬起.assert_called_once_with()
 
+    def test_英雄殿堂滚动安全层拒绝按下时不再松开(self):
+        继续事件 = threading.Event()
+        继续事件.set()
+        鼠标 = SimpleNamespace(
+            移动到=Mock(),
+            左键按下=Mock(return_value=False),
+            移动相对位置=Mock(),
+            左键抬起=Mock(),
+        )
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            继续事件=继续事件,
+            鼠标=鼠标,
+            脚本延时=Mock(),
+        )
+
+        self.assertFalse(任务._重置英雄殿堂滚动位置())
+        鼠标.左键按下.assert_called_once_with()
+        鼠标.移动相对位置.assert_not_called()
+        鼠标.左键抬起.assert_not_called()
+        任务.上下文.脚本延时.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -696,14 +696,29 @@ class 任务计划测试(unittest.TestCase):
 
         机器人._执行刷墙计划 = Mock(side_effect=检查主世界)
         机器人._执行升级计划 = Mock(side_effect=检查主世界)
+        机器人._执行部落竞赛计划 = Mock(side_effect=检查主世界)
+        机器人._执行主世界刷资源计划 = Mock(side_effect=检查主世界)
         机器人._官方数据显示已满级 = Mock(return_value=False)
 
-        for 任务键 in ("wall", "building", "hero", "pet", "research"):
+        for 任务键 in (
+            "event", "main_resource", "wall", "building", "hero", "pet", "research"
+        ):
             with self.subTest(任务键=任务键):
                 上下文._待命恢复世界 = "夜世界"
                 结果, 资源打满 = 机器人._执行任务计划项(任务键, 上下文, object())
                 self.assertEqual((结果, 资源打满), (True, False))
                 self.assertEqual(上下文._待命恢复世界, "主世界")
+
+        def 检查夜世界(*_args, **_kwargs):
+            self.assertEqual(上下文._待命恢复世界, "夜世界")
+            return True
+
+        机器人._执行夜世界刷资源计划 = Mock(side_effect=检查夜世界)
+        上下文._待命恢复世界 = "夜世界"
+        self.assertEqual(
+            机器人._执行任务计划项("night_resource", 上下文, object()),
+            (True, False),
+        )
 
     def test_注册表每个任务都有可导入的实际执行入口(self):
         入口 = {
