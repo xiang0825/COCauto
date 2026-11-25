@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 
 from 任务流程.基础任务框架 import 任务上下文
+from 任务流程.建筑升级.升级安全识别 import 定位安全升级按钮
 from 任务流程.夜世界.夜世界打鱼.夜世界基础任务类 import 夜世界基础任务
 
 class 英雄不可升级错误(Exception):
@@ -49,6 +50,8 @@ class 升级英雄任务(夜世界基础任务):
             .replace("戰", "战")
             .replace("護", "护")
             .replace("龍", "龙")
+            .replace("將", "将")
+            .replace("級", "级")
             .replace(" ", "")
             .replace("\n", "")
         )
@@ -223,8 +226,18 @@ class 升级英雄任务(夜世界基础任务):
         return True
 
     @classmethod
+    def _定位英雄升级按钮(cls, OCR结果) -> tuple[int, int] | None:
+        """只接受英雄资源卡片上的完整按钮标签及明确的费用币种。"""
+        return 定位安全升级按钮(
+            OCR结果,
+            按钮区域=(520, 465, 610, 570),
+            费用区域=(480, 380, 610, 515),
+            按钮标签={"确认", "確認", "确定", "確定", "升级", "升級"},
+        )
+
+    @classmethod
     def _识别英雄升级确认页(cls, OCR结果, 屏幕图像, 目标英雄: str) -> bool:
-        """用标题、目标英雄和绿色资源按钮确认升级页。"""
+        """用标题、目标英雄、明确币种和 OCR 按钮文字确认升级页。"""
         if 屏幕图像 is None or not hasattr(屏幕图像, "shape"):
             return False
         文本项 = [
@@ -239,10 +252,12 @@ class 升级英雄任务(夜世界基础任务):
             return False
         if not any(词 in 全部文本 for 词 in ("升至", "升级", "提升")):
             return False
+        if cls._定位英雄升级按钮(OCR结果) is None:
+            return False
         try:
             高, 宽 = 屏幕图像.shape[:2]
-            左, 上 = max(0, int(宽 * 0.58)), max(0, int(高 * 0.77))
-            右, 下 = min(宽, int(宽 * 0.80)), min(高, int(高 * 0.95))
+            左, 上 = max(0, int(宽 * 0.65)), max(0, int(高 * 0.77))
+            右, 下 = min(宽, int(宽 * 0.77)), min(高, int(高 * 0.95))
             区域 = 屏幕图像[上:下, 左:右]
             if 区域.size == 0:
                 return False
@@ -288,17 +303,24 @@ class 升级英雄任务(夜世界基础任务):
             屏幕图像 = self.上下文.op.获取屏幕图像cv(
                 0, 0, 800, 600, 强制刷新=True
             )
-            OCR结果 = self.执行OCR识别((250, 0, 710, 590))
+            OCR结果 = self.执行OCR识别((0, 0, 800, 600))
             可升级 = self._识别英雄升级确认页(
                 OCR结果, 屏幕图像, self.要升级的英雄
             )
-            坐标 = (560, 525)
+            坐标 = self._定位英雄升级按钮(OCR结果)
 
 
             if 可升级:
                 self.上下文.置脚本状态(f"{self.要升级的英雄} 可升级")
 
                 # 点击升级
+                if 坐标 is None:
+                    self.安全跳过 = True
+                    self.上下文.置脚本状态(
+                        "英雄升级按钮或费用币种不明确，禁止猜测固定坐标"
+                    )
+                    self.关闭英雄升级页面()
+                    return False
                 x, y = 坐标
                 if self.上下文.点击(x, y, ) is False:
                     self.上下文.置脚本状态(

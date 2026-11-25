@@ -1,4 +1,5 @@
 from 任务流程.基础任务框架 import 任务上下文, 基础任务
+from 任务流程.建筑升级.升级安全识别 import 定位安全升级按钮
 
 class 升级按钮定位失败错误(Exception):
     """当英雄不可升级时抛出的异常"""
@@ -243,66 +244,22 @@ class 升级普通建筑任务(基础任务):
         return 有研究 and 有等待或等级
 
     def _定位升级确认按钮(self) -> tuple[int, int] | None:
-        """只定位带“确认/確認”文字的资源升级按钮。
-
-        不能再用绿色像素作为唯一证据：升级进行中页面的“立即完成”
-        卡片、地图草地以及其他界面元素也可能是绿色。确认页的按钮文
-        字位于固定的底部卡片区域，只有 OCR 明确读到确认字样时才允
-        许返回坐标；因此宝石入口即使颜色相同也不会成为候选。
-        """
+        """仅在 OCR 同时确认按钮文字、费用金额和资源币种时返回坐标。"""
         try:
-            # 确认按钮文字很短，裁成 120x100 的小图后 RapidOCR 容易把
-            # “確”识别成噪声；使用完整逻辑画面，再用坐标过滤卡片范围。
             OCR结果 = self.执行OCR识别((0, 0, 800, 600))
         except Exception:
             return None
-
-        # 普通建筑的资源按钮显示“升级/升級”，位于左侧资源卡片；
-        # 英雄/特殊建筑的绿色提交按钮显示“确认/確認”，位于右侧卡片。
-        # 两个区域必须分开：英雄左侧灰色“战斗之锤”按钮不能被点，
-        # 普通建筑右侧“立即完成/宝石”卡片也不能被点。
-        资源升级文字 = {"升级", "升級"}
-        资源确认文字 = {"确认", "確認", "確認", "确", "確", "确定", "確定"}
-        全部文本 = " ".join(
-            str(项[1]) for 项 in OCR结果 or []
-            if isinstance(项, (list, tuple)) and len(项) > 1
-        ).replace(" ", "").replace("\n", "")
-        if any(状态 in 全部文本 for 状态 in (
-            "正在进行升级", "正在進行升級", "正在进行升級", "正在進行升级",
-        )):
-            self.上下文.置脚本状态("检测到升级进行中面板，禁止定位其立即完成/宝石按钮")
-            return None
-        发现升级确认标题 = False
-        for 识别项 in OCR结果 or []:
-            if not isinstance(识别项, (list, tuple)) or len(识别项) < 2:
-                continue
-            框, 原始文本 = 识别项[0], str(识别项[1] or "")
-            文本 = 原始文本.replace(" ", "").replace("\n", "")
-            # 国际服字体下底部“確認”常被 RapidOCR 误识别成相近汉字，
-            # 但顶部的“升至…？”标题更稳定；两者都只作为确认页证据，
-            # 不会出现在升级进行中的“立即完成”页面。
-            if "升至" in 文本 and ("?" in 文本 or "？" in 文本):
-                try:
-                    发现升级确认标题 = min(float(点[1]) for 点 in 框) <= 90
-                except (TypeError, ValueError, IndexError):
-                    发现升级确认标题 = False
-            try:
-                xs = [float(点[0]) for 点 in 框]
-                ys = [float(点[1]) for 点 in 框]
-                x = (min(xs) + max(xs)) / 2
-                y = (min(ys) + max(ys)) / 2
-            except (TypeError, ValueError, IndexError):
-                continue
-            if 文本 in 资源升级文字 and 440 <= x <= 535 and 465 <= y <= 570:
-                return round(x), round(y)
-            if 文本 in 资源确认文字 and 520 <= x <= 640 and 465 <= y <= 570:
-                return round(x), round(y)
-        if 发现升级确认标题:
-            # OCR 把英雄确认按钮文字识别成噪声时，右侧绿色卡片的
-            # 逻辑中心仍固定在约 (560,522)。普通建筑必须命中左侧
-            # “升级”文字才允许点击，不在这里猜测按钮位置。
-            return (560, 522)
-        return None
+        坐标 = 定位安全升级按钮(
+            OCR结果,
+            按钮区域=(440, 465, 530, 570),
+            费用区域=(400, 380, 530, 515),
+            按钮标签={"升级", "升級"},
+        )
+        if 坐标 is None:
+            self.上下文.置脚本状态(
+                "OCR未能同时确认建筑升级按钮、资源金额和金币/圣水/黑油，禁止点击"
+            )
+        return 坐标
 
     def _OCR定位升级按钮(self) -> tuple[int, int] | None:
         """在底部建筑操作卡片中定位“升级/升級”文本中心。
@@ -324,7 +281,8 @@ class 升级普通建筑任务(基础任务):
             try:
                 xs = [float(点[0]) for 点 in 框]
                 ys = [float(点[1]) for 点 in 框]
-                if min(ys) < 430:
+                中心x = (min(xs) + max(xs)) / 2
+                if min(ys) < 430 or not 440 <= 中心x <= 530:
                     continue
                 return (round((min(xs) + max(xs)) / 2), round((min(ys) + max(ys)) / 2))
             except (TypeError, ValueError, IndexError):
@@ -339,7 +297,9 @@ class 升级普通建筑任务(基础任务):
         成升级入口。点击后仍必须通过绿色确认按钮复核。
         """
         try:
-            区域 = (475, 405, 600, 535)
+            # 宝石/立即完成卡片从 x=535 左右开始；模板回退只能在资源
+            # 升级卡片内搜索，不能向右越过这条边界。
+            区域 = (475, 405, 530, 535)
             图像 = self.上下文.op.获取屏幕图像cv(*区域)
             执行最佳匹配 = getattr(self.模板识别, "执行最佳匹配", None)
             if not callable(执行最佳匹配):

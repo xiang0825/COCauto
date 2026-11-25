@@ -886,6 +886,57 @@ class 回营状态机测试(unittest.TestCase):
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
+    def test_夜世界结算胜率和学习状态与主世界分开保存(self):
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务._画面仍在战斗 = unittest.mock.Mock(return_value=False)
+        任务.识别结算帧 = unittest.mock.Mock(
+            return_value=([], "胜利", "胜利", 53)
+        )
+        任务.识别星数 = unittest.mock.Mock(return_value=1)
+        任务.保存战斗结果截图 = unittest.mock.Mock()
+        任务.更新战斗学习 = unittest.mock.Mock(return_value={})
+        任务.生成战斗诊断 = unittest.mock.Mock(return_value="夜世界已确认")
+        主世界统计 = {
+            "完成场次": 7, "识别场次": 7, "胜场": 5, "负场": 2,
+        }
+        夜世界统计 = {
+            "完成场次": 2, "识别场次": 2, "胜场": 1, "负场": 1,
+        }
+        数据库 = unittest.mock.Mock()
+        数据库.获取最新完整状态.return_value = SimpleNamespace(状态数据={
+            "战斗胜率": 主世界统计,
+            "夜世界战斗胜率": 夜世界统计,
+        })
+        上下文 = SimpleNamespace(
+            数据库=数据库,
+            机器人标志="测试机器人",
+            置脚本状态=unittest.mock.Mock(),
+            本场实时摧毁率=53,
+            本场最高实时摧毁率=53,
+            本场目标战利品={},
+            英雄技能状态={},
+        )
+
+        self.assertTrue(任务.记录战斗结果(
+            上下文,
+            np.zeros((600, 800, 3), dtype=np.uint8),
+            结算页已复核=True,
+            战斗世界="夜世界",
+        ))
+
+        数据库.更新状态.assert_called_once()
+        self.assertEqual(数据库.更新状态.call_args.args[1], "夜世界战斗胜率")
+        更新统计 = 数据库.更新状态.call_args.args[2]
+        self.assertEqual(更新统计["完成场次"], 3)
+        self.assertEqual(更新统计["胜场"], 2)
+        self.assertEqual(主世界统计["完成场次"], 7)
+        self.assertEqual(主世界统计["胜场"], 5)
+        任务.更新战斗学习.assert_called_once()
+        self.assertEqual(
+            任务.更新战斗学习.call_args.kwargs["状态键"],
+            "夜世界战斗学习",
+        )
+
     def test_未复核三星与99实时进度保持待复核(self):
         任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
         任务._画面仍在战斗 = unittest.mock.Mock(return_value=False)

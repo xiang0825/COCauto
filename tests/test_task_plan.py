@@ -1190,29 +1190,23 @@ class 任务计划测试(unittest.TestCase):
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
-    def test_夜世界结算页限制区域识别回营按钮(self):
+    def test_夜世界回营不再使用裸低阈值模板坐标(self):
         任务 = 等待回营或第二次战斗.__new__(等待回营或第二次战斗)
-        调用 = {}
-
-        class 匹配器:
-            def 执行匹配(self, 图像, 模板路径, 相似度阈值=0.9):
-                调用["图像"] = 图像
-                调用["模板路径"] = 模板路径
-                调用["阈值"] = 相似度阈值
-                return True, (100, 40), None
-
+        屏幕 = object()
+        识别器 = Mock()
+        识别器.识别.return_value = SimpleNamespace(页面="主世界主页")
         上下文 = SimpleNamespace(
-            op=SimpleNamespace(获取屏幕图像cv=lambda *区域: object()),
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=屏幕)),
+            _获取点击页面识别器=Mock(return_value=识别器),
             点击=Mock(),
             置脚本状态=Mock(),
         )
         任务.上下文 = 上下文
-        任务.模板识别 = 匹配器()
+        任务.是否出现图片 = Mock(return_value=(True, (400, 490)))
 
-        self.assertTrue(任务.尝试点击回营按钮())
-        self.assertEqual(调用["模板路径"], "夜世界_回营.bmp|夜世界_回营[1].bmp")
-        self.assertEqual(调用["阈值"], 0.58)
-        上下文.点击.assert_called_once_with(400, 490)
+        self.assertFalse(任务.尝试点击回营按钮())
+        任务.是否出现图片.assert_not_called()
+        上下文.点击.assert_not_called()
 
     def test_夜世界结算视觉确认后使用安全回营按钮(self):
         任务 = 等待回营或第二次战斗.__new__(等待回营或第二次战斗)
@@ -1220,9 +1214,10 @@ class 任务计划测试(unittest.TestCase):
         识别器.识别.return_value = SimpleNamespace(页面="战斗结算")
         识别器.定位结算回营按钮.return_value = (400, 508)
         安全点击 = Mock(return_value=True)
+        获取屏幕 = Mock(return_value=object())
         上下文 = SimpleNamespace(
             _战斗中=True,
-            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=object())),
+            op=SimpleNamespace(获取屏幕图像cv=获取屏幕),
             _获取点击页面识别器=Mock(return_value=识别器),
             点击已确认安全按钮=安全点击,
             置脚本状态=Mock(),
@@ -1232,7 +1227,12 @@ class 任务计划测试(unittest.TestCase):
         任务.是否出现图片 = Mock(return_value=(False, (0, 0)))
 
         self.assertTrue(任务.尝试点击回营按钮())
-        识别器.定位结算回营按钮.assert_called_once()
+        self.assertEqual(识别器.定位结算回营按钮.call_count, 2)
+        self.assertEqual(获取屏幕.call_count, 2)
+        self.assertTrue(all(
+            调用.kwargs.get("强制刷新") is True
+            for 调用 in 获取屏幕.call_args_list
+        ))
         安全点击.assert_called_once_with(400, 508, 延时=300)
         self.assertFalse(上下文._战斗中)
         上下文.清除战斗结算保护状态.assert_called_once_with()

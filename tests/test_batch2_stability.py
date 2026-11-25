@@ -333,7 +333,7 @@ class 第二批稳定性优化测试(unittest.TestCase):
         self.assertFalse(hasattr(任务.上下文, "英雄技能标志"))
         self.assertFalse(hasattr(任务.上下文, "英雄技能线程"))
 
-        # 夜世界打鱼任务异常退出也会调用 停止并等待英雄技能线程(..., 超时秒=2.0)
+        # 夜世界打鱼任务退出时最多等待 5 秒确认后台英雄技能线程干净结束。
         外层任务 = 夜世界打鱼任务.__new__(夜世界打鱼任务)
         外层任务.上下文 = SimpleNamespace(
             置脚本状态=Mock(), _战斗中=True, 数据库=Mock()
@@ -349,7 +349,7 @@ class 第二批稳定性优化测试(unittest.TestCase):
                  wraps=下兵.停止并等待英雄技能线程,
              ) as cleanup_spy:
             self.assertFalse(外层任务.执行())
-        cleanup_spy.assert_called_once_with(外层任务.上下文, 超时秒=2.0)
+        cleanup_spy.assert_called_once_with(外层任务.上下文, 超时秒=5.0)
 
     # ------------------------------------------------------------------ P1-9
     def test_P1_9_进程资源趋势日志按30分钟节流且异常安全(self):
