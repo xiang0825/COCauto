@@ -75,6 +75,72 @@ class 策略测试(unittest.TestCase):
         self.策略.记录人工操作("r")
         self.assertEqual(self.策略.连续失败("r"), 0)
 
+    def test_稳定清零阈值大于冷却_十分钟后又停仍算失败(self):
+        self.assertGreater(自动重启策略.稳定清零秒, 自动重启策略.冷却秒)
+        self.assertEqual(自动重启策略.稳定清零秒, 3600.0)
+        线程 = [object() for _ in range(5)]
+        self.策略.判定("r", 线程[0], "无心跳", False)
+        self.时钟.t = 600
+        self.assertEqual(self.策略.判定("r", 线程[0], "无心跳", False), "check")
+        self.策略.复核结果("r", 已重启=True)
+        # 每次重启后跑 10 分钟多一点就停：旧逻辑（清零阈值=冷却 600s）会清零导致无限重启。
+        for 次 in range(1, 4):
+            self.时钟.t += 601
+            动作 = self.策略.判定("r", 线程[次], "无心跳", False)
+            self.assertEqual(self.策略.连续失败("r"), 次)
+            if 次 < 3:
+                self.assertEqual(动作, "check")
+                self.策略.复核结果("r", 已重启=True)
+            else:
+                self.assertEqual(动作, "give_up")
+
+    def test_复核时人工介入不计失败只解除复核中(self):
+        线程 = object()
+        self.策略.判定("r", 线程, "无心跳", False)
+        self.时钟.t = 600
+        self.assertEqual(self.策略.判定("r", 线程, "无心跳", False), "check")
+        self.策略.复核结果("r", 已重启=False, 人工介入=True)
+        self.assertEqual(self.策略.连续失败("r"), 0)
+        self.assertFalse(self.策略._状态["r"]["复核中"])
+
+    def test_复核期间状态被人工清空则不重建不计数(self):
+        线程 = object()
+        self.策略.判定("r", 线程, "无心跳", False)
+        self.时钟.t = 600
+        self.策略.判定("r", 线程, "无心跳", False)
+        self.策略.记录人工操作("r")
+        self.策略.复核结果("r", 已重启=False)
+        self.assertNotIn("r", self.策略._状态)
+        self.assertEqual(self.策略.连续失败("r"), 0)
+
+    def test_多线程并发判定和复核不丢计数(self):
+        策略 = 自动重启策略(时钟=lambda: 0.0)
+        策略.最大连续失败 = 10**9
+        策略._取("r")
+        屏障 = threading.Barrier(8)
+
+        def 工作():
+            屏障.wait()
+            for _ in range(2000):
+                策略.复核结果("r", 已重启=False)
+                策略.判定("r", "同一停止", "无心跳", False)
+
+        线程们 = [threading.Thread(target=工作) for _ in range(8)]
+        for t in 线程们:
+            t.start()
+        for t in 线程们:
+            t.join()
+        self.assertEqual(策略.连续失败("r"), 8 * 2000)
+
+    def test_所有公开方法都在锁内(self):
+        锁 = mock.MagicMock()
+        self.策略._锁 = 锁
+        self.策略.判定("r", object(), "无心跳", False)
+        self.策略.复核结果("r", 已重启=False)
+        self.策略.连续失败("r")
+        self.策略.记录人工操作("r")
+        self.assertEqual(锁.__enter__.call_count, 4)
+
 
 class 监控中心接线测试(unittest.TestCase):
     def _中心(self, 允许=True):
@@ -112,6 +178,7 @@ class 监控中心接线测试(unittest.TestCase):
     def test_未确认主页不启动(self):
         中心 = self._中心()
         机器人 = self._机器人(确认=(False, "页面=战斗中"))
+        中心.自动重启._取("robot_1")
         中心._复核并自动重启("robot_1", 机器人, "无心跳", 机器人.主线程)
         机器人.启动.assert_not_called()
         self.assertEqual(中心.自动重启.连续失败("robot_1"), 1)
@@ -125,8 +192,42 @@ class 监控中心接线测试(unittest.TestCase):
             return True, "主页"
 
         机器人.只读确认主世界主页 = 复核
+        中心.自动重启._取("robot_1")["复核中"] = True
         中心._复核并自动重启("robot_1", 机器人, "无心跳", 机器人.主线程)
         机器人.启动.assert_not_called()
+        # 人工介入不算自动重启失败，且复核标记已解除。
+        self.assertEqual(中心.自动重启.连续失败("robot_1"), 0)
+        self.assertFalse(中心.自动重启._状态["robot_1"]["复核中"])
+
+    def test_关闭时先等机器人主线程退出(self):
+        中心 = self._中心()
+        放行 = threading.Event()
+        已退出 = []
+
+        def 主线程体():
+            放行.wait(3)
+            已退出.append(True)
+
+        主线程 = threading.Thread(target=主线程体, daemon=True)
+        主线程.start()
+        机器人 = SimpleNamespace(主线程=主线程, 停止=mock.Mock(side_effect=lambda *_a, **_k: 放行.set()))
+        中心.机器人池 = {"robot_1": 机器人}
+        中心.关闭()
+        机器人.停止.assert_called_once_with("控制台关闭", 等待=False)
+        self.assertFalse(主线程.is_alive())
+        self.assertEqual(已退出, [True])
+
+    def test_关闭等待有上限(self):
+        中心 = self._中心()
+        中心.关闭等待主线程秒 = 0.2
+        卡住 = threading.Event()
+        主线程 = threading.Thread(target=lambda: 卡住.wait(5), daemon=True)
+        主线程.start()
+        self.addCleanup(卡住.set)
+        中心.机器人池 = {"robot_1": SimpleNamespace(主线程=主线程, 停止=mock.Mock())}
+        开始 = __import__("time").monotonic()
+        中心.关闭()
+        self.assertLess(__import__("time").monotonic() - 开始, 2.0)
 
     def test_设置关闭时不检查(self):
         中心 = self._中心(允许=False)

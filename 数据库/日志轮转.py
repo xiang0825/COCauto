@@ -48,36 +48,49 @@ def 导出并清空任务日志(数据库路径, 备份路径=None) -> int:
         if 最大ID is None:
             return 0
         临时路径 = 备份路径.with_name(备份路径.name + ".tmp")
-        条数 = 0
-        with open(临时路径, "w", encoding="utf-8", newline="\n") as 文件:
-            游标 = 连接.execute(
-                "SELECT 记录ID, 机器人标志, 记录时间, 日志内容 FROM 任务日志 "
-                "WHERE 记录ID <= ? ORDER BY 记录ID",
-                (最大ID,),
-            )
-            while True:
-                批 = 游标.fetchmany(5000)
-                if not 批:
-                    break
-                for 记录ID, 标志, 时间, 内容 in 批:
-                    文件.write(json.dumps({
-                        "id": 记录ID,
-                        "机器人": 标志,
-                        "时间": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(时间 or 0))),
-                        "ts": 时间,
-                        "内容": 内容,
-                    }, ensure_ascii=False))
-                    文件.write("\n")
-                    条数 += 1
-            文件.flush()
-            os.fsync(文件.fileno())
-        os.replace(临时路径, 备份路径)
+        try:
+            条数 = _写出临时备份(连接, 临时路径, 最大ID)
+            os.replace(临时路径, 备份路径)
+        except BaseException:
+            # 导出失败：只清理本次写了一半的临时文件，旧备份和表内容都不动。
+            try:
+                临时路径.unlink()
+            except OSError:
+                pass
+            raise
         # 只删已经导出的部分，导出期间新写入的行留到下次。
         连接.execute("DELETE FROM 任务日志 WHERE 记录ID <= ?", (最大ID,))
         连接.commit()
         return 条数
     finally:
         连接.close()
+
+
+def _写出临时备份(连接, 临时路径: Path, 最大ID) -> int:
+    条数 = 0
+    with open(临时路径, "w", encoding="utf-8", newline="\n") as 文件:
+        游标 = 连接.execute(
+            "SELECT 记录ID, 机器人标志, 记录时间, 日志内容 FROM 任务日志 "
+            "WHERE 记录ID <= ? ORDER BY 记录ID",
+            (最大ID,),
+        )
+        while True:
+            批 = 游标.fetchmany(5000)
+            if not 批:
+                break
+            for 记录ID, 标志, 时间, 内容 in 批:
+                文件.write(json.dumps({
+                    "id": 记录ID,
+                    "机器人": 标志,
+                    "时间": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(时间 or 0))),
+                    "ts": 时间,
+                    "内容": 内容,
+                }, ensure_ascii=False))
+                文件.write("\n")
+                条数 += 1
+        文件.flush()
+        os.fsync(文件.fileno())
+    return 条数
 
 
 def 需要压缩(数据库路径) -> bool:

@@ -36,15 +36,20 @@ class 自动重启策略:
     """非人工停止后的自动重启节流：冷却、连续失败计数、放弃。
 
     纯状态机，不做 I/O，方便单测；监控中心负责截图复核和真正启动。
+    监控线程、复核线程和界面线程都会调用，所有状态读写都在锁内。
     """
 
     冷却秒 = 600.0
+    # 自动重启后稳定运行满这么久才清零失败计数；必须大于冷却秒，
+    # 否则“每 10 分钟停一次”会被当成稳定而无限重启。
+    稳定清零秒 = 3600.0
     最大连续失败 = 3
     人工或终止原因 = frozenset({"", "未启动", "控制台关闭", "手动终止", "界面停止按钮", "任务自然完成"})
 
     def __init__(self, 时钟=time.monotonic):
         self._时钟 = 时钟
         self._状态: dict[str, dict] = {}
+        self._锁 = threading.RLock()
 
     def _取(self, 标志: str) -> dict:
         return self._状态.setdefault(标志, {
@@ -62,20 +67,25 @@ class 自动重启策略:
 
     def 记录人工操作(self, 标志: str) -> None:
         """人工开始/停止后清零：人工永远优先，失败计数从头算。"""
-        self._状态.pop(标志, None)
+        with self._锁:
+            self._状态.pop(标志, None)
 
     def 判定(self, 标志: str, 线程标识, 原因: str, 已暂停: bool) -> str:
         """返回 'ignore' | 'wait' | 'give_up' | 'check'。
 
         线程标识：已停止的主线程对象 id，用来区分“同一次停止”和“新的停止”。
         """
+        with self._锁:
+            return self._判定(标志, 线程标识, 原因, 已暂停)
+
+    def _判定(self, 标志: str, 线程标识, 原因: str, 已暂停: bool) -> str:
         状态 = self._取(标志)
         现在 = self._时钟()
         if 状态["停止线程"] != 线程标识:
-            # 新的一次停止。重启后不到冷却时间又停了，算这次重启失败。
+            # 新的一次停止。重启后不到稳定清零时间又停了，算这次重启失败。
             状态["停止线程"] = 线程标识
             状态["停止时间"] = 现在
-            if 状态["上次重启"] is not None and 现在 - 状态["上次重启"] < self.冷却秒:
+            if 状态["上次重启"] is not None and 现在 - 状态["上次重启"] < self.稳定清零秒:
                 状态["连续失败"] += 1
             elif 状态["上次重启"] is not None:
                 状态["连续失败"] = 0
@@ -98,21 +108,33 @@ class 自动重启策略:
         状态["上次尝试"] = 现在
         return "check"
 
-    def 复核结果(self, 标志: str, 已重启: bool) -> None:
-        状态 = self._取(标志)
-        状态["复核中"] = False
-        if 已重启:
-            状态["上次重启"] = self._时钟()
-        else:
-            状态["连续失败"] += 1
+    def 复核结果(self, 标志: str, 已重启: bool, 人工介入: bool = False) -> None:
+        """复核线程结束时调用。人工介入不计失败，只解除“复核中”。"""
+        with self._锁:
+            状态 = self._状态.get(标志)
+            if 状态 is None:
+                # 复核期间人工操作已清空状态：这次复核作废，不重建、不计数。
+                return
+            状态["复核中"] = False
+            if 人工介入:
+                return
+            if 已重启:
+                状态["上次重启"] = self._时钟()
+            else:
+                状态["连续失败"] += 1
 
     def 连续失败(self, 标志: str) -> int:
-        return int(self._取(标志)["连续失败"])
+        with self._锁:
+            状态 = self._状态.get(标志)
+            return int(状态["连续失败"]) if 状态 else 0
 
 
 # ==== 监控中心 ====
 class 机器人监控中心:
     """增强型监控服务"""
+
+    # 关窗时等待所有机器人主线程退出的总时长上限（秒）。
+    关闭等待主线程秒 = 5.0
 
     def __init__(self,日志队列=None):
         self.机器人池 = {}
@@ -192,9 +214,21 @@ class 机器人监控中心:
     def 关闭(self):
         """关闭监控中心，确保桌面程序退出时不留下后台进程。"""
         self.运行标志 = False
-        for 机器人 in list(self.机器人池.values()):
+        机器人列表 = list(self.机器人池.values())
+        for 机器人 in 机器人列表:
             try:
                 机器人.停止("控制台关闭", 等待=False)
+            except Exception:
+                pass
+        # 先等主线程收尾（写完最后几条日志），调用方随后才轮转/清空日志。
+        截止 = time.monotonic() + self.关闭等待主线程秒
+        for 机器人 in 机器人列表:
+            主线程 = getattr(机器人, "主线程", None)
+            if 主线程 is None or 主线程 is threading.current_thread():
+                continue
+            try:
+                if 主线程.is_alive():
+                    主线程.join(timeout=max(0.0, 截止 - time.monotonic()))
             except Exception:
                 pass
         if hasattr(self, "监控线程") and self.监控线程.is_alive():
@@ -261,6 +295,7 @@ class 机器人监控中心:
 
     def _复核并自动重启(self, 标志: str, 机器人, 原因: str, 原线程) -> None:
         已重启 = False
+        人工介入 = False
         try:
             确认, 说明 = 机器人.只读确认主世界主页()
             # 复核期间人工点了开始/停止/暂停：人工优先，放弃这次自动重启。
@@ -287,7 +322,7 @@ class 机器人监控中心:
         except Exception as 异常:
             self._记录机器人日志(机器人, f"自动重启失败：{异常}")
         finally:
-            self.自动重启.复核结果(标志, 已重启)
+            self.自动重启.复核结果(标志, 已重启, 人工介入=人工介入)
 
     @staticmethod
     def _记录机器人日志(机器人, 文本: str) -> None:

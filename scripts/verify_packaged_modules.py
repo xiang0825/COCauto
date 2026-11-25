@@ -178,6 +178,19 @@ def 校验包版本(exe路径: Path, 项目根: Path) -> tuple[bool, str]:
     return True, f"版本匹配：{源码版本}"
 
 
+def 校验识别参数文件(exe路径: Path, 项目根: Path) -> list[str]:
+    """发布包 _internal/资源/识别/*.json 必须齐全且与源码一致。"""
+    问题 = []
+    内部目录 = Path(exe路径).resolve().parent / "_internal" / "资源" / "识别"
+    for 源文件 in sorted((Path(项目根) / "资源" / "识别").glob("*.json")):
+        包文件 = 内部目录 / 源文件.name
+        if not 包文件.is_file():
+            问题.append(f"缺少 {包文件}")
+        elif 包文件.read_bytes() != 源文件.read_bytes():
+            问题.append(f"{包文件} 与源码不一致")
+    return 问题
+
+
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
@@ -253,6 +266,13 @@ def main() -> int:
         print("发布包代码与当前源码不一致：", file=sys.stderr)
         for 模块名 in 不匹配模块:
             print(f"  {模块名}", file=sys.stderr)
+        return 1
+
+    参数问题 = 校验识别参数文件(exe路径, 根目录)
+    if 参数问题:
+        print("发布包识别参数文件有问题：", file=sys.stderr)
+        for 文本 in 参数问题:
+            print(f"  {文本}", file=sys.stderr)
         return 1
 
     print(
