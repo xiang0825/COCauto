@@ -857,6 +857,7 @@ class 任务计划测试(unittest.TestCase):
         )
         上下文 = SimpleNamespace(
             页面恢复失败=False,
+            _夜世界大本营等级=7,
             机器人标志="测试机器人",
             数据库=SimpleNamespace(获取最新完整状态=Mock(return_value=状态), 获取近期家乡资源峰值=Mock(return_value={})),
             识别点击画面=Mock(return_value=SimpleNamespace(页面="夜世界主页")),
@@ -869,7 +870,7 @@ class 任务计划测试(unittest.TestCase):
                 patch("线程.自动化机器人.更新夜世界资源状态任务") as 更新资源, \
                 patch("线程.自动化机器人.收集圣水车任务") as 收集圣水车, \
                 patch("线程.自动化机器人.夜世界打鱼任务") as 打鱼, \
-                patch("线程.自动化机器人.是否夜世界资源打满", return_value=False):
+                patch("线程.自动化机器人.是否夜世界资源打满", return_value=False) as 判断满仓:
             回夜世界.return_value.执行.return_value = True
             更新资源.return_value.执行.return_value = True
             收集圣水车.return_value.执行.return_value = False
@@ -879,6 +880,9 @@ class 任务计划测试(unittest.TestCase):
         self.assertFalse(结果)
         self.assertTrue(上下文.页面恢复失败)
         打鱼.return_value.执行.assert_not_called()
+        判断满仓.assert_called_once_with(
+            {"金币": 123456, "圣水": 234567}, 模式="夜世界", 等级=7
+        )
         self.assertTrue(
             any("禁止继续执行夜世界收集和下一场战斗" in 调用.args[0]
                 for 调用 in 上下文.置脚本状态.call_args_list)
