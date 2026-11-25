@@ -1185,23 +1185,21 @@ FocusedWindows:
             设备.关闭模拟器中的应用("com.supercell.clashofclans")
         self.assertEqual(len(runner.命令), 0)
 
-    def test_建筑升级确认区灰色时不会误报成功(self):
+    def test_建筑升级确认缺少标签或费用时不会误报成功(self):
         任务 = object.__new__(升级普通建筑任务)
         任务.上下文 = SimpleNamespace(
             op=SimpleNamespace(
                 获取屏幕图像cv=lambda *_区域: np.zeros((52, 140, 3), dtype=np.uint8)
-            )
+            ),
+            置脚本状态=lambda *_参数, **_关键字参数: None,
         )
         任务.执行OCR识别 = lambda _区域: []
         self.assertFalse(任务._升级确认按钮可用())
 
-        绿色按钮 = np.zeros((52, 140, 3), dtype=np.uint8)
-        绿色按钮[15:40, 20:120] = (40, 200, 40)
-        任务.上下文.op.获取屏幕图像cv = lambda *_区域: 绿色按钮
         任务.执行OCR识别 = lambda _区域: [
             ([[550, 490], [590, 490], [590, 515], [550, 515]], "確認", 0.99),
         ]
-        self.assertTrue(任务._升级确认按钮可用())
+        self.assertFalse(任务._升级确认按钮可用())
 
     def test_ADB网络地址拒绝非法输入(self):
         with self.assertRaisesRegex(ADB错误, "host:port"):

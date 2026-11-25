@@ -22,11 +22,13 @@ def 停止并等待英雄技能线程(上下文, 超时秒: float = 2.0) -> bool
             已结束 = not 线程.is_alive()
         except Exception:
             已结束 = False
-    if 线程 is not None:
+    if 线程 is not None and 已结束:
         try:
             delattr(上下文, "英雄技能线程")
         except AttributeError:
             pass
+    # 超时仍存活时保留线程引用，让调用方能继续等待；绝不能误报已经
+    # 清理完毕后再启动第二个技能线程或绕过输入护栏。
     return 已结束
 
 
@@ -250,7 +252,11 @@ class 下兵(夜世界基础任务):
         if hasattr(self.上下文, '英雄技能标志'):
             return
         if getattr(self.上下文, '英雄技能线程', None) is not None:
-            self.停止并等待英雄技能线程(self.上下文, 超时秒=2.0)
+            if not self.停止并等待英雄技能线程(self.上下文, 超时秒=5.0):
+                self.上下文.置脚本状态(
+                    "上一轮夜世界英雄技能线程仍在运行，禁止启动重复线程或继续下兵"
+                )
+                return False
 
         标志 = self.上下文.英雄技能标志 = threading.Event()
 
