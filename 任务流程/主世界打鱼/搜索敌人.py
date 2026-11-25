@@ -151,6 +151,12 @@ class 搜索目标敌人任务(基础任务):
                 通知(f"⚠️ 主世界搜索已安全退出\n原因：{原因}", 包含截图=True)
             except Exception:
                 pass
+        桌面 = getattr(上下文, "发送桌面通知", None)
+        if callable(桌面):
+            try:
+                桌面("搜敌上限", "搜敌达到上限，已转入待命", 原因)
+            except Exception:
+                pass
 
     def 执行(self) -> bool:
         try:
@@ -184,6 +190,12 @@ class 搜索目标敌人任务(基础任务):
                     return False
 
                 if self.执行单次搜索(上下文, 搜索次数, 最小资源):
+                    恢复 = getattr(上下文, "桌面通知已恢复", None)
+                    if callable(恢复):
+                        try:
+                            恢复("搜敌上限", "已重新找到可进攻目标")
+                        except Exception:
+                            pass
                     上下文.脚本延时(500)
                     return True
 

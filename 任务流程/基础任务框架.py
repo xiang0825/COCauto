@@ -247,6 +247,9 @@ class 任务上下文:
         标志 = getattr(self, "内存保护标志", None)
         if isinstance(标志, threading.Event):
             标志.clear()
+        恢复 = getattr(self, "桌面通知已恢复", None)
+        if callable(恢复):
+            恢复("内存保护", "宿主机内存已恢复，解除内存保护暂停")
 
     def 触发内存保护(self, 来源: str, 异常: Exception | str) -> None:
         """内存故障后只释放本进程资源并停止输入，绝不重启游戏。"""
@@ -268,6 +271,15 @@ class 任务上下文:
                 self.停止事件.set()
             except Exception:
                 pass
+        桌面 = getattr(self, "发送桌面通知", None)
+        if callable(桌面):
+            桌面(
+                "内存保护",
+                "内存保护已暂停脚本",
+                f"{来源}：{str(异常)[:200]}"
+                + ("；内存恢复后会自动继续" if 可恢复 else "；需要人工处理后重新开始"),
+                级别="错误",
+            )
         self.置脚本状态(
             f"[资源保护] {来源}检测到内存异常：{异常}；"
             "已释放OCR/YOLO与截图缓存，停止所有后续截图和点击；"
@@ -2950,6 +2962,10 @@ class 任务上下文:
                 except Exception:
                     pass
 
+        桌面 = getattr(self, "发送桌面通知", None)
+        if callable(桌面):
+            桌面("待命", "安全待命超时，需要人工查看", 原因)
+
         回调 = getattr(self, "待命通知回调", None)
         if callable(回调):
             try:
@@ -2975,6 +2991,31 @@ class 任务上下文:
                 pass
 
         return 保存路径
+
+    def 发送桌面通知(self, 原因键: str, 标题: str, 正文: str = "", 级别: str = "警告",
+                    需要恢复通知: bool = True) -> bool:
+        """电脑右下角弹窗通知（同原因 10 分钟节流；按设置开关；不抛异常）。"""
+        try:
+            from 工具包.桌面通知 import 机器人桌面通知
+
+            try:
+                设置 = self.数据库.获取机器人设置(self.机器人标志)
+            except Exception:
+                设置 = None
+            return 机器人桌面通知(
+                设置, getattr(self, "机器人标志", "robot"), 原因键, 标题, 正文,
+                级别=级别, 需要恢复通知=需要恢复通知,
+            )
+        except Exception:
+            return False
+
+    def 桌面通知已恢复(self, 原因键: str, 正文: str = "") -> bool:
+        try:
+            from 工具包.桌面通知 import 机器人桌面恢复
+
+            return 机器人桌面恢复(getattr(self, "机器人标志", "robot"), 原因键, 正文)
+        except Exception:
+            return False
 
     def 发送企业微信通知(self, 状态文本: str, 包含截图: bool = True):
         """发送企业微信状态通知（任务代码可随时调用）

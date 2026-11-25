@@ -216,8 +216,27 @@ class 任务计划组件:
             self._表单.addRow("" if 字段.类型 == "bool" else 字段.标签, 编辑器)
             if 字段.提示:
                 self._表单.addRow("", 标签(字段.提示, "弱", 换行=True))
+        if 键 == "notification":
+            测试按钮 = QPushButton("发送测试桌面通知")
+            测试按钮.setToolTip("立即在屏幕右下角弹一条测试通知（不节流、不影响脚本运行）")
+            测试按钮.clicked.connect(self._发送测试桌面通知)
+            self._表单.addRow("", 测试按钮)
         for 文本 in 页.提示:
             self._提示区.addWidget(标签(文本, "提示条", 换行=True))
+
+    def _发送测试桌面通知(self):
+        try:
+            from 工具包.桌面通知 import 发送测试通知
+
+            成功 = 发送测试通知()
+        except Exception:
+            成功 = False
+        提示 = getattr(self.上下文, "提示", None)
+        if callable(提示):
+            try:
+                提示("已发送测试桌面通知" if 成功 else "测试桌面通知发送失败")
+            except Exception:
+                pass
 
     def _创建编辑器(self, 字段: 计划.参数字段) -> QWidget:
         值 = 字段.当前值(self._设置)

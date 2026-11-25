@@ -73,6 +73,8 @@ a = Analysis(
         + collect_submodules("服务")
         + collect_submodules("应用")
         + collect_submodules("界面")
+        # 桌面通知只在触发时延迟导入（无第三方依赖，走系统 PowerShell）。
+        + ["工具包.桌面通知"]
         # PyInstaller 会通过 pyi_rth_pkgres 导入 pkg_resources。
         # setuptools 71+ 将 vendor 模块移到 setuptools._vendor，PyInstaller
         # 自带钩子会收集它们；只显式保留入口，避免把 pkg_resources.tests
