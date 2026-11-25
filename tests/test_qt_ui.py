@@ -274,6 +274,24 @@ class 主窗口测试(unittest.TestCase):
         设置窗.服务器.setCurrentText("调试服务器")
         self.assertEqual(self.数据库.获取机器人设置("robot_1").服务器, "调试服务器")
 
+    def test_自动重启开关在常规页可关闭(self):
+        设置窗 = self._打开高级页("adv_general")
+        页 = 设置窗.页面["adv_general"]
+        开关 = 页.表单.编辑器["非人工停止后自动重启"]
+        self.assertTrue(开关.isChecked())
+        开关.setChecked(False)
+        self.assertTrue(页.保存())
+        self.assertFalse(self.数据库.获取机器人设置("robot_1").非人工停止后自动重启)
+
+    def test_通知页可发送测试桌面通知(self):
+        设置窗 = self._打开高级页("adv_notification")
+        页 = 设置窗.页面["adv_notification"]
+        self.assertIn("桌面通知", 页.表单.编辑器)
+        with mock.patch("工具包.桌面通知.发送测试通知", return_value=True) as 发送:
+            设置窗._发送测试桌面通知()
+        发送.assert_called_once()
+        self.assertIn("已发送", 页.状态.text())
+
     def test_保存任务设置不覆盖引擎新绑定的模拟器(self):
         计划 = self.运行页.计划
         计划.选择任务("wall")
