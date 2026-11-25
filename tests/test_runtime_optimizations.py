@@ -21,9 +21,11 @@ from 模块.运行节流与复盘 import (
     金水是否达到刷墙阈值,
 )
 from 模块.防休眠 import ES_CONTINUOUS, ES_SYSTEM_REQUIRED, 防休眠控制器
+from 任务流程.主世界打鱼.搜索敌人 import 搜索目标敌人任务
 from 任务流程.主世界打鱼.等待战斗结束并回营 import 等待战斗结束并回营任务
 from 任务流程.升级城墙 import 城墙升级任务
 from 任务流程.基础任务框架 import 任务上下文, 基础任务
+from 任务流程.夜世界.夜世界打鱼.等待回营或第二场战斗 import 等待回营或第二次战斗
 from 线程.自动化机器人 import 自动化机器人
 
 
@@ -108,8 +110,52 @@ class 防系统休眠测试(unittest.TestCase):
         self.assertFalse(故障控制器.当前已阻止休眠)
         self.assertTrue(any("设置系统防休眠状态失败" in 项 for 项 in 日志))
 
-    def test_自动化机器人暂停继续与异常退出均恢复防休眠(self):
-        调用历史: list[int] = []
+    def test_防休眠跨线程隔离与绑定工作线程校验(self):
+        调用记录: list[tuple[int, int]] = []
+        日志: list[str] = []
+        控制器 = 防休眠控制器(
+            执行状态函数=lambda 标志: 调用记录.append((threading.get_ident(), 标志)) or 1,
+            平台名称="win32",
+            日志回调=日志.append,
+        )
+
+        工作线程已唤醒 = threading.Event()
+        工作线程放行 = threading.Event()
+        工作线程ID = [0]
+
+        def _工作线程():
+            工作线程ID[0] = threading.get_ident()
+            控制器.绑定线程()
+            self.assertTrue(控制器.保持唤醒())
+            工作线程已唤醒.set()
+            工作线程放行.wait(timeout=3.0)
+            self.assertTrue(控制器.允许休眠())
+            控制器.解除绑定线程()
+
+        线程 = threading.Thread(target=_工作线程)
+        线程.start()
+        self.assertTrue(工作线程已唤醒.wait(timeout=3.0))
+
+        主线程ID = threading.get_ident()
+        # 非绑定线程调用应被拒绝且绝不触发 SetThreadExecutionState
+        self.assertFalse(控制器.保持唤醒())
+        self.assertFalse(控制器.允许休眠())
+        self.assertTrue(控制器.当前已阻止休眠)
+        self.assertFalse(控制器.当前线程已阻止休眠)
+        self.assertNotIn(主线程ID, {tid for tid, _ in 调用记录})
+
+        工作线程放行.set()
+        线程.join(timeout=3.0)
+        self.assertFalse(控制器.当前已阻止休眠)
+        self.assertEqual(
+            调用记录,
+            [
+                (工作线程ID[0], ES_CONTINUOUS | ES_SYSTEM_REQUIRED),
+                (工作线程ID[0], ES_CONTINUOUS),
+            ],
+        )
+
+    def _构造测试机器人(self, 调用记录: list[tuple[int, int]]):
         机器人 = 自动化机器人.__new__(自动化机器人)
         机器人.机器人标志 = "bot_sleep"
         机器人.停止事件 = threading.Event()
@@ -117,42 +163,256 @@ class 防系统休眠测试(unittest.TestCase):
         机器人.继续事件.set()
         机器人.记录日志 = Mock()
         机器人.置脚本状态 = Mock()
-        机器人._防休眠控制器 = 防休眠控制器(
-            执行状态函数=lambda 标志: 调用历史.append(标志) or 1,
-            平台名称="win32",
-        )
-
-        机器人._防休眠控制器.保持唤醒()
-        self.assertTrue(机器人._防休眠控制器.当前已阻止休眠)
-
-        机器人.暂停()
-        self.assertFalse(机器人.继续事件.is_set())
-        self.assertFalse(机器人._防休眠控制器.当前已阻止休眠)
-        self.assertEqual(调用历史[-1], ES_CONTINUOUS)
-
-        机器人.继续()
-        self.assertTrue(机器人.继续事件.is_set())
-        self.assertTrue(机器人._防休眠控制器.当前已阻止休眠)
-        self.assertEqual(调用历史[-1], ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
-
-        # 验证 _任务流程 异常退出时 finally 恢复 ES_CONTINUOUS
-        上下文 = SimpleNamespace(
-            op=SimpleNamespace(安全清理=Mock(), 获取屏幕图像cv=Mock()),
-            释放识别模型=Mock(),
-            _内存保护已触发=True,
-            发送死亡通知=Mock(),
-            置脚本状态=Mock(),
-        )
         机器人.停止原因 = ""
         机器人._桌面通知线程停止 = Mock()
         机器人._写入未处理异常日志 = Mock()
+        机器人._防休眠控制器 = 防休眠控制器(
+            执行状态函数=lambda 标志: 调用记录.append((threading.get_ident(), 标志)) or 1,
+            平台名称="win32",
+        )
+        return 机器人
+
+    def _构造真实上下文(self, 机器人):
+        上下文 = object.__new__(任务上下文)
+        上下文.机器人标志 = 机器人.机器人标志
+        上下文.停止事件 = 机器人.停止事件
+        上下文.继续事件 = 机器人.继续事件
+        上下文.置脚本状态 = Mock()
+        上下文.发送死亡通知 = Mock()
+        上下文.释放识别模型 = Mock()
+        上下文.op = SimpleNamespace(安全清理=Mock(), 获取屏幕图像cv=Mock())
+        上下文._内存保护已触发 = True
+        上下文.检查空闲或内存释放识别模型 = Mock()
+        上下文.是否可自动恢复主机内存保护 = Mock(return_value=False)
+        上下文.自动确认升级完成弹窗 = Mock()
+        上下文._升级完成弹窗调度时间 = time.monotonic() + 100.0
+        上下文._中央提示调度时间 = time.monotonic() + 100.0
+        上下文._星级奖励调度时间 = time.monotonic() + 100.0
+        上下文.企业微信通知器 = None
+        上下文.上报间隔秒 = 0
+        return 上下文
+
+    def test_F1启动_F2暂停_停止_界面线程不调用防休眠且工作线程恢复(self):
+        调用记录: list[tuple[int, int]] = []
+        主线程ID = threading.get_ident()
+        机器人 = self._构造测试机器人(调用记录)
+        上下文 = self._构造真实上下文(机器人)
+        上下文.数据库 = Mock()
         机器人._初始化任务上下文 = Mock(return_value=(机器人设置(), 上下文, None))
 
-        with patch("线程.自动化机器人.检测游戏登录状态任务", side_effect=RuntimeError("boom")):
-            机器人._任务流程()
+        进入延时 = threading.Event()
+        工作线程ID = [0]
 
+        def _模拟任务执行():
+            工作线程ID[0] = threading.get_ident()
+            进入延时.set()
+            while not 机器人.停止事件.is_set():
+                上下文.脚本延时(50)
+            return True
+
+        with patch("线程.自动化机器人.检测游戏登录状态任务", return_value=SimpleNamespace(执行=Mock(return_value=True))), \
+                patch("线程.自动化机器人.启动模拟器任务", return_value=SimpleNamespace(执行=_模拟任务执行)):
+            线程 = threading.Thread(target=机器人._任务流程, name="worker-f1-f2-stop")
+            线程.start()
+            self.assertTrue(进入延时.wait(timeout=3.0))
+
+            # 等到工作线程完成首次 保持唤醒()
+            截止 = time.monotonic() + 3.0
+            while not 调用记录 and time.monotonic() < 截止:
+                time.sleep(0.01)
+            self.assertEqual(调用记录, [(工作线程ID[0], ES_CONTINUOUS | ES_SYSTEM_REQUIRED)])
+
+            # 界面线程按 F2 暂停：界面线程绝不能调用 SetThreadExecutionState
+            机器人.暂停()
+            self.assertFalse(机器人.继续事件.is_set())
+            截止 = time.monotonic() + 3.0
+            while len(调用记录) < 2 and time.monotonic() < 截止:
+                time.sleep(0.01)
+
+            # 工作线程在暂停等待前已释放为 ES_CONTINUOUS
+            self.assertEqual(调用记录[-1], (工作线程ID[0], ES_CONTINUOUS))
+            self.assertNotIn(主线程ID, {tid for tid, _ in 调用记录})
+
+            # 界面线程点击停止（停止() 内部会唤醒 继续事件）
+            机器人.主线程 = 线程
+            机器人.停止("界面停止按钮", 等待=True, 超时=5.0)
+            线程.join(timeout=3.0)
+            self.assertFalse(线程.is_alive())
+
+        # 全程界面线程从未调用过防休眠 API，且工作线程保持/最终恢复为 ES_CONTINUOUS
+        self.assertTrue(all(tid == 工作线程ID[0] for tid, _ in 调用记录))
+        self.assertNotIn(主线程ID, {tid for tid, _ in 调用记录})
+        self.assertEqual(调用记录[-1], (工作线程ID[0], ES_CONTINUOUS))
         self.assertFalse(机器人._防休眠控制器.当前已阻止休眠)
-        self.assertEqual(调用历史[-1], ES_CONTINUOUS)
+
+    def test_F1启动_F2暂停_继续_停止_工作线程全程控制防休眠(self):
+        调用记录: list[tuple[int, int]] = []
+        主线程ID = threading.get_ident()
+        机器人 = self._构造测试机器人(调用记录)
+        上下文 = self._构造真实上下文(机器人)
+        上下文.数据库 = Mock()
+        机器人._初始化任务上下文 = Mock(return_value=(机器人设置(), 上下文, None))
+
+        进入延时 = threading.Event()
+        已触发继续 = threading.Event()
+        继续后已运行 = threading.Event()
+        工作线程ID = [0]
+
+        def _模拟任务执行():
+            工作线程ID[0] = threading.get_ident()
+            进入延时.set()
+            while not 机器人.停止事件.is_set():
+                上下文.脚本延时(50)
+                if 已触发继续.is_set():
+                    继续后已运行.set()
+            return True
+
+        with patch("线程.自动化机器人.检测游戏登录状态任务", return_value=SimpleNamespace(执行=Mock(return_value=True))), \
+                patch("线程.自动化机器人.启动模拟器任务", return_value=SimpleNamespace(执行=_模拟任务执行)):
+            线程 = threading.Thread(target=机器人._任务流程, name="worker-f1-f2-f1-stop")
+            线程.start()
+            self.assertTrue(进入延时.wait(timeout=3.0))
+
+            截止 = time.monotonic() + 3.0
+            while not 调用记录 and time.monotonic() < 截止:
+                time.sleep(0.01)
+            self.assertEqual(调用记录, [(工作线程ID[0], ES_CONTINUOUS | ES_SYSTEM_REQUIRED)])
+
+            # F2 暂停（UI 线程）：工作线程进入暂停并释放防休眠
+            机器人.暂停()
+            截止 = time.monotonic() + 3.0
+            while len(调用记录) < 2 and time.monotonic() < 截止:
+                time.sleep(0.01)
+            self.assertEqual(调用记录[-1], (工作线程ID[0], ES_CONTINUOUS))
+            self.assertNotIn(主线程ID, {tid for tid, _ in 调用记录})
+
+            # F1 继续（UI 线程）：UI 线程不碰防休眠，由工作线程恢复后重新 保持唤醒()
+            已触发继续.set()
+            机器人.继续()
+            self.assertTrue(继续后已运行.wait(timeout=3.0))
+            截止 = time.monotonic() + 3.0
+            while len(调用记录) < 3 and time.monotonic() < 截止:
+                time.sleep(0.01)
+            self.assertEqual(调用记录[-1], (工作线程ID[0], ES_CONTINUOUS | ES_SYSTEM_REQUIRED))
+            self.assertNotIn(主线程ID, {tid for tid, _ in 调用记录})
+
+            # 停止（UI 线程）：工作线程退出 finally 恢复 ES_CONTINUOUS
+            机器人.主线程 = 线程
+            机器人.停止("手动终止", 等待=True, 超时=5.0)
+            线程.join(timeout=3.0)
+            self.assertFalse(线程.is_alive())
+
+        self.assertEqual(
+            调用记录,
+            [
+                (工作线程ID[0], ES_CONTINUOUS | ES_SYSTEM_REQUIRED),
+                (工作线程ID[0], ES_CONTINUOUS),
+                (工作线程ID[0], ES_CONTINUOUS | ES_SYSTEM_REQUIRED),
+                (工作线程ID[0], ES_CONTINUOUS),
+            ],
+        )
+        self.assertNotIn(主线程ID, {tid for tid, _ in 调用记录})
+        self.assertFalse(机器人._防休眠控制器.当前已阻止休眠)
+
+    def test_工作线程异常退出时界面线程未调用防休眠且工作线程恢复ES_CONTINUOUS(self):
+        调用记录: list[tuple[int, int]] = []
+        主线程ID = threading.get_ident()
+        机器人 = self._构造测试机器人(调用记录)
+        上下文 = self._构造真实上下文(机器人)
+        机器人._初始化任务上下文 = Mock(return_value=(机器人设置(), 上下文, None))
+
+        工作线程ID = [0]
+
+        def _抛错登录(_上下文):
+            工作线程ID[0] = threading.get_ident()
+            raise RuntimeError("boom")
+
+        with patch("线程.自动化机器人.检测游戏登录状态任务", side_effect=_抛错登录):
+            线程 = threading.Thread(target=机器人._任务流程, name="worker-crash")
+            线程.start()
+            线程.join(timeout=3.0)
+            self.assertFalse(线程.is_alive())
+
+        self.assertEqual(
+            调用记录,
+            [
+                (工作线程ID[0], ES_CONTINUOUS | ES_SYSTEM_REQUIRED),
+                (工作线程ID[0], ES_CONTINUOUS),
+            ],
+        )
+        self.assertNotIn(主线程ID, {tid for tid, _ in 调用记录})
+        self.assertFalse(机器人._防休眠控制器.当前已阻止休眠)
+        self.assertIsNone(机器人._防休眠控制器.绑定线程ID)
+
+    def test_搜索敌人等待下一场画面变化暂停释放防休眠并在恢复后重新保持唤醒(self):
+        调用记录: list[tuple[int, int]] = []
+        主线程ID = threading.get_ident()
+        控制器 = 防休眠控制器(
+            执行状态函数=lambda 标志: 调用记录.append((threading.get_ident(), 标志)) or 1,
+            平台名称="win32",
+        )
+
+        上下文 = object.__new__(任务上下文)
+        上下文.停止事件 = threading.Event()
+        上下文.继续事件 = threading.Event()
+        上下文.继续事件.set()
+        上下文._防休眠控制器 = 控制器
+        上下文.置脚本状态 = Mock()
+        上下文.检查空闲或内存释放识别模型 = Mock()
+
+        截图计数 = [0]
+
+        def _获取图像(*_args, **_kwargs):
+            截图计数[0] += 1
+            return _构造测试帧(20 if 截图计数[0] == 1 else 200)
+
+        上下文.op = SimpleNamespace(获取屏幕图像cv=_获取图像)
+        任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
+        任务.下一场等待变化超时秒 = 3.0
+        任务.下一场轮询间隔秒 = 0.05
+
+        工作线程已暂停 = threading.Event()
+        工作线程ID = [0]
+        结果容器: list[bool] = []
+
+        def _工作线程():
+            工作线程ID[0] = threading.get_ident()
+            控制器.绑定线程()
+            控制器.保持唤醒()
+            上下文.继续事件.clear()
+            工作线程已暂停.set()
+            try:
+                结果 = 任务._等待下一场画面变化(上下文, b"old-fingerprint", 超时秒=3.0)
+                结果容器.append(结果)
+            finally:
+                控制器.允许休眠()
+                控制器.解除绑定线程()
+
+        线程 = threading.Thread(target=_工作线程)
+        线程.start()
+        self.assertTrue(工作线程已暂停.wait(timeout=3.0))
+
+        # 等待工作线程进入 搜索敌人._等待下一场画面变化 暂停分支并释放防休眠
+        截止 = time.monotonic() + 3.0
+        while len(调用记录) < 2 and time.monotonic() < 截止:
+            time.sleep(0.01)
+        self.assertEqual(调用记录[-1], (工作线程ID[0], ES_CONTINUOUS))
+
+        # 恢复继续事件，工作线程应重新保持唤醒并完成画面变化检测，最后退出允许休眠
+        上下文.继续事件.set()
+        线程.join(timeout=3.0)
+        self.assertFalse(线程.is_alive())
+        self.assertEqual(结果容器, [True])
+        self.assertEqual(
+            调用记录,
+            [
+                (工作线程ID[0], ES_CONTINUOUS | ES_SYSTEM_REQUIRED),
+                (工作线程ID[0], ES_CONTINUOUS),
+                (工作线程ID[0], ES_CONTINUOUS | ES_SYSTEM_REQUIRED),
+                (工作线程ID[0], ES_CONTINUOUS),
+            ],
+        )
+        self.assertNotIn(主线程ID, {tid for tid, _ in 调用记录})
 
 
 class 动态降帧节能测试(unittest.TestCase):
@@ -431,6 +691,127 @@ class 连续低星自动留档测试(unittest.TestCase):
             文件列表 = list(目录.glob("*.png"))
             self.assertEqual(len(文件列表), 1)
             self.assertIn("_s0_d22_", 文件列表[0].name)
+            self.assertIn("主世界", 文件列表[0].name)
+
+    def test_主世界与夜世界低星计数严格隔离且文件名与日志带世界名(self):
+        with tempfile.TemporaryDirectory() as 临时目录:
+            目录 = Path(临时目录) / "低星复盘_分世界"
+            日志: list[str] = []
+            记录器 = 低星战局复盘记录器(目录, 连续触发次数=2, 摧毁率阈值=30, 最大留档数=10)
+            截图 = _构造测试帧(77)
+
+            # 1. 主世界 1 场低星 + 夜世界 1 场低星 -> 均只累计到 1，绝不互串触发留档
+            self.assertIsNone(
+                记录器.记录战局(
+                    屏幕图像=截图, 星数=0, 摧毁率=15, 结果="失败", 战斗世界="主世界", 日志回调=日志.append
+                )
+            )
+            self.assertIsNone(
+                记录器.记录战局(
+                    屏幕图像=截图, 星数=0, 摧毁率=18, 结果="失败", 战斗世界="夜世界", 日志回调=日志.append
+                )
+            )
+            self.assertEqual(记录器.获取连续低星次数("主世界"), 1)
+            self.assertEqual(记录器.获取连续低星次数("夜世界"), 1)
+            self.assertEqual(list(目录.glob("*.png")), [])
+
+            # 2. 夜世界再来第 2 场低星 -> 仅夜世界触发留档，文件名与日志均带“夜世界”，主世界计数仍为 1
+            夜世界文件 = 记录器.记录战局(
+                屏幕图像=截图,
+                星数=0,
+                摧毁率=12,
+                结果="失败",
+                战斗世界="夜世界",
+                日志回调=日志.append,
+                时间文本="20261125_130000_001",
+            )
+            self.assertIsNotNone(夜世界文件)
+            self.assertTrue(夜世界文件.exists())
+            self.assertIn("夜世界", 夜世界文件.name)
+            self.assertIn("_streak2_", 夜世界文件.name)
+            self.assertTrue(any("夜世界" in 项 and str(夜世界文件) in 项 for 项 in 日志))
+            self.assertEqual(记录器.获取连续低星次数("主世界"), 1)
+            self.assertEqual(记录器.获取连续低星次数("夜世界"), 2)
+
+            # 3. 主世界再来第 2 场低星 -> 主世界触发留档，文件名与日志均带“主世界”
+            主世界文件 = 记录器.记录战局(
+                屏幕图像=截图,
+                星数=0,
+                摧毁率=20,
+                结果="失败",
+                战斗世界="主世界",
+                日志回调=日志.append,
+                时间文本="20261125_130001_002",
+            )
+            self.assertIsNotNone(主世界文件)
+            self.assertTrue(主世界文件.exists())
+            self.assertIn("主世界", 主世界文件.name)
+            self.assertIn("_streak2_", 主世界文件.name)
+            self.assertTrue(any("主世界" in 项 and str(主世界文件) in 项 for 项 in 日志))
+
+    def test_等待回营记录战斗结果与夜世界回营按世界隔离复盘计数器(self):
+        with tempfile.TemporaryDirectory() as 临时目录:
+            目录 = Path(临时目录) / "低星复盘_集成"
+            数据库 = 任务数据库(str(Path(临时目录) / "worlds.db"))
+            状态日志: list[str] = []
+
+            上下文 = SimpleNamespace(
+                机器人标志="bot_worlds",
+                数据库=数据库,
+                置脚本状态=lambda msg, *_a, **_kw: 状态日志.append(str(msg)),
+                本场目标战利品={},
+                本场资源易窃取评分=6.0,
+                本场资源评估={},
+                本场资源评分状态="已知",
+                本场资源评分说明="",
+                英雄技能状态={},
+                _低星复盘记录器=低星战局复盘记录器(目录),
+            )
+            任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+            任务.上下文 = 上下文
+            任务._画面仍在战斗 = Mock(return_value=False)
+            任务.识别结算帧 = Mock(
+                side_effect=[
+                    ([], "", "失败", 10),
+                    ([], "", "失败", 11),
+                    ([], "", "失败", 12),
+                    ([], "", "失败", 13),
+                ]
+            )
+            任务.识别星数 = Mock(side_effect=[0, 0, 0, 0])
+            任务.合并本场摧毁率 = Mock(side_effect=lambda d, _rt: d)
+            任务.校正三星摧毁率 = Mock(side_effect=lambda r, s, d, **kw: d)
+            任务.校正星数 = Mock(side_effect=lambda r, s, d: s)
+            任务.星数校正说明 = Mock(return_value="")
+            任务.生成战斗诊断 = Mock(return_value="低摧毁")
+            任务.更新战斗学习 = Mock(return_value=None)
+
+            截图 = _构造测试帧(55)
+            # 主世界 1 场低星 + 夜世界 1 场低星：不触发留档
+            self.assertTrue(任务.记录战斗结果(上下文, 截图, True, 战斗世界="主世界"))
+            self.assertTrue(任务.记录战斗结果(上下文, 截图, True, 战斗世界="夜世界"))
+            self.assertEqual(list(目录.glob("*.png")), [])
+
+            # 通过夜世界任务类的 _记录结算统计 验证其显式传入 战斗世界="夜世界"
+            夜世界任务 = 等待回营或第二次战斗.__new__(等待回营或第二次战斗)
+            夜世界任务.上下文 = 上下文
+            with patch(
+                "任务流程.主世界打鱼.等待战斗结束并回营.等待战斗结束并回营任务",
+                return_value=任务,
+            ):
+                self.assertTrue(夜世界任务._记录结算统计(截图))
+
+            夜世界截图列表 = sorted(目录.glob("*夜世界*.png"))
+            self.assertEqual(len(夜世界截图列表), 1)
+            self.assertEqual(list(目录.glob("*主世界*.png")), [])
+            self.assertTrue(any("夜世界" in 项 and "自动留档复盘截图" in 项 for 项 in 状态日志))
+
+            # 主世界再来第 2 场低星 -> 此时主世界触发留档
+            self.assertTrue(任务.记录战斗结果(上下文, 截图, True, 战斗世界="主世界"))
+            主世界截图列表 = sorted(目录.glob("*主世界*.png"))
+            self.assertEqual(len(主世界截图列表), 1)
+            self.assertTrue(any("主世界" in 项 and "自动留档复盘截图" in 项 for 项 in 状态日志))
+            self.assertEqual(len(list(目录.glob("*.png"))), 2)
 
 
 class 满仓顺手刷墙策略测试(unittest.TestCase):
@@ -451,6 +832,16 @@ class 满仓顺手刷墙策略测试(unittest.TestCase):
         self.assertEqual(越界.刷墙资源阈值比例, 100)
         self.assertEqual(越界.单次顺手刷墙上限, 2)
         self.assertEqual(越界.模型空闲释放秒数, 0)
+
+        # _安全整型 校验必须排除 bool 与 None，回落到安全默认值
+        布尔与空值 = 机器人设置(
+            刷墙资源阈值比例=True,
+            单次顺手刷墙上限=False,
+            模型空闲释放秒数=None,
+        )
+        self.assertEqual(布尔与空值.刷墙资源阈值比例, 90)
+        self.assertEqual(布尔与空值.单次顺手刷墙上限, 2)
+        self.assertEqual(布尔与空值.模型空闲释放秒数, 600)
 
         字段映射 = {项.字段: 项 for 项 in 所有参数字段()}
         self.assertIn("满仓自动顺手刷墙", 字段映射)

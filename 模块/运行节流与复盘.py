@@ -168,6 +168,25 @@ class 模型空闲释放协调器:
 默认连续低星触发次数 = 2
 默认低星摧毁率阈值 = 30
 默认最大留档数 = 100
+默认战斗世界 = "主世界"
+
+
+def 规范化战斗世界(战斗世界: Any = None) -> str:
+    """将战斗世界标识归一化为明确的世界名称（默认“主世界”）。"""
+    原始 = str(战斗世界 or "").strip()
+    if not 原始 or 原始 in {"主世界", "家乡", "Home Village", "home", "main"}:
+        return "主世界"
+    if 原始 in {"夜世界", "建筑大师", "Builder Base", "builder_base", "night"}:
+        return "夜世界"
+    return 原始
+
+
+def _世界文件名标识(战斗世界: Any = None) -> str:
+    规范世界 = 规范化战斗世界(战斗世界)
+    清洗后 = "".join(
+        "_" if ch in '\\/:*?"<>|\r\n\t ' else ch for ch in 规范世界
+    ).strip("_")
+    return 清洗后 or 默认战斗世界
 
 
 def 是否低星战局(
@@ -211,7 +230,7 @@ def _写入复盘PNG(目标路径: Path, 屏幕图像: Any) -> bool:
 
 
 class 低星战局复盘记录器:
-    """连续出现低星/低摧毁战局时自动留档截图，严格只增不删。"""
+    """连续出现低星/低摧毁战局时自动留档截图，按战斗世界隔离计数且严格只增不删。"""
 
     def __init__(
         self,
@@ -220,14 +239,28 @@ class 低星战局复盘记录器:
         连续触发次数: int = 默认连续低星触发次数,
         摧毁率阈值: int = 默认低星摧毁率阈值,
         最大留档数: int = 默认最大留档数,
+        战斗世界: str = 默认战斗世界,
     ) -> None:
         self.输出目录 = Path(输出目录)
         self.连续触发次数 = max(1, int(连续触发次数))
         self.摧毁率阈值 = max(1, min(100, int(摧毁率阈值)))
         self.最大留档数 = max(1, int(最大留档数))
-        self.连续低星次数: int = 0
+        self.默认战斗世界 = 规范化战斗世界(战斗世界)
+        self._世界连续低星次数: dict[str, int] = {}
         self.累计留档数: int = 0
         self._已提示上限: bool = False
+
+    @property
+    def 连续低星次数(self) -> int:
+        return self._世界连续低星次数.get(self.默认战斗世界, 0)
+
+    @连续低星次数.setter
+    def 连续低星次数(self, 值: int) -> None:
+        self._世界连续低星次数[self.默认战斗世界] = max(0, int(值))
+
+    def 获取连续低星次数(self, 战斗世界: str | None = None) -> int:
+        规范世界 = self.默认战斗世界 if 战斗世界 is None else 规范化战斗世界(战斗世界)
+        return self._世界连续低星次数.get(规范世界, 0)
 
     @staticmethod
     def _日志(日志回调: Callable[..., Any] | None, 文本: str) -> None:
@@ -244,22 +277,28 @@ class 低星战局复盘记录器:
         星数: Any,
         摧毁率: Any,
         结果: str = "",
+        战斗世界: str | None = None,
         日志回调: Callable[..., Any] | None = None,
         时间文本: str | None = None,
     ) -> Path | None:
+        规范世界 = self.默认战斗世界 if 战斗世界 is None else 规范化战斗世界(战斗世界)
         低星 = 是否低星战局(星数, 摧毁率, 摧毁率阈值=self.摧毁率阈值)
         if 低星 is None:
             return None
         if not 低星:
-            self.连续低星次数 = 0
+            self._世界连续低星次数[规范世界] = 0
             return None
 
-        self.连续低星次数 += 1
-        if self.连续低星次数 < self.连续触发次数:
+        当前连续 = self._世界连续低星次数.get(规范世界, 0) + 1
+        self._世界连续低星次数[规范世界] = 当前连续
+        if 当前连续 < self.连续触发次数:
             return None
 
         if 屏幕图像 is None or getattr(屏幕图像, "size", 0) == 0:
-            self._日志(日志回调, "连续低星战局已触发留档条件，但结算截图为空，跳过写入")
+            self._日志(
+                日志回调,
+                f"[{规范世界}] 连续低星战局已触发留档条件，但结算截图为空，跳过写入",
+            )
             return None
 
         try:
@@ -270,33 +309,34 @@ class 低星战局复盘记录器:
                     self._已提示上限 = True
                     self._日志(
                         日志回调,
-                        f"低星复盘目录「{self.输出目录}」截图数已达上限 {self.最大留档数}，"
+                        f"[{规范世界}] 低星复盘目录「{self.输出目录}」截图数已达上限 {self.最大留档数}，"
                         "已停止新增写入（严格保留已有文件，不执行删除）",
                     )
                 return None
 
             现在 = time.time()
             时间戳 = 时间文本 or f"{time.strftime('%Y%m%d_%H%M%S', time.localtime(现在))}_{int((现在 % 1) * 1000):03d}"
+            世界标识 = _世界文件名标识(规范世界)
             星数标识 = "na" if 星数 is None else str(int(星数))
             摧毁标识 = "na" if 摧毁率 is None else str(int(round(float(摧毁率))))
             结果标识 = str(结果 or "").strip() or "unknown"
             文件名 = (
-                f"low_star_{时间戳}_streak{self.连续低星次数}"
+                f"low_star_{世界标识}_{时间戳}_streak{当前连续}"
                 f"_s{星数标识}_d{摧毁标识}_{结果标识}.png"
             )
             目标路径 = self.输出目录 / 文件名
             if not _写入复盘PNG(目标路径, 屏幕图像):
-                self._日志(日志回调, "低星复盘截图 PNG 编码失败，跳过留档")
+                self._日志(日志回调, f"[{规范世界}] 低星复盘截图 PNG 编码失败，跳过留档")
                 return None
             self.累计留档数 += 1
             self._日志(
                 日志回调,
-                f"连续第 {self.连续低星次数} 场低星战局（星数={星数标识}，摧毁率={摧毁标识}%），"
+                f"[{规范世界}] 连续第 {当前连续} 场低星战局（星数={星数标识}，摧毁率={摧毁标识}%），"
                 f"已自动留档复盘截图：{目标路径}",
             )
             return 目标路径
         except Exception as 异常:
-            self._日志(日志回调, f"低星战局复盘留档失败（不影响正常结算）：{异常}")
+            self._日志(日志回调, f"[{规范世界}] 低星战局复盘留档失败（不影响正常结算）：{异常}")
             return None
 
 

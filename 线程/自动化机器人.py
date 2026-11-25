@@ -311,10 +311,6 @@ class 自动化机器人:
         """标记暂停状态"""
         _安全控制台打印("已暂停")
         self.继续事件.clear()
-        try:
-            self._获取防休眠控制器().允许休眠()
-        except Exception:
-            pass
 
     def 继续(self):
         """清除暂停状态"""
@@ -325,11 +321,6 @@ class 自动化机器人:
             # 继续判定，避免 F1 刚恢复就被旧日志的截止时间误停。
             self.记录日志("机器人已从暂停状态继续，等待下一条任务心跳", 120)
         self.继续事件.set()
-        if not self.停止事件.is_set():
-            try:
-                self._获取防休眠控制器().保持唤醒()
-            except Exception:
-                pass
 
     def 停止(self, 停止原因="", 等待=True, 超时: float = 10.0):
         """标记终止状态
@@ -1833,16 +1824,26 @@ class 自动化机器人:
         try:
           while not self.停止事件.is_set():
             继续事件 = getattr(self, "继续事件", None)
-            while (
-                继续事件 is not None
-                and not 继续事件.is_set()
-                and not self.停止事件.is_set()
-            ):
-                if 防休眠 is not None:
-                    防休眠.允许休眠()
-                if callable(检查释放):
-                    检查释放(检查间隔秒=10.0)
-                继续事件.wait(timeout=0.5)
+            if 继续事件 is not None and not 继续事件.is_set():
+                等待暂停 = getattr(上下文, "等待暂停恢复", None)
+                if callable(等待暂停):
+                    等待暂停(轮询秒=0.5)
+                else:
+                    while (
+                        not 继续事件.is_set()
+                        and not self.停止事件.is_set()
+                    ):
+                        if 防休眠 is not None:
+                            防休眠.允许休眠()
+                        if callable(检查释放):
+                            检查释放(检查间隔秒=10.0)
+                        继续事件.wait(timeout=0.5)
+                    if (
+                        not self.停止事件.is_set()
+                        and 防休眠 is not None
+                        and 继续事件.is_set()
+                    ):
+                        防休眠.保持唤醒()
             if self.停止事件.is_set():
                 break
             if 防休眠 is not None and (继续事件 is None or 继续事件.is_set()):
@@ -2232,6 +2233,9 @@ class 自动化机器人:
 
         try:
             防休眠 = self._获取防休眠控制器()
+            绑定 = getattr(防休眠, "绑定线程", None)
+            if callable(绑定):
+                绑定()
             上下文._防休眠控制器 = 防休眠
             继续事件 = getattr(self, "继续事件", None)
             停止事件 = getattr(self, "停止事件", None)
@@ -2462,7 +2466,11 @@ class 自动化机器人:
             self.停止事件.set()
         finally:
             try:
-                self._获取防休眠控制器().允许休眠()
+                防休眠 = self._获取防休眠控制器()
+                防休眠.允许休眠()
+                解绑 = getattr(防休眠, "解除绑定线程", None)
+                if callable(解绑):
+                    解绑()
             except Exception:
                 pass
             # 早期检查直接 return、截图异常和任务分支主动退出都必须把

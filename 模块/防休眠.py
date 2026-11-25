@@ -40,14 +40,42 @@ class 防休眠控制器:
         self._平台名称 = sys.platform if 平台名称 is None else str(平台名称)
         self._日志回调 = 日志回调
         self._锁 = threading.RLock()
-        self._当前已阻止休眠 = False
         self._活跃线程集合: set[int] = set()
+        self._绑定线程ID: int | None = None
         self._调用记录: list[int] = []
+        self._线程调用记录: list[tuple[int, int]] = []
 
     @property
     def 当前已阻止休眠(self) -> bool:
         with self._锁:
-            return self._当前已阻止休眠
+            return bool(self._活跃线程集合)
+
+    @property
+    def 当前线程已阻止休眠(self) -> bool:
+        当前线程 = threading.get_ident()
+        with self._锁:
+            return 当前线程 in self._活跃线程集合
+
+    @property
+    def 活跃线程集合(self) -> frozenset[int]:
+        with self._锁:
+            return frozenset(self._活跃线程集合)
+
+    @property
+    def 绑定线程ID(self) -> int | None:
+        with self._锁:
+            return self._绑定线程ID
+
+    def 绑定线程(self, 线程ID: int | None = None) -> int:
+        """绑定允许修改 SetThreadExecutionState 的唯一工作线程。"""
+        目标线程 = threading.get_ident() if 线程ID is None else int(线程ID)
+        with self._锁:
+            self._绑定线程ID = 目标线程
+            return 目标线程
+
+    def 解除绑定线程(self) -> None:
+        with self._锁:
+            self._绑定线程ID = None
 
     @property
     def 平台支持(self) -> bool:
@@ -70,9 +98,11 @@ class 防休眠控制器:
         后端 = self._解析后端()
         if 后端 is None:
             return False
+        当前线程 = threading.get_ident()
         try:
             结果 = 后端(int(标志位))
             self._调用记录.append(int(标志位))
+            self._线程调用记录.append((当前线程, int(标志位)))
             # Windows SetThreadExecutionState 返回 0 (NULL) 表示失败；
             # 测试注入的模拟函数可能返回 True / None / 非零整数。
             if 结果 == 0 and 结果 is not False:
@@ -85,25 +115,33 @@ class 防休眠控制器:
             return False
 
     def 保持唤醒(self) -> bool:
-        """阻止系统自动进入休眠（允许显示器按电源计划自行息屏）。"""
+        """在当前工作线程阻止系统自动进入休眠（允许显示器按电源计划自行息屏）。"""
         当前线程 = threading.get_ident()
         with self._锁:
-            if self._当前已阻止休眠 and 当前线程 in self._活跃线程集合:
+            if self._绑定线程ID is not None and 当前线程 != self._绑定线程ID:
+                self._记录日志(
+                    f"拒绝在非工作线程({当前线程})保持唤醒（允许线程={self._绑定线程ID}）"
+                )
+                return False
+            if 当前线程 in self._活跃线程集合:
                 return True
             成功 = self._安全调用(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
             if 成功:
-                self._当前已阻止休眠 = True
                 self._活跃线程集合.add(当前线程)
             return 成功
 
     def 允许休眠(self) -> bool:
-        """恢复系统默认休眠策略。"""
+        """在当前工作线程恢复系统默认休眠策略。"""
         当前线程 = threading.get_ident()
         with self._锁:
-            if not self._当前已阻止休眠 and 当前线程 not in self._活跃线程集合:
+            if self._绑定线程ID is not None and 当前线程 != self._绑定线程ID:
+                self._记录日志(
+                    f"拒绝在非工作线程({当前线程})调用允许休眠（允许线程={self._绑定线程ID}）"
+                )
+                return False
+            if 当前线程 not in self._活跃线程集合:
                 return True
             成功 = self._安全调用(ES_CONTINUOUS)
-            self._当前已阻止休眠 = False
             self._活跃线程集合.discard(当前线程)
             return 成功
 

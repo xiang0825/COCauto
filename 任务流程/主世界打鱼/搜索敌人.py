@@ -1308,11 +1308,26 @@ class 搜索目标敌人任务(基础任务):
             if 停止事件 is not None and 停止事件.is_set():
                 return False
             if 继续事件 is not None and not 继续事件.is_set():
-                wait_fn = getattr(继续事件, "wait", None)
-                if callable(wait_fn):
-                    wait_fn(0.2)
+                等待暂停 = getattr(上下文, "等待暂停恢复", None)
+                if callable(等待暂停):
+                    等待暂停(轮询秒=0.2)
                 else:
-                    time.sleep(0.2)
+                    防休眠 = getattr(上下文, "_防休眠控制器", None)
+                    if 防休眠 is not None and callable(getattr(防休眠, "允许休眠", None)):
+                        防休眠.允许休眠()
+                    while not 继续事件.is_set():
+                        if 停止事件 is not None and 停止事件.is_set():
+                            return False
+                        wait_fn = getattr(继续事件, "wait", None)
+                        if callable(wait_fn):
+                            wait_fn(0.2)
+                        else:
+                            time.sleep(0.2)
+                    if not (停止事件 is not None and 停止事件.is_set()):
+                        if 防休眠 is not None and callable(getattr(防休眠, "保持唤醒", None)):
+                            防休眠.保持唤醒()
+                if 停止事件 is not None and 停止事件.is_set():
+                    return False
                 continue
             步长 = min(间隔, max(0.01, 截止 - time.monotonic()))
             wait_fn = getattr(停止事件, "wait", None) if 停止事件 is not None else None

@@ -3173,6 +3173,38 @@ class 任务上下文:
         if 是否重启机器人:
             self.发送死亡通知(f"任务[{任务名}] 异常：{异常}")
 
+    def 等待暂停恢复(self, 轮询秒: float = 0.25) -> bool:
+        """若当前处于暂停状态，在工作线程允许休眠并阻塞至继续或停止。"""
+        继续事件 = getattr(self, "继续事件", None)
+        停止事件 = getattr(self, "停止事件", None)
+        if 继续事件 is None or 继续事件.is_set():
+            return False
+
+        防休眠 = getattr(self, "_防休眠控制器", None)
+        if 防休眠 is not None and callable(getattr(防休眠, "允许休眠", None)):
+            防休眠.允许休眠()
+
+        间隔 = max(0.05, float(轮询秒))
+        已暂停 = False
+        while not 继续事件.is_set():
+            if 停止事件 is not None and 停止事件.is_set():
+                return False
+            已暂停 = True
+            检查释放 = getattr(self, "检查空闲或内存释放识别模型", None)
+            if callable(检查释放):
+                检查释放(检查间隔秒=10.0)
+            wait_fn = getattr(继续事件, "wait", None)
+            if callable(wait_fn):
+                wait_fn(间隔)
+            else:
+                time.sleep(间隔)
+
+        if 停止事件 is not None and 停止事件.is_set():
+            return False
+        if 防休眠 is not None and callable(getattr(防休眠, "保持唤醒", None)):
+            防休眠.保持唤醒()
+        return 已暂停
+
     def 脚本延时(self, 毫秒数):
         """脚本延时方法 - 可中断、可暂停、支持定时任务的智能延时
 
@@ -3233,17 +3265,7 @@ class 任务上下文:
                 raise 主机内存保护暂停请求("宿主机内存保护已触发，暂停当前任务并等待恢复")
 
             if not self.继续事件.is_set():
-                防休眠 = getattr(self, "_防休眠控制器", None)
-                if 防休眠 is not None and callable(getattr(防休眠, "允许休眠", None)):
-                    防休眠.允许休眠()
-                检查释放 = getattr(self, "检查空闲或内存释放识别模型", None)
-                if callable(检查释放):
-                    检查释放(检查间隔秒=10.0)
-                # 暂停时也用有界等待，这样停止事件仍能快速唤醒线程。
-                self.继续事件.wait(timeout=0.25)
-                if self.继续事件.is_set() and not self.停止事件.is_set():
-                    if 防休眠 is not None and callable(getattr(防休眠, "保持唤醒", None)):
-                        防休眠.保持唤醒()
+                self.等待暂停恢复(轮询秒=0.25)
                 continue
 
             if bool(getattr(self, "_任务计划长时间等待", False)):
