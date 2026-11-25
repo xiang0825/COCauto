@@ -222,4 +222,31 @@ QToolTip {{
     background: {色.卡片}; color: {色.文字}; border: 1px solid {色.卡片描边}; padding: 5px;
 }}
 QMessageBox {{ background: {色.卡片}; }}
+
+QDialog#根 {{ background: {色.背景}; }}
+QLabel#当前动作 {{ font-size: 14px; font-weight: 600; }}
+QPushButton#设备芯片 {{
+    padding: 3px 10px; font-size: 12px; color: {色.次要文字}; border-radius: 6px;
+}}
+QWidget#数据条 {{ background: {色.侧栏}; border-bottom: 1px solid {色.分隔}; }}
+QLabel#数据名 {{ color: {色.弱文字}; font-size: 11px; }}
+QLabel#数据值, QLabel#数据值金, QLabel#数据值水 {{
+    font-size: 18px; font-weight: 700;
+}}
+QLabel#数据值金 {{ color: {色.警告}; }}
+QLabel#数据值水 {{ color: {"#c88be0" if 色.名称 == "深色" else "#9b3fb0"}; }}
+QFrame#竖分隔 {{ background: {色.分隔}; min-width: 1px; max-width: 1px; border: none; }}
+QProgressBar#竞赛进度 {{ border: none; background: {色.分隔}; border-radius: 3px; }}
+QProgressBar#竞赛进度::chunk {{ background: {色.强调}; border-radius: 3px; }}
+QFrame#提醒条 {{
+    background: {"#3a2f1c" if 色.名称 == "深色" else "#fff6e5"};
+    border: 1px solid {"#5a4524" if 色.名称 == "深色" else "#f3dfb5"}; border-radius: 8px;
+}}
+QLabel#提醒文字 {{ color: {色.警告}; }}
+QPushButton#分段 {{ padding: 3px 9px; border-radius: 6px; font-size: 12px; min-height: 14px; }}
+QPushButton#分段:checked {{
+    background: {色.强调浅}; color: {色.强调文字}; border-color: {色.强调}; font-weight: 600;
+}}
+QListWidget#任务列表::item {{ padding: 5px 4px; }}
+QListWidget#设置导航::item {{ padding: 7px 10px; }}
 """

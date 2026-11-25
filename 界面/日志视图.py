@@ -23,6 +23,8 @@ class 日志视图(QTextBrowser):
         self.setLineWrapMode(QTextBrowser.WidgetWidth)
         self._色 = 色
         self.跟随 = True
+        # 自动跟随：滚动条在底部时跟随新日志，用户往上翻看时保持位置。
+        self.自动跟随 = False
         self._上次签名 = None
 
     def 应用配色(self, 色: 配色):
@@ -51,7 +53,9 @@ class 日志视图(QTextBrowser):
             )
         滚动条 = self.verticalScrollBar()
         原位置 = 滚动条.value()
+        在底部 = 原位置 >= 滚动条.maximum() - 4
         self.setHtml(
             '<table cellspacing="0" cellpadding="0" width="100%">' + "".join(行) + "</table>"
         )
-        滚动条.setValue(滚动条.maximum() if self.跟随 else 原位置)
+        跟随 = 在底部 if self.自动跟随 else self.跟随
+        滚动条.setValue(滚动条.maximum() if 跟随 else 原位置)

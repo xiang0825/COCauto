@@ -354,6 +354,15 @@ class 流程测试(unittest.TestCase):
         self.assertEqual(游戏.状态, "home")
         self.assertGreater(上下文.数据库.状态["部落竞赛检查记录"]["下次检查时间"], 0)
 
+    def test_接任务后记录积分和当前任务供界面显示(self):
+        游戏 = 模拟游戏(卡片=self.标准卡片())
+        任务, 上下文, _, _, _ = 构造任务(游戏)
+        self.assertTrue(任务.执行())
+        记录 = 上下文.数据库.状态["部落竞赛检查记录"]
+        self.assertEqual(记录["个人积分"], [3350, 10000])
+        self.assertGreater(记录["个人积分时间"], 0)
+        self.assertIn("300", 记录["当前任务"])
+
     def test_冷却期内不操作(self):
         游戏 = 模拟游戏(卡片=self.标准卡片())
         数据库 = 假数据库()

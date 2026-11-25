@@ -110,6 +110,34 @@ def 横排(*控件, 间距: int = 8, 拉伸在末尾: bool = False) -> QHBoxLayo
     return 布局
 
 
+class 省略标签(QLabel):
+    """单行文字，放不下时末尾显示“…”，完整内容在提示里。"""
+
+    def __init__(self, 文本: str = "", 父=None):
+        super().__init__(父)
+        self._全文 = ""
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.设置文本(文本)
+
+    def 设置文本(self, 文本: str):
+        if 文本 == self._全文:
+            return
+        self._全文 = 文本
+        self.setToolTip(文本)
+        self._更新()
+
+    def 全文(self) -> str:
+        return self._全文
+
+    def resizeEvent(self, 事件):
+        super().resizeEvent(事件)
+        self._更新()
+
+    def _更新(self):
+        宽 = max(10, self.width() - 2)
+        super().setText(self.fontMetrics().elidedText(self._全文, Qt.ElideRight, 宽))
+
+
 class 状态胶囊(QLabel):
     """● 运行中 这类带颜色圆点的状态标签。"""
 

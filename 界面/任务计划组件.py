@@ -1,27 +1,39 @@
-"""任务列表与任务设置（MAA 式：左侧勾选排序，中间按任务配置，自动保存）。"""
+"""任务列表与常用参数（MAA 式：左侧勾选排序，中间选中任务的常用参数，自动保存）。
+
+高级参数在「高级设置」窗口里编辑，但与这里共用同一个设置对象和保存入口，
+两边不会互相覆盖。
+"""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QFormLayout, QFrame, QGridLayout, QLineEdit, QListWidget,
-    QScrollArea, QSizePolicy,
-    QListWidgetItem, QPlainTextEdit, QPushButton, QToolButton, QVBoxLayout, QWidget,
+    QAbstractItemView, QFrame, QListWidget, QListWidgetItem, QMenu, QPushButton,
+    QScrollArea, QVBoxLayout, QWidget,
 )
 
 from 应用 import 任务计划 as 计划
+from 界面.参数表单 import 参数表单
 from 界面.组件 import 卡片, 标签, 横排
 
 _键角色 = Qt.UserRole + 1
 
+# 列表里用短名称，窄栏也不换行；完整名称在提示里。
+任务短名 = {
+    "event": "部落竞赛",
+    "building": "建议升级建筑",
+    "hero": "英雄/建筑升级",
+    "research": "兵种/法术研究",
+}
+
 
 class 任务计划组件:
-    """创建两张卡片：``任务卡``（勾选/排序）和 ``设置卡``（参数表单）。"""
+    """创建两张卡片：``任务卡``（勾选/排序）和 ``设置卡``（选中任务的常用参数）。"""
 
-    def __init__(self, 上下文):
+    def __init__(self, 上下文, 打开高级设置=None):
         self.上下文 = 上下文
+        self._打开高级设置 = 打开高级设置
         self._设置 = None
         self._当前页键 = "main_resource"
-        self._编辑器: dict[str, QWidget] = {}
         self._载入中 = False
         self.保存计时 = QTimer()
         self.保存计时.setSingleShot(True)
@@ -34,63 +46,46 @@ class 任务计划组件:
     def 控制器(self):
         return self.上下文.控制器
 
+    @property
+    def 设置(self):
+        return self._设置
+
+    @property
+    def _编辑器(self):
+        return self.表单.编辑器
+
     # ------------------------------------------------------------ 构建
     def _构建任务卡(self) -> 卡片:
-        卡 = 卡片("任务")
-        卡.setMinimumWidth(260)
-        卡.setMaximumWidth(320)
+        卡 = 卡片("任务", 边距=14)
+        卡.setMinimumWidth(190)
+        卡.setMaximumWidth(240)
         self.任务列表 = QListWidget()
+        self.任务列表.setObjectName("任务列表")
         self.任务列表.setDragDropMode(QAbstractItemView.InternalMove)
         self.任务列表.setDefaultDropAction(Qt.MoveAction)
+        self.任务列表.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.任务列表.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.任务列表.customContextMenuRequested.connect(self._右键菜单)
         self.任务列表.itemChanged.connect(self._任务勾选变化)
         self.任务列表.currentItemChanged.connect(self._选中任务)
         self.任务列表.model().rowsMoved.connect(lambda *_: self._安排保存("顺序已调整"))
-        卡.布局.addWidget(self.任务列表, 3)
-        上移 = QToolButton(); 上移.setText("↑"); 上移.setToolTip("上移"); 上移.clicked.connect(lambda: self._移动(-1))
-        下移 = QToolButton(); 下移.setText("↓"); 下移.setToolTip("下移"); 下移.clicked.connect(lambda: self._移动(1))
-        全选 = QToolButton(); 全选.setText("全选"); 全选.clicked.connect(lambda: self._全部勾选(True))
-        清空 = QToolButton(); 清空.setText("清空"); 清空.clicked.connect(lambda: self._全部勾选(False))
-        卡.布局.addLayout(横排(上移, 下移, None, 全选, 清空, 间距=4))
-        卡.布局.addWidget(标签("拖动或用箭头调整执行顺序", "弱"))
-
-        卡.布局.addWidget(标签("通用设置", "卡片标题"))
-        self.选项列表 = QListWidget()
-        self.选项列表.currentItemChanged.connect(self._选中选项)
-        for 键 in 计划.全局配置键:
-            项 = QListWidgetItem(f"⚙  {计划.任务参数表[键].标题}")
-            项.setData(_键角色, 键)
-            self.选项列表.addItem(项)
-        self.选项列表.setFixedHeight(len(计划.全局配置键) * 38 + 6)
-        卡.布局.addWidget(self.选项列表)
-        self.服务器 = QComboBox()
-        self.服务器.addItems(计划.服务器选项)
-        self.服务器.currentTextChanged.connect(lambda _: self._安排保存("服务器已修改"))
-        卡.布局.addLayout(横排(标签("服务器", "次要"), self.服务器, None))
+        卡.布局.addWidget(self.任务列表, 1)
+        卡.布局.addWidget(标签("拖动调整顺序 · 右键全选/清空", "弱", 换行=True))
+        卡.布局.addWidget(标签("启动游戏、收集资源总会先执行", "弱", 换行=True))
         return 卡
 
     def _构建设置卡(self) -> 卡片:
-        卡 = 卡片()
+        卡 = 卡片(边距=14)
+        卡.setMinimumWidth(250)
         self.参数标题 = 标签("任务设置", "卡片标题")
-        self.参数说明 = 标签("", "次要", 换行=True)
+        self.参数说明 = 标签("", "弱", 换行=True)
         卡.布局.addWidget(self.参数标题)
         卡.布局.addWidget(self.参数说明)
-        # 参数多的页（兵种选择）会超出卡片高度：表单和提示放进可纵向滚动的区域。
+        self.表单 = 参数表单(self._安排保存, 多选列数=1)
         内容 = QWidget()
-        # 宽度跟随可视区域（不横向滚动）；表单行过长时字段换到标签下方。
-        内容.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         内容布局 = QVBoxLayout(内容)
-        内容布局.setContentsMargins(0, 0, 6, 0)
-        self._表单容器 = QWidget()
-        self._表单 = QFormLayout(self._表单容器)
-        self._表单.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self._表单.setHorizontalSpacing(14)
-        self._表单.setVerticalSpacing(12)
-        self._表单.setRowWrapPolicy(QFormLayout.WrapLongRows)
-        self._表单.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        内容布局.addWidget(self._表单容器)
-        self._提示区 = QVBoxLayout()
-        内容布局.addLayout(self._提示区)
-        内容布局.addStretch(1)
+        内容布局.setContentsMargins(0, 0, 8, 0)
+        内容布局.addWidget(self.表单)
         self._参数滚动区 = QScrollArea()
         self._参数滚动区.setWidgetResizable(True)
         self._参数滚动区.setFrameShape(QFrame.NoFrame)
@@ -98,10 +93,11 @@ class 任务计划组件:
         self._参数滚动区.setWidget(内容)
         卡.布局.addWidget(self._参数滚动区, 1)
         self.状态 = 标签("修改会自动保存", "弱", 换行=True)
-        立即保存 = QPushButton("立即保存")
-        立即保存.clicked.connect(self.保存)
-        卡.布局.addLayout(横排(self.状态, None, 立即保存))
-        卡.布局.addWidget(标签("启动游戏、登录检查和收集资源是固定步骤，总会先执行。", "弱", 换行=True))
+        更多 = QPushButton("更多参数 ›")
+        更多.setObjectName("链接")
+        更多.setToolTip("在高级设置里编辑其余参数")
+        更多.clicked.connect(self._更多参数)
+        卡.布局.addLayout(横排(self.状态, None, 更多))
         return 卡
 
     # ------------------------------------------------------------ 载入
@@ -109,7 +105,6 @@ class 任务计划组件:
         self._载入中 = True
         try:
             self._设置 = self.控制器.获取设置()
-            self.服务器.setCurrentText(getattr(self._设置, "服务器", "国际服") or "国际服")
             self._重建任务列表()
             self._显示参数页(self._当前页键)
             self.状态.setText("修改会自动保存")
@@ -121,13 +116,13 @@ class 任务计划组件:
         self.任务列表.blockSignals(True)
         self.任务列表.clear()
         for 行 in 计划.任务行列表(self._设置):
-            项 = QListWidgetItem(行.名称)
+            项 = QListWidgetItem(任务短名.get(行.键, 行.名称))
             项.setData(_键角色, 行.键)
             项.setFlags(项.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled)
             项.setCheckState(Qt.Checked if 行.已启用 else Qt.Unchecked)
-            提示 = 行.说明
+            提示 = f"{行.名称}：{行.说明}"
             if 行.类型 in ("list", "string"):
-                提示 += "\n需要在任务设置中填写目标后才会执行。"
+                提示 += "\n需要先填写目标才会执行。"
             项.setToolTip(提示)
             self.任务列表.addItem(项)
             if 行.键 == 当前键:
@@ -139,24 +134,18 @@ class 任务计划组件:
         return self.保存计时.isActive()
 
     # ------------------------------------------------------------ 交互
+    def 选择任务(self, 键: str) -> bool:
+        for 行 in range(self.任务列表.count()):
+            if self.任务列表.item(行).data(_键角色) == 键:
+                self.任务列表.setCurrentRow(行)
+                return True
+        return False
+
     def _选中任务(self, 当前, _之前):
         if 当前 is None:
             return
-        self.选项列表.blockSignals(True)
-        self.选项列表.setCurrentItem(None)
-        self.选项列表.blockSignals(False)
-        self._切换参数页(当前.data(_键角色))
-
-    def _选中选项(self, 当前, _之前):
-        if 当前 is None:
-            return
-        self.任务列表.blockSignals(True)
-        self.任务列表.setCurrentItem(None)
-        self.任务列表.blockSignals(False)
-        self._切换参数页(当前.data(_键角色))
-
-    def _切换参数页(self, 键):
-        if 键 == self._当前页键 and self._编辑器:
+        键 = 当前.data(_键角色)
+        if 键 == self._当前页键 and self.表单.页 is not None:
             return
         if self.保存计时.isActive():
             self.保存()
@@ -172,6 +161,15 @@ class 任务计划组件:
                 self.状态.setText(f"请为“{计划.任务参数表[键].标题}”填写目标，填写后即启用")
         self._安排保存("任务开关已修改")
 
+    def _右键菜单(self, 位置):
+        菜单 = QMenu(self.任务列表)
+        菜单.addAction("全部勾选", lambda: self._全部勾选(True))
+        菜单.addAction("全部取消", lambda: self._全部勾选(False))
+        菜单.addSeparator()
+        菜单.addAction("上移", lambda: self._移动(-1))
+        菜单.addAction("下移", lambda: self._移动(1))
+        菜单.exec(self.任务列表.viewport().mapToGlobal(位置))
+
     def _全部勾选(self, 勾选: bool):
         self._载入中 = True
         for 行 in range(self.任务列表.count()):
@@ -184,135 +182,27 @@ class 任务计划组件:
         新行 = 行 + 方向
         if 行 < 0 or not 0 <= 新行 < self.任务列表.count():
             return
+        self.任务列表.blockSignals(True)
         项 = self.任务列表.takeItem(行)
         self.任务列表.insertItem(新行, 项)
         self.任务列表.setCurrentRow(新行)
+        self.任务列表.blockSignals(False)
         self._安排保存("顺序已调整")
 
-    # ------------------------------------------------------------ 表单
-    def _清空表单(self):
-        while self._表单.rowCount():
-            self._表单.removeRow(0)
-        while self._提示区.count():
-            项 = self._提示区.takeAt(0)
-            if 项.widget():
-                项.widget().hide()
-                项.widget().deleteLater()
-        self._编辑器.clear()
+    def _更多参数(self):
+        if self._打开高级设置 is not None:
+            self._打开高级设置(self._当前页键)
 
+    # ------------------------------------------------------------ 表单
     def _显示参数页(self, 键):
         self._当前页键 = 键
-        self._清空表单()
-        页 = 计划.任务参数表.get(键)
+        页 = 计划.主界面参数表.get(键)
         if self._设置 is None or 页 is None:
+            self.表单.清空()
             return
         self.参数标题.setText(页.标题)
         self.参数说明.setText(页.说明)
-        if not 页.字段:
-            self._提示区.addWidget(标签("该任务没有额外参数，勾选左侧即可启用。", "弱"))
-        for 字段 in 页.字段:
-            编辑器 = self._创建编辑器(字段)
-            self._编辑器[字段.字段] = 编辑器
-            self._表单.addRow("" if 字段.类型 == "bool" else 字段.标签, 编辑器)
-            if 字段.提示:
-                self._表单.addRow("", 标签(字段.提示, "弱", 换行=True))
-        if 键 == "notification":
-            测试按钮 = QPushButton("发送测试桌面通知")
-            测试按钮.setToolTip("立即在屏幕右下角弹一条测试通知（不节流、不影响脚本运行）")
-            测试按钮.clicked.connect(self._发送测试桌面通知)
-            self._表单.addRow("", 测试按钮)
-        for 文本 in 页.提示:
-            self._提示区.addWidget(标签(文本, "提示条", 换行=True))
-
-    def _发送测试桌面通知(self):
-        try:
-            from 工具包.桌面通知 import 发送测试通知
-
-            成功 = 发送测试通知()
-        except Exception:
-            成功 = False
-        提示 = getattr(self.上下文, "提示", None)
-        if callable(提示):
-            try:
-                提示("已发送测试桌面通知" if 成功 else "测试桌面通知发送失败")
-            except Exception:
-                pass
-
-    def _创建编辑器(self, 字段: 计划.参数字段) -> QWidget:
-        值 = 字段.当前值(self._设置)
-        if 字段.类型 == "bool":
-            控件 = QCheckBox(字段.标签)
-            控件.setChecked(bool(值))
-            控件.toggled.connect(lambda _=None: self._安排保存())
-        elif 字段.类型 == "choice":
-            控件 = QComboBox()
-            # 选项文字较长（阵容预设名）时不撑宽表单，否则下拉箭头会被裁掉。
-            控件.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-            控件.setMinimumContentsLength(8)
-            控件.addItems(list(字段.选项))
-            if 值 and str(值) not in 字段.选项:
-                控件.addItem(str(值))
-            控件.setCurrentText(str(值 or ""))
-            控件.currentTextChanged.connect(lambda _=None: self._安排保存())
-        elif 字段.类型 == "multi":
-            from 任务流程.军队配置 import 兵种资料
-            # 兵种多，放进固定高度的滚动区，避免把表单行挤扁。
-            控件 = QScrollArea()
-            控件.setWidgetResizable(True)
-            控件.setFrameShape(QFrame.NoFrame)
-            # 兵种多给高一点，法术少给低一点，两个列表加上下拉框要放进同一张卡片。
-            控件.setFixedHeight(190 if len(字段.选项) > 20 else 130)
-            控件.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            内容 = QWidget()
-            网格 = QGridLayout(内容)
-            网格.setContentsMargins(0, 0, 8, 0)
-            网格.setHorizontalSpacing(12)
-            网格.setVerticalSpacing(6)
-            控件.setWidget(内容)
-            控件.勾选框 = {}
-            已选 = set(值 or [])
-            for 序号, 名称 in enumerate(字段.选项):
-                框 = QCheckBox(兵种资料.显示名(名称))
-                职责 = 兵种资料.职责(名称)
-                法术职责 = 兵种资料.法术职责(名称)
-                if 职责:
-                    框.setToolTip(f"{职责}：{兵种资料.职责说明[职责]}")
-                elif 法术职责:
-                    框.setToolTip(f"{法术职责}：{兵种资料.法术职责说明[法术职责]}")
-                框.setChecked(名称 in 已选)
-                框.toggled.connect(lambda _=None: self._安排保存())
-                网格.addWidget(框, 序号, 0)
-                控件.勾选框[名称] = 框
-        elif 字段.类型 == "list":
-            控件 = QPlainTextEdit(str(值 or ""))
-            控件.setFixedHeight(72)
-            控件.setPlaceholderText("例如：弓箭塔、加农炮")
-            控件.textChanged.connect(lambda: self._安排保存())
-        else:
-            控件 = QLineEdit("" if 值 is None else str(值))
-            if 字段.类型 == "secret":
-                控件.setEchoMode(QLineEdit.Password)
-                控件.setPlaceholderText("粘贴 Token")
-            if 字段.类型 in ("int", "float"):
-                控件.setMaximumWidth(200)
-                控件.setAlignment(Qt.AlignRight)
-            控件.textEdited.connect(lambda _=None: self._安排保存())
-        return 控件
-
-    def _表单值(self) -> dict:
-        值 = {}
-        for 名称, 控件 in self._编辑器.items():
-            if hasattr(控件, "勾选框"):
-                值[名称] = [项 for 项, 框 in 控件.勾选框.items() if 框.isChecked()]
-            elif isinstance(控件, QCheckBox):
-                值[名称] = 控件.isChecked()
-            elif isinstance(控件, QComboBox):
-                值[名称] = 控件.currentText()
-            elif isinstance(控件, QPlainTextEdit):
-                值[名称] = 控件.toPlainText()
-            else:
-                值[名称] = 控件.text()
-        return 值
+        self.表单.显示(页, self._设置)
 
     # ------------------------------------------------------------ 保存
     def _安排保存(self, 说明: str = ""):
@@ -321,24 +211,26 @@ class 任务计划组件:
         self.状态.setText((说明 + "，" if 说明 else "") + "正在保存…")
         self.保存计时.start()
 
+    def _写入任务列表(self, 设置):
+        顺序 = []
+        for 行 in range(self.任务列表.count()):
+            项 = self.任务列表.item(行)
+            键 = 项.data(_键角色)
+            顺序.append(键)
+            计划.设置任务开关(设置, 键, 项.checkState() == Qt.Checked)
+        if 顺序:
+            设置.任务计划顺序 = 顺序
+
     def 保存(self) -> bool:
         self.保存计时.stop()
         if self._设置 is None:
             return False
         设置 = self._设置
         try:
-            if self._当前页键 in 计划.任务参数表:
-                计划.应用参数(设置, self._当前页键, self._表单值())
-            顺序 = []
-            for 行 in range(self.任务列表.count()):
-                项 = self.任务列表.item(行)
-                键 = 项.data(_键角色)
-                顺序.append(键)
-                计划.设置任务开关(设置, 键, 项.checkState() == Qt.Checked)
-            if 顺序:
-                设置.任务计划顺序 = 顺序
-            设置.服务器 = self.服务器.currentText() or "国际服"
-            self.控制器.保存设置(设置)
+            if self._当前页键 in 计划.主界面参数表 and self.表单.页 is not None:
+                计划.应用参数(设置, self._当前页键, self.表单.表单值())
+            self._写入任务列表(设置)
+            self.控制器.保存任务设置(设置)
         except ValueError as 异常:
             self.状态.setText(f"未保存：{异常}")
             return False
@@ -346,15 +238,42 @@ class 任务计划组件:
             self.状态.setText(f"保存失败：{异常}")
             self.上下文.记录操作(f"任务设置保存失败：{异常}")
             return False
-        self.状态.setText("已自动保存")
+        self.状态.setText("✓ 已自动保存")
         self.上下文.记录操作("任务设置已保存")
-        # 同步 list/string 任务的真实启用状态（目标为空时不会启用）。
+        self._同步启用状态()
+        return True
+
+    def 保存外部修改(self, 修改) -> str | None:
+        """高级设置窗口用：在同一个设置对象上应用 ``修改(设置)`` 并保存，失败返回原因。"""
+        if self._设置 is None:
+            return "设置尚未载入"
+        if self.保存计时.isActive():
+            self.保存()
+        try:
+            修改(self._设置)
+            self.控制器.保存任务设置(self._设置)
+        except ValueError as 异常:
+            return str(异常)
+        except Exception as 异常:
+            self.上下文.记录操作(f"高级设置保存失败：{异常}")
+            return f"保存失败：{异常}"
+        self.上下文.记录操作("高级设置已保存")
+        # 主界面表单可能显示同一字段（如资源打满后动作），重新渲染保持一致。
+        self._载入中 = True
+        try:
+            self._显示参数页(self._当前页键)
+        finally:
+            self._载入中 = False
+        return None
+
+    def _同步启用状态(self):
+        """同步 list/string 任务的真实启用状态（目标为空时不会启用）。"""
         缺目标 = []
         self._载入中 = True
         try:
             for 行 in range(self.任务列表.count()):
                 项 = self.任务列表.item(行)
-                启用 = 计划.任务计划是否启用(设置, 项.data(_键角色))
+                启用 = 计划.任务计划是否启用(self._设置, 项.data(_键角色))
                 if 项.checkState() == Qt.Checked and not 启用:
                     缺目标.append(项.text())
                 项.setCheckState(Qt.Checked if 启用 else Qt.Unchecked)
@@ -362,4 +281,3 @@ class 任务计划组件:
             self._载入中 = False
         if 缺目标:
             self.状态.setText(f"已保存；“{'、'.join(缺目标)}”需要先填写目标才会启用")
-        return True

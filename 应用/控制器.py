@@ -13,6 +13,7 @@ import threading
 import time
 from dataclasses import dataclass
 
+from 数据库 import 今日统计
 from 数据库.任务数据库 import 任务数据库, 机器人设置
 from 应用.任务计划 import 已启用任务名称
 
@@ -65,6 +66,7 @@ class 运行快照:
     已选任务: tuple[str, ...]
     最近日志: str
     最近日志时间: float | None = None
+    已运行秒: float | None = None
 
     @property
     def 设备描述(self) -> str:
@@ -75,6 +77,22 @@ class 运行快照:
         return "未配置"
 
 
+@dataclass(frozen=True)
+class 今日概况:
+    今日: 今日统计.今日数据
+    竞赛: dict
+
+    @property
+    def 竞赛积分(self) -> tuple[int, int] | None:
+        积分 = self.竞赛.get("个人积分")
+        if isinstance(积分, (list, tuple)) and len(积分) == 2:
+            try:
+                return int(积分[0]), int(积分[1])
+            except (TypeError, ValueError):
+                return None
+        return None
+
+
 class 应用控制器:
     """包装 ``机器人监控中心``，只暴露一个游戏实例。所有方法可在界面线程调用。"""
 
@@ -83,6 +101,8 @@ class 应用控制器:
         self.数据库 = 数据库 or getattr(监控中心, "数据库", None) or 任务数据库()
         self.实例ID = 默认实例ID
         self._设置缓存: tuple[float, 机器人设置] | None = None
+        self._开始时间: float | None = None
+        self._概况缓存: tuple[float, 今日概况] | None = None
 
     # ---------------------------------------------------------- 初始化
     def 准备(self) -> str:
@@ -104,6 +124,22 @@ class 应用控制器:
     # ---------------------------------------------------------- 设置
     def 获取设置(self) -> 机器人设置:
         return self.数据库.获取机器人设置(self.实例ID)
+
+    # 连接字段只由设备服务和引擎（自动绑定模拟器）直接写库；界面手里的设置对象
+    # 可能是很久以前载入的，保存任务参数时不能把较新的连接信息改回去。
+    连接字段 = ("ADB路径", "ADB自动检测路径", "ADB设备序列号", "ADB已确认模拟器")
+
+    def 保存任务设置(self, 设置: 机器人设置) -> None:
+        """界面保存任务参数用：连接字段沿用库里的最新值，其余按传入对象保存。"""
+        try:
+            库中 = self.数据库.获取机器人设置(self.实例ID)
+        except Exception:
+            库中 = None
+        if 库中 is not None:
+            for 字段 in self.连接字段:
+                if hasattr(库中, 字段):
+                    setattr(设置, 字段, getattr(库中, 字段))
+        self.保存设置(设置)
 
     def 保存设置(self, 设置: 机器人设置) -> None:
         post = getattr(设置, "__post_init__", None)
@@ -134,6 +170,7 @@ class 应用控制器:
         if self._实例 is None:
             raise RuntimeError("控制台尚未初始化完成")
         self.监控中心.启动机器人(self.实例ID)
+        self._开始时间 = time.time()
 
     def 暂停(self) -> None:
         if self._实例 is not None:
@@ -198,7 +235,23 @@ class 应用控制器:
             已选任务=tuple(已启用任务名称(设置)),
             最近日志=(str(日志.日志内容)[:200] if 日志 else ""),
             最近日志时间=(float(日志.记录时间) if 日志 else None),
+            已运行秒=(
+                time.time() - self._开始时间
+                if self._开始时间 is not None and self.状态 != 状态已停止 else None
+            ),
         )
+
+    def 今日概况(self, 最长秒: float = 5.0) -> "今日概况":
+        """今日战斗/收益与部落竞赛进度；界面每秒调用，内部最多每 5 秒查一次库。"""
+        现在 = time.monotonic()
+        if self._概况缓存 and 现在 - self._概况缓存[0] < 最长秒:
+            return self._概况缓存[1]
+        概况 = 今日概况(
+            今日=今日统计.读取今日(self.数据库, self.实例ID),
+            竞赛=今日统计.读取部落竞赛(self.数据库, self.实例ID),
+        )
+        self._概况缓存 = (现在, 概况)
+        return 概况
 
     def 关闭(self) -> None:
         try:

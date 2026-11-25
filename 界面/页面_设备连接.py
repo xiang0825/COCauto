@@ -24,7 +24,7 @@ class 设备连接页(页面基类):
     标题 = "模拟器连接"
     说明 = "点“一键检测并连接”即可：自动找到模拟器、连上 ADB，并选出正在运行部落冲突的那台。"
 
-    def __init__(self, 上下文):
+    def __init__(self, 上下文, 纵向: bool = False):
         super().__init__(上下文)
         self._机器人ID = None
         self._服务 = 设备服务(上下文.控制器.数据库)
@@ -35,19 +35,25 @@ class 设备连接页(页面基类):
         self._进度 = _进度信号()
         self._进度.文本.connect(self._追加检测日志, Qt.QueuedConnection)
 
-        主体 = QHBoxLayout()
+        # 纵向：嵌在高级设置窗口里时，预览放到下方，避免横向滚动。
+        主体 = QVBoxLayout() if 纵向 else QHBoxLayout()
         主体.setSpacing(16)
         左 = QVBoxLayout()
         左.setSpacing(16)
         左.addWidget(self._构建一键卡())
         左.addWidget(self._构建高级卡())
-        左.addStretch(1)
+        if not 纵向:
+            左.addStretch(1)
         左容器 = QWidget()
         左容器.setLayout(左)
-        左容器.setMinimumWidth(430)
-        左容器.setMaximumWidth(520)
+        if not 纵向:
+            左容器.setMinimumWidth(430)
+            左容器.setMaximumWidth(520)
         主体.addWidget(左容器)
-        主体.addWidget(self._构建预览卡(), 1)
+        预览 = self._构建预览卡()
+        if 纵向:
+            预览.setMinimumHeight(320)
+        主体.addWidget(预览, 1)
         self.布局.addLayout(主体, 1)
 
     # ================================================================ 构建

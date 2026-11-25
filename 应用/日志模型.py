@@ -286,6 +286,15 @@ class 日志聚合器:
         异常数 = sum(1 for 项 in 全部 if 推断级别(项.内容, 项.级别) != 级别正常)
         return 渲染结果(tuple(合并[-上限:]), 模式, len(过滤), 异常数, len(全部))
 
+    def 最近异常(self, 晚于: float) -> 日志条目 | None:
+        """晚于给定时间的最新一条警告/错误（主界面提醒条用）。"""
+        for 项 in reversed(self.全部条目()):
+            if 项.时间戳 <= 晚于:
+                return None
+            if 项.机器人ID != "系统" and 推断级别(项.内容, 项.级别) != 级别正常:
+                return 项
+        return None
+
     def 当前阶段(self, 机器人ID: str, 最长秒: float = 300) -> str | None:
         """机器人最近一条关键状态；超过时限视为过期。"""
         最新 = self.最新阶段.get(机器人ID)
