@@ -1,5 +1,7 @@
 # CoC Desktop Reliability and Mobile Control Design
 
+> **历史方案，已被主线取代。** 手机控制已在 `8f5276a` 中移除；本文中的 Tkinter、手机配对和远程控制计划不是当前功能或支持路线。普通使用者请使用 Windows 发布 exe。
+
 ## Intent
 
 Make the existing Windows CoC controller dependable during real matches, publish every verified release with matching source and a clear download, and then provide an Android app that can launch CoC on the phone and control the Windows agent without exposing the agent to the public internet.

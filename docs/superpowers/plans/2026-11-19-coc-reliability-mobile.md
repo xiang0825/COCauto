@@ -1,5 +1,7 @@
 # CoC Reliability and Mobile Control Implementation Plan
 
+> **历史计划，已被主线取代。** 手机控制与旧启动方案已在 `8f5276a` 中移除；本文仅留作历史记录，不代表当前实现或待执行工作。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans. Steps use checkbox syntax.
 
 **Goal:** Stabilize and publish the Windows controller, then add a paired Android client that launches CoC on the phone and controls the Windows agent.
