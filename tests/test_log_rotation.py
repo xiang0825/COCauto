@@ -4,6 +4,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from 数据库.任务数据库 import 任务数据库
@@ -50,6 +51,36 @@ class 日志轮转测试(unittest.TestCase):
         self.assertEqual(导出并清空任务日志(self.路径), 1)
         self.assertEqual(len((self.目录 / "上次日志.bak.jsonl").read_text(encoding="utf-8").splitlines()), 1)
         self.assertEqual(sorted(p.name for p in self.目录.glob("上次日志*")), ["上次日志.bak.jsonl"])
+
+    def test_导出失败时清理残留临时文件且不删日志不动旧备份(self):
+        备份 = self.目录 / "上次日志.bak.jsonl"
+        备份.write_text("旧备份\n", encoding="utf-8")
+        from 数据库 import 日志轮转
+
+        原函数 = 日志轮转.json.dumps
+        计数 = [0]
+
+        def 写到一半失败(*参数, **关键字):
+            计数[0] += 1
+            if 计数[0] == 2:
+                raise OSError("磁盘满")
+            return 原函数(*参数, **关键字)
+
+        with unittest.mock.patch.object(日志轮转.json, "dumps", 写到一半失败):
+            with self.assertRaises(OSError):
+                导出并清空任务日志(self.路径)
+        self.assertFalse((self.目录 / "上次日志.bak.jsonl.tmp").exists())
+        self.assertEqual(备份.read_text(encoding="utf-8"), "旧备份\n")
+        self.assertEqual(self._计数("任务日志"), 3)
+        # 其他文件都不碰。
+        self.assertIn("任务系统.db", [p.name for p in self.目录.iterdir()])
+
+    def test_替换失败时也清理临时文件(self):
+        with unittest.mock.patch("数据库.日志轮转.os.replace", side_effect=PermissionError("占用")):
+            with self.assertRaises(PermissionError):
+                导出并清空任务日志(self.路径)
+        self.assertFalse((self.目录 / "上次日志.bak.jsonl.tmp").exists())
+        self.assertEqual(self._计数("任务日志"), 3)
 
     def test_只压缩一次(self):
         导出并清空任务日志(self.路径)
