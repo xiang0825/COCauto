@@ -64,6 +64,35 @@ class 人工安全恢复等待测试(unittest.TestCase):
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
+    def test_BuilderBase人工恢复要求连续两帧夜世界主页(self):
+        机器人 = self._创建机器人()
+        主页 = self._页面("主世界主页", "主世界", 0.78)
+        夜页 = self._页面("夜世界主页", "夜世界", 0.78)
+        页面序列 = [主页, 主页, 夜页, 夜页]
+        调用次数 = 0
+
+        def 读取页面(**_参数):
+            nonlocal 调用次数
+            调用次数 += 1
+            if 调用次数 > len(页面序列):
+                机器人.停止事件.set()
+            return 页面序列[min(调用次数 - 1, len(页面序列) - 1)]
+
+        上下文 = SimpleNamespace(
+            _待命恢复世界="夜世界",
+            识别点击画面=Mock(side_effect=读取页面),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+
+        self.assertTrue(机器人._等待人工恢复主世界(上下文, Mock()))
+        self.assertEqual(上下文.识别点击画面.call_count, 4)
+        self.assertFalse(上下文._主世界战斗模式选择页)
+        self.assertTrue(any(
+            "连续2帧确认夜世界主页" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
     def test_连续确认新版主世界战斗模式页后交回任务流程(self):
         机器人 = self._创建机器人()
         模式页 = self._页面("主世界战斗模式选择", "主世界", 0.96)
@@ -321,6 +350,46 @@ class 人工安全恢复等待测试(unittest.TestCase):
             "资源已从满仓状态下降" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
+
+    def test_BuilderBase满仓待机复核夜世界资源并在下降时恢复(self):
+        机器人 = self._创建机器人()
+        机器人.机器人标志 = "robot_1"
+        延时次数 = 0
+
+        def 待机延时(_毫秒):
+            nonlocal 延时次数
+            延时次数 += 1
+            if 延时次数 >= 3:
+                机器人.停止事件.set()
+
+        上下文 = SimpleNamespace(
+            停止事件=机器人.停止事件,
+            _待命恢复世界="夜世界",
+            _夜世界大本营等级=7,
+            页面恢复失败=False,
+            机器人标志="robot_1",
+            识别点击画面=Mock(return_value=self._页面("夜世界主页", "夜世界", 0.78)),
+            数据库=SimpleNamespace(
+                获取最新完整状态=Mock(return_value=SimpleNamespace(状态数据={
+                    "夜世界资源": {
+                        "金币": 2_000_000,
+                        "圣水": 2_000_000,
+                        "识别成功": True,
+                    }
+                })),
+            ),
+            置脚本状态=Mock(),
+            脚本延时=Mock(side_effect=待机延时),
+        )
+
+        with patch("线程.自动化机器人.更新夜世界资源状态任务") as 更新夜资源, \
+                patch("线程.自动化机器人.更新家乡资源状态任务") as 更新家乡资源:
+            更新夜资源.return_value.执行.return_value = True
+            结果 = 机器人._满仓待机并监测断线(上下文, Mock())
+
+        self.assertTrue(结果)
+        更新夜资源.return_value.执行.assert_called_once_with()
+        更新家乡资源.return_value.执行.assert_not_called()
 
     def test_自动重连失败后仍只读待命并在人工回主页后接续(self):
         机器人 = self._创建机器人()

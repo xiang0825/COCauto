@@ -401,7 +401,8 @@ class 寻找建筑(夜世界基础任务):
                 # 国际服会记住上次英雄列表滚动位置，但大多数情况下目标
                 # 已经在首次画面中。先做一次 OCR 再回顶部，避免 MuMu 的
                 # 多次 display 专属滑动和前台护栏把任务卡在“识别中”。
-                self._重置英雄殿堂滚动位置()
+                if self._重置英雄殿堂滚动位置() is False:
+                    return False
                 continue
             self._滑动英雄殿堂()
 
@@ -411,19 +412,54 @@ class 寻找建筑(夜世界基础任务):
         )
         return False
 
-    def _重置英雄殿堂滚动位置(self):
+    def _重置英雄殿堂滚动位置(self) -> bool:
         """把记忆中的英雄列表位置安全拖回顶部。"""
-        鼠标 = self.上下文.鼠标
+        上下文 = getattr(self, "上下文", None)
+        if 上下文 is None:
+            return False
+        鼠标 = getattr(上下文, "鼠标", None)
+        停止事件 = getattr(上下文, "停止事件", None)
+        继续事件 = getattr(上下文, "继续事件", None)
+        脚本延时 = getattr(上下文, "脚本延时", None)
+        if not all(callable(getattr(鼠标, 方法, None)) for 方法 in (
+            "移动到", "左键按下", "移动相对位置", "左键抬起"
+        )) or not all(callable(getattr(事件, "is_set", None)) for 事件 in (
+            停止事件, 继续事件
+        )) or not callable(脚本延时):
+            return False
+
+        def 已停止或暂停() -> bool:
+            try:
+                return 停止事件.is_set() or not 继续事件.is_set()
+            except Exception:
+                return True
+
+        if 已停止或暂停():
+            return False
         # 面板高度约为逻辑画布的 y=80..460；向下拖动只会回到列表
         # 顶部，不会触及主世界地图或任何资源/宝石按钮。
         for _ in range(4):
+            if 已停止或暂停():
+                return False
             鼠标.移动到(700, 150)
-            鼠标.左键按下()
-            for _ in range(32):
-                鼠标.移动相对位置(0, 8)
-                self.上下文.脚本延时(5)
-            鼠标.左键抬起()
-            self.上下文.脚本延时(180)
+            if 已停止或暂停():
+                return False
+            if 鼠标.左键按下() is False:
+                return False
+            try:
+                for _ in range(32):
+                    if 已停止或暂停():
+                        return False
+                    鼠标.移动相对位置(0, 8)
+                    脚本延时(5)
+                if 已停止或暂停():
+                    return False
+            finally:
+                鼠标.左键抬起()
+            if 已停止或暂停():
+                return False
+            脚本延时(180)
+        return True
 
     def _英雄殿堂已打开(self) -> bool:
         """仅用英雄殿堂标题/英雄卡片确认页面，避免主世界误判。"""
@@ -544,6 +580,8 @@ class 寻找建筑(夜世界基础任务):
         # 点击日志的短超时。
         扫描监控超时秒 = getattr(self, "_建筑扫描监控超时秒", 180)
         随机半径 = random.randint(0, 5)
+        上轮OCR文本 = None
+        连续OCR无变化轮数 = 0
 
         try:
             最大扫描轮数 = max(1, int(self.建筑扫描最大轮数))
@@ -583,6 +621,12 @@ class 寻找建筑(夜世界基础任务):
                 return False
             ocr结果 = self.执行OCR识别(self.建造面板OCR区域)
 
+            当前OCR文本 = tuple(
+                str(项[1] or "").replace(" ", "").replace("\n", "")
+                for 项 in ocr结果 or []
+                if isinstance(项, (list, tuple)) and len(项) > 1
+            )
+
             建筑列表 = []
 
             for 项 in ocr结果:
@@ -602,8 +646,15 @@ class 寻找建筑(夜世界基础任务):
                 self.上下文.脚本延时(1500)
                 return True
 
-            if "升级中" in str(ocr结果):
-                self.上下文.置脚本状态("到顶了")
+            if 当前OCR文本 == 上轮OCR文本:
+                连续OCR无变化轮数 += 1
+            else:
+                连续OCR无变化轮数 = 0
+            上轮OCR文本 = 当前OCR文本
+            if 连续OCR无变化轮数 >= 2:
+                self.上下文.置脚本状态(
+                    "建筑升级面板连续两轮 OCR 文本无变化，确认列表已到边界"
+                )
                 break
 
             try:
@@ -635,7 +686,12 @@ class 寻找建筑(夜世界基础任务):
                     "建筑扫描OCR后收到停止请求，禁止继续滑动当前页面"
                 )
                 return False
-            self.滑动屏幕(随机半径)
+            if self.滑动屏幕(随机半径) is False:
+                self.安全跳过 = True
+                self.上下文.置脚本状态(
+                    "建筑面板继续扫描滑动未被安全输入层接受，停止后续操作"
+                )
+                return False
             self.上下文.置脚本状态(f"滑动屏幕，继续查找")
         else:
             self.上下文.置脚本状态(
@@ -754,66 +810,74 @@ class 寻找建筑(夜世界基础任务):
 
     def 滑动到建筑栏底部(self):
         """模拟进入建筑界面的滑动动作"""
-        设备 = getattr(getattr(self.上下文, "op", None), "设备", None)
+        if not self._执行新版建造面板滑动((700, 440), (700, 140)):
+            return False
+        self.上下文.脚本延时(250)
+        return True
+
+    def 滑动屏幕(self, 随机半径: int):
+        """只在新版右侧建筑/英雄面板内滑动，继续查找被遮住的项目。"""
+        偏移 = max(-5, min(5, int(随机半径 or 0)))
+        起点 = (700 + 偏移, 140 + 偏移)
+        终点 = (700 + 偏移, 440 + 偏移)
+        if not self._执行新版建造面板滑动(起点, 终点):
+            return False
+        self.上下文.脚本延时(random.randint(1000, 1500))
+        return True
+
+    def _执行新版建造面板滑动(
+        self, 起点: tuple[int, int], 终点: tuple[int, int]
+    ) -> bool:
+        """通过右侧建造面板内的单一手势滚动，避免拖动村庄地图。"""
+        停止事件 = getattr(self.上下文, "停止事件", None)
+        if 停止事件 is not None and 停止事件.is_set():
+            return False
         允许输入 = getattr(self.上下文, "输入前安全检查", None)
+        if callable(允许输入):
+            try:
+                if 允许输入():
+                    return False
+            except Exception as 异常:
+                self.上下文.置脚本状态(f"建筑面板滑动前安全检查失败：{异常}")
+                return False
+
+        设备 = getattr(getattr(self.上下文, "op", None), "设备", None)
         快速滑动 = getattr(设备, "滑动", None)
         if callable(快速滑动):
-            # ADB 模式直接发送一条设备级滑动；逐点移动会让每个 5ms
-            # 延时触发页面维护 OCR，在 MuMu 上把一次滑动放大成几十秒。
-            if callable(允许输入):
-                try:
-                    if 允许输入():
-                        return False
-                except Exception as 异常:
-                    self.上下文.置脚本状态(f"建筑面板滑动前安全检查失败：{异常}")
-                    return False
             try:
-                结果 = 快速滑动(
-                    (399, 116), (399, 0), 时长毫秒=900
-                )
-                if 结果 is False:
-                    return False
-                self.上下文.脚本延时(250)
-                return True
+                结果 = 快速滑动(起点, 终点, 时长毫秒=900)
+                return 结果 is not False
             except Exception as 异常:
                 self.上下文.置脚本状态(f"建筑面板设备级滑动失败：{异常}")
                 return False
 
-        self.上下文.鼠标.移动到(399, 116)
-        self.上下文.鼠标.左键按下()
-        置脚本状态 = getattr(self.上下文, "置脚本状态", None)
-        if callable(置脚本状态):
-            置脚本状态(
-                "建筑升级面板滑动定位中",
-                getattr(self, "_建筑扫描监控超时秒", 180),
-            )
-        for _ in range(150):
-            self.上下文.鼠标.移动相对位置(0, random.randint(-10, -5))
-            self.上下文.脚本延时(5)
-        self.上下文.鼠标.左键抬起()
-        return True
-
-    def 滑动屏幕(self, 随机半径: int):
-        """模拟屏幕滑动寻找建筑"""
-        # 同上：该查找器只服务主世界建筑升级，不能用资源任务开关
-        # 推断坐标，否则关闭刷资源时会在错误位置滑动并选中地图对象。
-        x = 399
-        start_x = x + 随机半径
-        start_y = 116 + 随机半径
-
-        self.上下文.鼠标.移动到(start_x, start_y)
-        self.上下文.鼠标.左键按下()
-        置脚本状态 = getattr(self.上下文, "置脚本状态", None)
-        if callable(置脚本状态):
-            置脚本状态(
-                "建筑升级面板继续扫描中",
-                getattr(self, "_建筑扫描监控超时秒", 180),
-            )
-        for _ in range(10):
-            self.上下文.鼠标.移动相对位置(0, random.randint(7, 12))
-            self.上下文.脚本延时(5)
-        self.上下文.鼠标.左键抬起()
-        self.上下文.脚本延时(random.randint(1000, 1500))
+        鼠标 = getattr(self.上下文, "鼠标", None)
+        if 鼠标 is None:
+            return False
+        self.上下文.置脚本状态(
+            "建筑升级面板滑动定位中",
+            getattr(self, "_建筑扫描监控超时秒", 180),
+        )
+        鼠标.移动到(*起点)
+        if 鼠标.左键按下() is False:
+            return False
+        try:
+            步数 = 20
+            dx = 终点[0] - 起点[0]
+            dy = 终点[1] - 起点[1]
+            上次x = 起点[0]
+            上次y = 起点[1]
+            for 步 in range(1, 步数 + 1):
+                if 停止事件 is not None and 停止事件.is_set():
+                    return False
+                当前x = 起点[0] + round(dx * 步 / 步数)
+                当前y = 起点[1] + round(dy * 步 / 步数)
+                鼠标.移动相对位置(当前x - 上次x, 当前y - 上次y)
+                上次x, 上次y = 当前x, 当前y
+                self.上下文.脚本延时(5)
+            return True
+        finally:
+            鼠标.左键抬起()
 
     # ---------------------- OCR处理 ----------------------
     def 尝试选中指定建筑(self, ocr结果) -> bool:

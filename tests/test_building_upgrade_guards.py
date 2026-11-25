@@ -202,7 +202,7 @@ class 建筑升级边界测试(unittest.TestCase):
 
         点击.assert_called_once_with(746, 538, 延时=1000)
 
-    def test_关闭刷资源时寻找建筑滑动仍使用主世界坐标(self):
+    def test_关闭刷资源时寻找建筑滑动仍限定右侧建造面板(self):
         鼠标 = SimpleNamespace(
             移动到=Mock(),
             左键按下=Mock(),
@@ -214,11 +214,12 @@ class 建筑升级边界测试(unittest.TestCase):
             设置=SimpleNamespace(是否刷主世界=False),
             鼠标=鼠标,
             脚本延时=Mock(),
+            置脚本状态=Mock(),
         )
 
         任务.滑动屏幕(0)
 
-        鼠标.移动到.assert_called_once_with(399, 116)
+        鼠标.移动到.assert_called_once_with(700, 140)
 
     def test_MuMu建筑面板滑动使用单次设备级手势(self):
         设备 = SimpleNamespace(滑动=Mock(return_value=True))
@@ -231,7 +232,88 @@ class 建筑升级边界测试(unittest.TestCase):
         )
 
         self.assertTrue(任务.滑动到建筑栏底部())
-        设备.滑动.assert_called_once_with((399, 116), (399, 0), 时长毫秒=900)
+        设备.滑动.assert_called_once_with((700, 440), (700, 140), 时长毫秒=900)
+
+    def test_继续扫描滑动使用新版建造面板内设备手势(self):
+        设备 = SimpleNamespace(滑动=Mock(return_value=True))
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.上下文 = SimpleNamespace(
+            op=SimpleNamespace(设备=设备),
+            输入前安全检查=Mock(return_value=False),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+
+        任务.滑动屏幕(0)
+
+        设备.滑动.assert_called_once_with((700, 140), (700, 440), 时长毫秒=900)
+
+    def test_升级中标题不让建筑列表首轮扫描提前退出(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.建筑列表 = ["兵营"]
+        任务.建筑扫描最大轮数 = 3
+        任务.建筑扫描心跳间隔秒 = 20
+        任务.建筑扫描超时秒 = 120
+        任务.上下文 = SimpleNamespace(
+            停止事件=None,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+        任务.打开建筑页面 = Mock(return_value=True)
+        任务.执行OCR识别 = Mock(side_effect=[
+            [([], "升级中", 0.99)],
+            [([], "兵营", 0.99)],
+        ])
+        任务.尝试选中指定建筑 = Mock(side_effect=[False, True])
+        任务.滑动屏幕 = Mock()
+
+        self.assertTrue(任务.找建筑循环())
+        任务.滑动屏幕.assert_called_once()
+
+    def test_连续两轮OCR文本无变化后才停止扫描(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.建筑列表 = ["兵营"]
+        任务.建筑扫描最大轮数 = 5
+        任务.建筑扫描心跳间隔秒 = 20
+        任务.建筑扫描超时秒 = 120
+        任务.上下文 = SimpleNamespace(
+            停止事件=None,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+        任务.打开建筑页面 = Mock(return_value=True)
+        任务.执行OCR识别 = Mock(return_value=[([], "升级中", 0.99)])
+        任务.尝试选中指定建筑 = Mock(return_value=False)
+        任务.滑动屏幕 = Mock(return_value=True)
+        任务.关闭建筑页面 = Mock(return_value=True)
+
+        self.assertFalse(任务.找建筑循环())
+        self.assertEqual(任务.执行OCR识别.call_count, 3)
+        self.assertEqual(任务.滑动屏幕.call_count, 2)
+        self.assertTrue(任务.安全跳过)
+
+    def test_局部锤子模板回退要求底部升级文字且搜索区域不越过宝石区(self):
+        任务 = 升级普通建筑任务.__new__(升级普通建筑任务)
+        任务.上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=np.zeros((130, 55, 3), dtype=np.uint8))),
+            置脚本状态=Mock(),
+        )
+        任务.模板识别 = Mock()
+        任务.模板识别.执行最佳匹配.return_value = (0.91, (10, 90), "锤子.bmp")
+        任务.执行OCR识别 = Mock(return_value=[])
+
+        self.assertIsNone(任务._局部模板定位升级按钮())
+        任务.上下文.op.获取屏幕图像cv.assert_not_called()
+        任务.模板识别.执行最佳匹配.assert_not_called()
+
+        任务.执行OCR识别.return_value = [
+            ([[475, 485], [505, 485], [505, 510], [475, 510]], "升级", 0.99),
+        ]
+        self.assertEqual(任务._局部模板定位升级按钮(), (485, 495))
+        任务.上下文.op.获取屏幕图像cv.assert_called_once_with(475, 405, 530, 535)
+
+        任务.模板识别.执行最佳匹配.return_value = (0.91, (70, 90), "错误区域.bmp")
+        self.assertIsNone(任务._局部模板定位升级按钮())
 
     def test_建筑升级面板已打开时不会重复点击入口(self):
         点击 = Mock()
@@ -539,8 +621,9 @@ class 建筑升级边界测试(unittest.TestCase):
             脚本延时=Mock(),
         )
         任务.打开建筑页面 = Mock(return_value=True)
-        任务.执行OCR识别 = Mock(return_value=[
-            ([[10, 10], [70, 10], [70, 30], [10, 30]], "其他建筑", 0.99),
+        任务.执行OCR识别 = Mock(side_effect=[
+            [([[10, 10], [70, 10], [70, 30], [10, 30]], f"其他建筑{序号}", 0.99)]
+            for 序号 in range(3)
         ])
         任务.尝试选中指定建筑 = Mock(return_value=False)
         任务.滑动屏幕 = Mock()
@@ -588,6 +671,9 @@ class 建筑升级边界测试(unittest.TestCase):
         任务.模板识别 = SimpleNamespace(
             执行最佳匹配=Mock(return_value=(0.65, (42, 58), "建筑升级界面锤子[1].bmp"))
         )
+        任务.执行OCR识别 = Mock(return_value=[
+            ([[475, 490], [505, 490], [505, 515], [475, 515]], "升级", 0.99),
+        ])
 
         self.assertEqual(任务._局部模板定位升级按钮(), (517, 463))
         self.assertEqual(区域["范围"], (475, 405, 530, 535))
@@ -1036,6 +1122,99 @@ class 英雄升级确认页测试(unittest.TestCase):
 
         self.assertFalse(任务.执行())
         任务.关闭英雄升级页面.assert_called_once_with()
+
+
+    def test_重置英雄殿堂滚动位置遇到停止或暂停立即退出(self):
+        for 停止, 暂停 in ((True, False), (False, True)):
+            with self.subTest(停止=停止, 暂停=暂停):
+                停止事件 = threading.Event()
+                继续事件 = threading.Event()
+                if 停止:
+                    停止事件.set()
+                if not 暂停:
+                    继续事件.set()
+                鼠标 = SimpleNamespace(
+                    移动到=Mock(), 左键按下=Mock(), 移动相对位置=Mock(), 左键抬起=Mock(),
+                )
+                任务 = 寻找建筑.__new__(寻找建筑)
+                任务.上下文 = SimpleNamespace(
+                    停止事件=停止事件,
+                    继续事件=继续事件,
+                    鼠标=鼠标,
+                    脚本延时=Mock(),
+                )
+
+                self.assertFalse(任务._重置英雄殿堂滚动位置())
+                鼠标.移动到.assert_not_called()
+                鼠标.左键按下.assert_not_called()
+                鼠标.移动相对位置.assert_not_called()
+                鼠标.左键抬起.assert_not_called()
+                任务.上下文.脚本延时.assert_not_called()
+
+    def test_重置英雄殿堂滚动位置拒绝无效上下文并保留正常手势(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.上下文 = None
+        self.assertFalse(任务._重置英雄殿堂滚动位置())
+
+        鼠标 = SimpleNamespace(
+            移动到=Mock(), 左键按下=Mock(), 移动相对位置=Mock(), 左键抬起=Mock(),
+        )
+        任务.上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            继续事件=threading.Event(),
+            鼠标=鼠标,
+            脚本延时=Mock(),
+        )
+        任务.上下文.继续事件.set()
+
+        self.assertTrue(任务._重置英雄殿堂滚动位置())
+        self.assertEqual(鼠标.移动到.call_count, 4)
+        self.assertEqual(鼠标.左键按下.call_count, 4)
+        self.assertEqual(鼠标.移动相对位置.call_count, 128)
+        self.assertEqual(鼠标.左键抬起.call_count, 4)
+
+
+    def test_英雄殿堂滚动过程中暂停会退出并抬起鼠标(self):
+        继续事件 = threading.Event()
+        继续事件.set()
+        鼠标 = SimpleNamespace(
+            移动到=Mock(), 左键按下=Mock(), 移动相对位置=Mock(), 左键抬起=Mock(),
+        )
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            继续事件=继续事件,
+            鼠标=鼠标,
+            脚本延时=Mock(side_effect=lambda _毫秒: 继续事件.clear()),
+        )
+
+        self.assertFalse(任务._重置英雄殿堂滚动位置())
+        鼠标.左键按下.assert_called_once_with()
+        鼠标.移动相对位置.assert_called_once_with(0, 8)
+        鼠标.左键抬起.assert_called_once_with()
+
+    def test_英雄殿堂滚动安全层拒绝按下时不再松开(self):
+        继续事件 = threading.Event()
+        继续事件.set()
+        鼠标 = SimpleNamespace(
+            移动到=Mock(),
+            左键按下=Mock(return_value=False),
+            移动相对位置=Mock(),
+            左键抬起=Mock(),
+        )
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            继续事件=继续事件,
+            鼠标=鼠标,
+            脚本延时=Mock(),
+        )
+
+        self.assertFalse(任务._重置英雄殿堂滚动位置())
+        鼠标.左键按下.assert_called_once_with()
+        鼠标.移动相对位置.assert_not_called()
+        鼠标.左键抬起.assert_not_called()
+        任务.上下文.脚本延时.assert_not_called()
 
 
 if __name__ == "__main__":
