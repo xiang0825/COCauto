@@ -453,18 +453,18 @@ class 自适应战斗测试(unittest.TestCase):
         上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
         任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
         评分, 可达比例, 说明 = 任务.获取自适应资源筛选门槛(上下文, 1)
-        self.assertEqual(评分, 6.5)
-        self.assertEqual(可达比例, 0.70)
-        self.assertIn("前20个候选", 说明)
+        self.assertEqual(评分, 6.0)
+        self.assertEqual(可达比例, 0.50)
+        self.assertIn("前15个候选", 说明)
 
     def test_黑水优先候选资源门槛分阶段放宽且最终取消(self):
         获取门槛 = 搜索目标敌人任务.获取黑水优先最低候选黑油
 
-        self.assertEqual(获取门槛("黑水", 1), 15000)
-        self.assertEqual(获取门槛("黑水", 40), 15000)
-        self.assertEqual(获取门槛("黑水", 41), 8000)
-        self.assertEqual(获取门槛("黑水", 80), 8000)
-        self.assertEqual(获取门槛("黑水", 81), 0)
+        self.assertEqual(获取门槛("黑水", 1), 11000)
+        self.assertEqual(获取门槛("黑水", 25), 11000)
+        self.assertEqual(获取门槛("黑水", 26), 6500)
+        self.assertEqual(获取门槛("黑水", 55), 6500)
+        self.assertEqual(获取门槛("黑水", 56), 0)
         self.assertEqual(获取门槛("金币", 1), 0)
 
     def test_未有效投兵的失败不会加严资源搜索门槛(self):
@@ -596,12 +596,12 @@ class 自适应战斗测试(unittest.TestCase):
         任务.获取自适应资源筛选门槛 = Mock(return_value=(5.0, None, ""))
         任务.点击下一个按钮 = Mock(return_value=True)
 
-        结果 = 任务.执行单次搜索(上下文, 搜索次数=29, 最小资源=1)
+        结果 = 任务.执行单次搜索(上下文, 搜索次数=15, 最小资源=1)
 
         self.assertFalse(结果)
         任务.检测器.检测.assert_not_called()
         任务.点击下一个按钮.assert_called_once_with(上下文)
-        self.assertTrue(any("最低目标黑油[15,000]" in 文本 for 文本 in 日志))
+        self.assertTrue(any("最低目标黑油[11,000]" in 文本 for 文本 in 日志))
 
     def test_胜利后不沿用之前的低表现目标筛选门槛(self):
         class 数据库:
@@ -639,9 +639,9 @@ class 自适应战斗测试(unittest.TestCase):
         上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
         任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
         评分, 可达比例, 说明 = 任务.获取自适应资源筛选门槛(上下文, 9)
-        self.assertEqual(评分, 6.5)
-        self.assertEqual(可达比例, 0.70)
-        self.assertIn("前20个候选", 说明)
+        self.assertEqual(评分, 6.0)
+        self.assertEqual(可达比例, 0.50)
+        self.assertIn("前15个候选", 说明)
 
     def test_低表现期间更换下兵策略仍保留目标可达门槛(self):
         for 建议 in ("集中资源", "分散探索"):
@@ -662,11 +662,11 @@ class 自适应战斗测试(unittest.TestCase):
                 上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
                 任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
                 评分, 可达比例, 说明 = 任务.获取自适应资源筛选门槛(上下文, 1)
-                self.assertEqual(评分, 6.5)
-                self.assertEqual(可达比例, 0.70)
-                self.assertIn("前20个候选", 说明)
+                self.assertEqual(评分, 6.0)
+                self.assertEqual(可达比例, 0.50)
+                self.assertIn("前15个候选", 说明)
 
-    def test_第二十一个候选放宽总分但继续过滤低可达目标(self):
+    def test_超出自适应候选上限后同时放宽总分与可达门槛(self):
         class 数据库:
             def 获取最新完整状态(self, _标志):
                 return SimpleNamespace(状态数据={
@@ -681,10 +681,10 @@ class 自适应战斗测试(unittest.TestCase):
 
         上下文 = SimpleNamespace(数据库=数据库(), 机器人标志="测试")
         任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
-        评分, 可达比例, 说明 = 任务.获取自适应资源筛选门槛(上下文, 21)
+        评分, 可达比例, 说明 = 任务.获取自适应资源筛选门槛(上下文, 16)
         self.assertEqual(评分, 5.0)
-        self.assertEqual(可达比例, 0.70)
-        self.assertIn("继续筛选高价值资源可达率", 说明)
+        self.assertIsNone(可达比例)
+        self.assertIn("放宽回基础门槛", 说明)
 
     def test_自适应门槛不会低于基础评分门槛(self):
         class 数据库:
@@ -700,7 +700,7 @@ class 自适应战斗测试(unittest.TestCase):
         with patch.object(搜索目标敌人任务, "资源易窃取最低评分", 7.0):
             评分, 可达比例, _ = 任务.获取自适应资源筛选门槛(上下文, 1)
         self.assertEqual(评分, 7.0)
-        self.assertEqual(可达比例, 0.70)
+        self.assertEqual(可达比例, 0.50)
 
     def test_没有学习反馈时仍保持用户设定的五分门槛(self):
         class 数据库:
