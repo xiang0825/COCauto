@@ -12,11 +12,18 @@
 - 冷却中的卡片不点；
 - 入口找不到（活动已结束）直接返回，不等待；
 - 每一步都有超时，整个流程还有总超时；
-- 不领奖，只在日志/通知里提醒。
+- 不领奖：竞赛结束/可以领奖/个人积分满时只弹桌面通知（和企业微信）提醒，
+  任何领奖按钮都不点。
+
+调度（rc147）：进攻前调用 ``执行(进攻前=True)``，按“进攻计数”而不只是
+30 分钟冷却决定何时开面板：刚接任务后打 1 场再看一次以测速，之后按
+进度速率预测完成那一场再看；没有任务时每 2 场看一次。看到任务已完成就在
+同一次面板里接新任务。时间冷却仍作为上限兜底。
 """
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sys
@@ -485,14 +492,17 @@ class 部落竞赛任务(基础任务):
         return 配置值
 
     # ---------------------------------------------------------------- 入口
-    def 执行(self) -> bool:
+    def 执行(self, 进攻前: bool = False) -> bool:
         设置 = self.上下文.设置
         if not getattr(设置, "是否部落竞赛接任务", False):
             return True
         记录 = self._读状态()
+        if 进攻前:
+            记录["进攻计数"] = int(记录.get("进攻计数", 0) or 0) + 1
         现在 = time.time()
-        下次 = float(记录.get("下次检查时间", 0) or 0)
-        if 现在 < 下次:
+        if not self._已到检查时机(记录, 现在):
+            if 进攻前:
+                self._写状态(记录)
             return True
         try:
             配置 = self.配置
@@ -540,17 +550,65 @@ class 部落竞赛任务(基础任务):
             self._设置面板标记(False)
         if 结果 == "已满分":
             self._提醒一次(记录, "满分", "部落竞赛个人积分已满，请手动去领奖励。")
+        if 结果 == "可领奖":
+            self._提醒一次(记录, "领奖", "部落竞赛已结束、可以领奖了，请自己去选择并领取奖励（脚本不会点领奖）。")
         if 结果 == "入口不存在" and 记录.get("本期见过入口") == self._现在().strftime("%Y-%m"):
             self._提醒一次(记录, "结束", "部落竞赛入口已消失（活动可能已结束），记得手动领奖。")
         self._记录结果(记录, 结果, self._冷却分钟(结果))
         return True
 
+    def _已到检查时机(self, 记录: dict, 现在: float) -> bool:
+        if 现在 >= float(记录.get("下次检查时间", 0) or 0):
+            return True
+        目标场次 = 记录.get("下次检查进攻计数")
+        if 目标场次 is None:
+            return False
+        try:
+            return int(记录.get("进攻计数", 0) or 0) >= int(目标场次)
+        except (TypeError, ValueError):
+            return False
+
+    def _计划进攻复查(self, 记录: dict, 结果: str) -> int | None:
+        """按结果和任务进度预测下一次开面板的进攻计数；None 表示只看时间冷却。"""
+        规则 = self.配置.get("进攻复查", {}) if isinstance(self.配置, dict) else {}
+        计数 = int(记录.get("进攻计数", 0) or 0)
+        if 结果 == "已接任务":
+            记录["进度基线"] = {"进度": 0, "进攻计数": 计数}
+            return 计数 + 1  # 打一场后回来看速率
+        if 结果 == "无可接任务":
+            记录.pop("进度基线", None)
+            return 计数 + int(规则.get("无任务复查场次", 2))
+        if 结果 != "已有任务":
+            return None
+        进度 = getattr(self, "_进度", None)
+        if not 进度:
+            return 计数 + int(规则.get("无进度复查场次", 2))
+        当前, 目标 = 进度
+        基线 = 记录.get("进度基线") or {}
+        try:
+            基线进度 = int(基线.get("进度"))
+            基线计数 = int(基线.get("进攻计数"))
+        except (TypeError, ValueError):
+            基线进度 = 基线计数 = None
+        if 基线进度 is None or 当前 < 基线进度 or 基线计数 > 计数:
+            记录["进度基线"] = {"进度": 当前, "进攻计数": 计数}
+            return 计数 + 1
+        场次 = 计数 - 基线计数
+        增量 = 当前 - 基线进度
+        if 场次 <= 0 or 增量 <= 0:
+            return 计数 + int(规则.get("无进度复查场次", 2))
+        剩余场次 = math.ceil((目标 - 当前) * 场次 / 增量)
+        return 计数 + max(1, min(int(规则.get("最多间隔场次", 10)), 剩余场次))
+
     def _记录结果(self, 记录: dict, 结果: str, 冷却分钟: float) -> None:
         现在 = time.time()
+        if 结果 == "无可接任务":
+            冷却分钟 = min(float(冷却分钟), float(self.配置.get("进攻复查", {}).get("无任务复查分钟", 10)))
         记录.update({
             "时间": 现在,
             "结果": 结果,
             "下次检查时间": 现在 + max(1.0, float(冷却分钟)) * 60,
+            "下次检查进攻计数": self._计划进攻复查(记录, 结果),
         })
         if 结果 not in {"入口不存在", "非主世界", "资源缺失", "资源未校准"}:
             记录["本期见过入口"] = self._现在().strftime("%Y-%m")
@@ -568,6 +626,13 @@ class 部落竞赛任务(基础任务):
         if callable(通知):
             try:
                 通知(文本, 包含截图=False)
+            except Exception:
+                pass
+        桌面 = getattr(self.上下文, "发送桌面通知", None)
+        if callable(桌面):
+            try:
+                桌面(f"部落竞赛{类别}", "部落竞赛已结束" if 类别 == "结束" else "部落竞赛：可以去领奖了",
+                   文本, 级别="信息", 需要恢复通知=False)
             except Exception:
                 pass
 
@@ -684,10 +749,17 @@ class 部落竞赛任务(基础任务):
         全文 = 拼接文本(项列表)
         if any(规范文本(词) in 全文 for 词 in 配置.get("OCR", {}).get("已满分关键词", [])):
             return "已满分"
+        if any(规范文本(词) in 全文 for 词 in 配置.get("OCR", {}).get("可领奖关键词", []) if 词):
+            self._日志("面板显示竞赛已结束/可以领奖；只提醒，不点任何领奖按钮")
+            return "可领奖"
         if self._匹配模板(面板["图像"], "已满分") is not None:
             return "已满分"
-        if self._存在进行中任务(面板["图像"], 项列表):
-            self._日志("已有进行中的任务，交给打鱼完成")
+        self._进度 = self._读取进度(项列表)
+        if self._进度 and self._进度[0] >= self._进度[1]:
+            self._日志(f"当前任务进度 {self._进度[0]}/{self._进度[1]} 已完成，立即挑选新任务")
+        elif self._存在进行中任务(面板["图像"], 项列表):
+            进度说明 = f"（进度 {self._进度[0]}/{self._进度[1]}）" if self._进度 else ""
+            self._日志(f"已有进行中的任务{进度说明}，交给打鱼完成")
             return "已有任务"
 
         启用 = [名 for 名 in (getattr(self.上下文.设置, "部落竞赛任务白名单", None) or [])]
@@ -709,6 +781,22 @@ class 部落竞赛任务(基础任务):
     def _阵容签名(self) -> str:
         """最近一场进攻识别到的兵栏签名；还没打过仗时为空，指定兵种任务一律不接。"""
         return str(getattr(self.上下文, "本场阵容签名", "") or "")
+
+    def _读取进度(self, 项列表: list[文字项]) -> tuple[int, int] | None:
+        """卡片区里的 a/b 就是进行中任务的进度（个人积分和主页建筑工人计数都在卡片区外）。"""
+        卡片区 = self.配置.get("面板", {}).get("卡片区ROI")
+        候选 = []
+        for 项 in (区域文字(项列表, 卡片区) if 卡片区 else []):
+            匹配 = re.fullmatch(r"(\d{1,5})/(\d{1,5})", 项.规范)
+            if not 匹配:
+                continue
+            当前, 目标 = int(匹配.group(1)), int(匹配.group(2))
+            if 目标 >= 1 and 当前 <= 目标:
+                候选.append((项.中心[1], 项.中心[0], 当前, 目标))
+        if not 候选:
+            return None
+        _, _, 当前, 目标 = min(候选)
+        return 当前, 目标
 
     def _存在进行中任务(self, 图像, 项列表: list[文字项]) -> bool:
         卡片区 = self.配置.get("面板", {}).get("卡片区ROI")
