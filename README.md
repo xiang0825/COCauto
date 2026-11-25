@@ -1,4 +1,6 @@
-﻿# COCauto · 城控
+# COCauto · 城控
+
+[![Latest Release](https://img.shields.io/github/v/release/xiang0825/COCauto?label=Latest%20Release)](https://github.com/xiang0825/COCauto/releases/latest)
 
 面向 Windows 模拟器的《部落冲突》桌面自动化工具。本项目与 Supercell 无关；自动化操作可能违反游戏规则，使用者需自行承担账号风险。
 
