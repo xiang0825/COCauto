@@ -135,5 +135,109 @@ class 敲宝箱流程测试(unittest.TestCase):
             self.assertFalse(宝箱.开启奖励宝箱(上下文))
 
 
+import threading
+
+
+class 宝箱页识别补充测试(unittest.TestCase):
+    def test_实机1280x720敲宝箱截图识别为4根(self):
+        实机图 = _读("live_chest_tap_1280x720.png")
+        self.assertEqual(实机图.shape[:2], (720, 1280))
+        self.assertEqual(宝箱.识别宝箱页(实机图), 4)
+        缩小图 = cv2.resize(实机图, (800, 600), interpolation=cv2.INTER_AREA)
+        self.assertEqual(宝箱.识别宝箱页(缩小图), 4)
+
+    def test_危险文字扩充覆盖商店充值与英文词(self):
+        for 危险词 in ("商店", "立即完成", "充值", "儲值", "特惠", "禮包", "Store", "Buy Gems"):
+            self.assertIsNone(
+                宝箱.定位继续按钮([
+                    (_框(360, 500, 420, 525), "繼續", 0.95),
+                    (_框(100, 100, 200, 130), 危险词, 0.95),
+                ]),
+                f"未拦截危险文字: {危险词}",
+            )
+
+
+class 敲宝箱加固测试(unittest.TestCase):
+    def setUp(self):
+        self._旧目录 = os.getcwd()
+        os.chdir(tempfile.mkdtemp())
+
+    def tearDown(self):
+        os.chdir(self._旧目录)
+
+    def test_停止事件触发时立即中止且不继续点击(self):
+        实机图 = _读("live_chest_tap_1280x720.png")
+        三, 一, 奖励 = (_读(n) for n in ("宝箱页_3根.png", "宝箱页_1根.png", "奖励页_繼續.png"))
+
+        # 1) 进入前已置位停止事件：0 次点击
+        ctx1 = 假上下文([实机图, 三, 一, 奖励])
+        ctx1.停止事件 = threading.Event()
+        ctx1.停止事件.set()
+        self.assertFalse(宝箱.开启奖励宝箱(ctx1))
+        self.assertEqual(ctx1.点击记录, [])
+        self.assertFalse(getattr(ctx1, "_正在开启奖励宝箱", False))
+
+        # 2) 敲第 1 下时收到停止事件：立刻停止，不再继续敲
+        ctx2 = 假上下文([实机图, 三, 一, 奖励])
+        ctx2.停止事件 = threading.Event()
+        原点击 = ctx2.点击已确认安全按钮
+
+        def _点一次即停(x, y, 延时=100):
+            原点击(x, y, 延时=延时)
+            ctx2.停止事件.set()
+            return True
+
+        ctx2.点击已确认安全按钮 = _点一次即停
+        self.assertFalse(宝箱.开启奖励宝箱(ctx2))
+        self.assertEqual(len(ctx2.点击记录), 1)
+        self.assertFalse(getattr(ctx2, "_正在开启奖励宝箱", False))
+
+        # 3) 开箱等待 3 秒期间触发停止事件：不再调用 OCR 也不点繼續
+        ctx3 = 假上下文([三, 一, 奖励])
+        ctx3.停止事件 = threading.Event()
+        ocr调用 = []
+        ctx3.获取OCR引擎 = lambda: (lambda *_a, **_k: (ocr调用.append(1) or [], None))
+
+        def _延时中断(毫秒):
+            ctx3.延时记录.append(毫秒)
+            if 毫秒 == 宝箱.开箱等待毫秒:
+                ctx3.停止事件.set()
+
+        ctx3.脚本延时 = _延时中断
+        self.assertFalse(宝箱.开启奖励宝箱(ctx3))
+        self.assertEqual(len(ctx3.点击记录), 3)
+        self.assertEqual(ocr调用, [])
+        self.assertFalse(getattr(ctx3, "_正在开启奖励宝箱", False))
+
+    def test_开箱后衔接清理宝箱领奖页支持连续多页与宝石保护拦截(self):
+        实机图 = _读("live_chest_tap_1280x720.png")
+        三, 一, 奖励 = (_读(n) for n in ("宝箱页_3根.png", "宝箱页_1根.png", "奖励页_繼續.png"))
+
+        # 1) 衔接上下文.清理宝箱领奖页完成连续多张领奖页后确认回到主世界
+        ctx1 = 假上下文([实机图, 三, 一, 奖励])
+        ctx1.停止事件 = threading.Event()
+        ctx1.页面恢复失败 = True  # 模拟待命恢复前置失败状态，不应误阻断步骤3
+        清理调用 = []
+
+        def _清理多页(_图像=None):
+            清理调用.append(True)
+            ctx1._最近点击页面结果 = SimpleNamespace(页面="主世界主页")
+            ctx1.页面恢复失败 = False
+            return True
+
+        ctx1.清理宝箱领奖页 = _清理多页
+        self.assertTrue(宝箱.开启奖励宝箱(ctx1))
+        self.assertEqual(len(清理调用), 1)
+        self.assertFalse(ctx1.页面恢复失败)
+
+        # 2) 中央宝石危险模板命中时绝不点击继续
+        ctx2 = 假上下文([三, 奖励])
+        ctx2.停止事件 = threading.Event()
+        ctx2._存在中央宝石危险模板 = lambda _图: (True, "宝石.bmp@400,300")
+        with patch.object(宝箱, "继续按钮等待秒", 0.05):
+            self.assertFalse(宝箱.开启奖励宝箱(ctx2))
+        self.assertEqual(len(ctx2.点击记录), 3)  # 仅补敲 3 次，未点击繼續
+
+
 if __name__ == "__main__":
     unittest.main()

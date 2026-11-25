@@ -97,6 +97,7 @@ class 任务上下文:
     评分弹窗稍后词 = ("稍后", "稍後")
     评分弹窗按钮最低y = 300
     宝箱领奖最多点击次数 = 3
+    敲宝箱最多尝试次数 = 3
     宝箱领奖继续词 = ("继续",)
     宝箱领奖危险词 = (
         "宝石", "购买", "商店", "立即完成", "充值",
@@ -1752,6 +1753,83 @@ class 任务上下文:
         finally:
             self._正在清理宝箱领奖页 = False
 
+    def 清理敲宝箱页(self, 屏幕图像=None) -> bool:
+        """在确认处于敲宝箱页时安全调用奖励宝箱开箱流程（带重入锁与次数上限）。"""
+        if bool(getattr(self, "_战斗中", False)):
+            return False
+        if getattr(self, "_内存保护已触发", False):
+            return False
+        if getattr(self, "_宝石保护已触发", False):
+            return False
+        if getattr(self, "_正在开启奖励宝箱", False):
+            return False
+        停止事件 = getattr(self, "停止事件", None)
+        if (
+            停止事件 is not None
+            and callable(getattr(停止事件, "is_set", None))
+            and 停止事件.is_set()
+        ):
+            return False
+
+        上限 = max(1, int(getattr(self, "敲宝箱最多尝试次数", 3) or 3))
+        if int(getattr(self, "_敲宝箱连续尝试次数", 0) or 0) >= 上限:
+            self.页面恢复失败 = True
+            self.置脚本状态(
+                f"敲宝箱页安全处理已达上限（{上限}次），禁止继续点击，保留当前画面"
+            )
+            return False
+
+        from 任务流程.主世界打鱼 import 奖励宝箱
+
+        当前图像 = 屏幕图像
+        if 当前图像 is None:
+            取图 = getattr(getattr(self, "op", None), "获取屏幕图像cv", None)
+            if not callable(取图):
+                return False
+            try:
+                try:
+                    当前图像 = 取图(0, 0, 800, 600, 强制刷新=True)
+                except TypeError:
+                    当前图像 = 取图(0, 0, 800, 600)
+            except Exception as 异常:
+                if self.是否内存异常(异常):
+                    self.触发内存保护("清理敲宝箱页截图", 异常)
+                else:
+                    self.置脚本状态(f"敲宝箱页截图失败，禁止盲点：{异常}")
+                return False
+        if 奖励宝箱.识别宝箱页(当前图像) is None:
+            return False
+
+        self._敲宝箱连续尝试次数 = int(getattr(self, "_敲宝箱连续尝试次数", 0) or 0) + 1
+        try:
+            已开箱 = bool(奖励宝箱.开启奖励宝箱(self))
+        except Exception as 异常:
+            if self.是否内存异常(异常):
+                self.触发内存保护("清理敲宝箱页", 异常)
+            else:
+                self.页面恢复失败 = True
+                self.置脚本状态(f"敲宝箱页安全清理异常，禁止继续点击：{异常}")
+            return False
+        finally:
+            self._点击识别截图 = None
+            self._点击识别截图时间 = 0.0
+            self._最近点击页面结果 = None
+
+        if (
+            停止事件 is not None
+            and callable(getattr(停止事件, "is_set", None))
+            and 停止事件.is_set()
+        ):
+            return False
+        if 已开箱:
+            self._敲宝箱连续尝试次数 = 0
+            self.页面恢复失败 = False
+            self.置脚本状态("敲宝箱页已安全开启并回到主世界")
+            return True
+        self.页面恢复失败 = True
+        self.置脚本状态("敲宝箱页未能完成安全开箱或未确认回到主页，禁止继续点击")
+        return False
+
     def 关闭军队配置页(self, 屏幕图像=None) -> bool:
         """关闭已确认的军队配置页，并连续确认已经回到主世界。
 
@@ -2410,6 +2488,8 @@ class 任务上下文:
         """供原始鼠标路径使用；返回 True 表示必须阻断本次输入。"""
         if getattr(self, "_内存保护已触发", False):
             return True
+        if getattr(self, "_正在开启奖励宝箱", False):
+            return True
         if self.检查宝石商店危险页面():
             return True
         结果 = getattr(self, "_最近点击页面结果", None)
@@ -2477,6 +2557,21 @@ class 任务上下文:
         if 结果 is not None and 结果.页面 == "宝箱领奖页":
             self.清理宝箱领奖页(getattr(self, "_点击识别截图", None))
             return True
+        if (
+            not getattr(self, "_战斗中", False)
+            and (结果 is None or getattr(结果, "页面", "") == "未知")
+        ):
+            当前帧 = getattr(self, "_点击识别截图", None)
+            if 当前帧 is None and getattr(self, "op", None) is not None:
+                try:
+                    当前帧 = self._获取点击识别截图(强制=False)
+                except Exception:
+                    当前帧 = None
+            if 当前帧 is not None:
+                from 任务流程.主世界打鱼 import 奖励宝箱
+                if 奖励宝箱.识别宝箱页(当前帧) is not None:
+                    self.清理敲宝箱页(当前帧)
+                    return True
         if 结果 is not None and 结果.页面 == "升级详情弹窗":
             当前帧 = getattr(self, "_点击识别截图", None)
             已关闭 = self.关闭升级详情弹窗(当前帧)
@@ -2930,6 +3025,7 @@ class 任务上下文:
                 and 页面置信度 >= 0.70
             ):
                 self._宝箱领奖连续点击次数 = 0
+                self._敲宝箱连续尝试次数 = 0
                 # 宝石/商店护栏在上一帧识别到危险页、但 ESC 后未能
                 # 立即拿到新画面时，会把 ``页面恢复失败`` 保留下来，
                 # 以防其它任务穿透未知页面继续点击。若后续这一帧已经
@@ -3668,6 +3764,8 @@ class 任务上下文:
                 self.停止事件.wait(timeout=等待秒数)
 
     def 点击(self,x,y,延时=None,是否精确点击=False):
+        if getattr(self, "_正在开启奖励宝箱", False):
+            return False
         # 所有任务共用这一入口；危险页面一旦被识别，ESC 并确认主页，
         # 取消当前点击，但允许上层任务继续走任务计划。
         if self.检查宝石商店危险页面():
@@ -3690,6 +3788,16 @@ class 任务上下文:
         ):
             self.清理宝箱领奖页(getattr(self, "_点击识别截图", None))
             return False
+        if (
+            not getattr(self, "_战斗中", False)
+            and (页面结果 is None or getattr(页面结果, "页面", "") == "未知")
+        ):
+            当前帧 = getattr(self, "_点击识别截图", None)
+            if 当前帧 is not None:
+                from 任务流程.主世界打鱼 import 奖励宝箱
+                if 奖励宝箱.识别宝箱页(当前帧) is not None:
+                    self.清理敲宝箱页(当前帧)
+                    return False
         if (
             getattr(self, "_战斗中", False)
             and 页面结果 is not None

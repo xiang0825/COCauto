@@ -1335,6 +1335,30 @@ class 自动化机器人:
                             f"{阶段说明 or '任务'}：宝箱领奖页未能安全收起，禁止继续"
                         )
                         return False
+            if callable(识别页面):
+                初始图像 = getattr(上下文, "_点击识别截图", None)
+                if 初始图像 is None:
+                    取图 = getattr(getattr(上下文, "op", None), "获取屏幕图像cv", None)
+                    if callable(取图):
+                        try:
+                            初始图像 = 取图(0, 0, 800, 600, 强制刷新=True)
+                        except TypeError:
+                            初始图像 = 取图(0, 0, 800, 600)
+                if 初始图像 is not None:
+                    from 任务流程.主世界打鱼 import 奖励宝箱
+                    if 奖励宝箱.识别宝箱页(初始图像) is not None:
+                        清理敲宝箱 = getattr(上下文, "清理敲宝箱页", None)
+                        开箱成功 = (
+                            bool(清理敲宝箱(初始图像))
+                            if callable(清理敲宝箱)
+                            else bool(奖励宝箱.开启奖励宝箱(上下文))
+                        )
+                        if not 开箱成功:
+                            上下文.页面恢复失败 = True
+                            上下文.置脚本状态(
+                                f"{阶段说明 or '任务'}：敲宝箱页未能安全开启，禁止继续"
+                            )
+                            return False
             if 允许模式选择页 and self._连续确认主世界战斗模式选择页(上下文):
                 上下文._主世界战斗模式选择页 = True
                 上下文.置脚本状态(
@@ -1830,6 +1854,9 @@ class 自动化机器人:
         上次内存状态 = 0.0
         断线自动恢复已尝试 = False
         宝箱领奖自动处理已失败 = False
+        敲宝箱自动处理已失败 = False
+        敲宝箱尝试次数 = 0
+        敲宝箱最多尝试次数 = 3
         最近页面 = getattr(上下文, "_最近点击页面结果", None)
         最近页面名称 = str(getattr(最近页面, "页面", "") or "")
         已确认战后流程 = bool(
@@ -2082,6 +2109,49 @@ class 自动化机器人:
                     return True
             else:
                 连续主世界帧 = 0
+                if (
+                    not 敲宝箱自动处理已失败
+                    and 敲宝箱尝试次数 < 敲宝箱最多尝试次数
+                    and not getattr(上下文, "_宝石保护已触发", False)
+                    and not getattr(上下文, "_正在开启奖励宝箱", False)
+                    and not self.停止事件.is_set()
+                ):
+                    屏幕图像 = getattr(上下文, "_点击识别截图", None)
+                    if 屏幕图像 is None:
+                        取图 = getattr(getattr(上下文, "op", None), "获取屏幕图像cv", None)
+                        if callable(取图):
+                            try:
+                                屏幕图像 = 取图(0, 0, 800, 600, 强制刷新=True)
+                            except TypeError:
+                                屏幕图像 = 取图(0, 0, 800, 600)
+                            except Exception:
+                                屏幕图像 = None
+                    if 屏幕图像 is not None:
+                        from 任务流程.主世界打鱼 import 奖励宝箱
+                        if 奖励宝箱.识别宝箱页(屏幕图像) is not None:
+                            敲宝箱尝试次数 += 1
+                            开箱成功 = False
+                            try:
+                                开箱成功 = bool(奖励宝箱.开启奖励宝箱(上下文))
+                            except Exception as 异常:
+                                敲宝箱自动处理已失败 = True
+                                上下文.置脚本状态(
+                                    f"安全待命处理敲宝箱页失败，停止自动点击并保持只读待命：{异常}"
+                                )
+                            上下文._点击识别截图 = None
+                            上下文._点击识别截图时间 = 0.0
+                            if self.停止事件.is_set():
+                                break
+                            if 开箱成功:
+                                上下文.置脚本状态(
+                                    "安全待命已安全开启奖励宝箱，继续复核主页"
+                                )
+                                continue
+                            if not 敲宝箱自动处理已失败:
+                                敲宝箱自动处理已失败 = True
+                                上下文.置脚本状态(
+                                    "安全待命开启奖励宝箱未完成，停止自动点击并保持只读待命"
+                                )
 
             当前时间 = time.monotonic()
             if (

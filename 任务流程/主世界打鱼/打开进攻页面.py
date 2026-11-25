@@ -118,6 +118,10 @@ class 打开进攻页面任务(基础任务):
             上下文.置脚本状态(
                 "已安全收起宝箱领奖页，重新确认主世界主页后继续进攻准备"
             )
+        if 既有页面 is None:
+            敲宝箱结果 = self._处理敲宝箱页(上下文)
+            if 敲宝箱结果 is False:
+                return False
         if getattr(上下文, "_主世界战斗模式选择页", False):
             普通战斗点 = self._定位已确认模式页普通按钮(上下文)
             if 普通战斗点 is None:
@@ -422,6 +426,71 @@ class 打开进攻页面任务(基础任务):
             "已连续确认返回主世界"
         )
         return True
+
+    def _处理敲宝箱页(
+        self,
+        上下文: 任务上下文,
+        屏幕图像: np.ndarray | None = None,
+    ) -> bool | None:
+        """若当前画面为敲宝箱页，先安全开箱（带重入锁、停止检查与次数上限）。"""
+        if self._已收到停止请求(上下文):
+            return False
+        if getattr(上下文, "_正在开启奖励宝箱", False):
+            return False
+        if getattr(上下文, "_宝石保护已触发", False):
+            return False
+
+        from 任务流程.主世界打鱼 import 奖励宝箱
+
+        当前图像 = 屏幕图像
+        if 当前图像 is None:
+            当前图像 = getattr(上下文, "_点击识别截图", None)
+        if 当前图像 is None:
+            获取图像 = getattr(getattr(上下文, "op", None), "获取屏幕图像cv", None)
+            if not callable(获取图像):
+                return None
+            try:
+                try:
+                    当前图像 = 获取图像(0, 0, 800, 600, 强制刷新=True)
+                except TypeError:
+                    当前图像 = 获取图像(0, 0, 800, 600)
+            except Exception:
+                return None
+        if 奖励宝箱.识别宝箱页(当前图像) is None:
+            return None
+
+        上限 = max(1, int(getattr(上下文, "敲宝箱最多尝试次数", 3) or 3))
+        已尝试次数 = int(getattr(上下文, "_敲宝箱连续尝试次数", 0) or 0)
+        if 已尝试次数 >= 上限:
+            上下文.页面恢复失败 = True
+            上下文.置脚本状态(
+                f"进攻入口敲宝箱处理已达上限（{上限}次），禁止继续点击"
+            )
+            return False
+        上下文._敲宝箱连续尝试次数 = 已尝试次数 + 1
+        try:
+            已开箱 = bool(奖励宝箱.开启奖励宝箱(上下文))
+        except Exception as 异常:
+            上下文.页面恢复失败 = True
+            上下文.置脚本状态(f"进攻入口开启奖励宝箱失败，禁止盲点：{异常}")
+            return False
+        finally:
+            上下文._点击识别截图 = None
+            上下文._点击识别截图时间 = 0.0
+            上下文._最近点击页面结果 = None
+
+        if self._已收到停止请求(上下文):
+            return False
+        if 已开箱:
+            上下文._敲宝箱连续尝试次数 = 0
+            上下文.页面恢复失败 = False
+            上下文.置脚本状态(
+                "已安全开启奖励宝箱并回到主世界，继续确认主页后进行进攻准备"
+            )
+            return True
+        上下文.页面恢复失败 = True
+        上下文.置脚本状态("检测到敲宝箱页但未能完成安全开箱，禁止打开进攻页面")
+        return False
 
     @staticmethod
     def _识别已存在的战斗页面(
@@ -801,6 +870,13 @@ class 打开进攻页面任务(基础任务):
                 已点击 = False
                 已点击寻找目标 = False
                 continue
+            if 既有页面 is None and not 已点击寻找目标 and not 已点击:
+                敲宝箱结果 = self._处理敲宝箱页(上下文, 屏幕图像=屏幕图像)
+                if 敲宝箱结果 is False:
+                    return False
+                if 敲宝箱结果 is True:
+                    截止时间 = max(截止时间, time.monotonic() + 30.0)
+                    continue
 
             if 既有页面 is None and 已点击:
                 当前时间 = time.monotonic()

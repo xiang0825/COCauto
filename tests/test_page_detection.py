@@ -2402,6 +2402,178 @@ class 页面识别测试(unittest.TestCase):
         上下文.脚本延时.assert_not_called()
         self.assertIs(上下文.鼠标._安全点击检查回调, 原回调)
 
+    def test_直接停在敲宝箱页_全入口识别与恢复回归(self):
+        from 任务流程.主世界打鱼 import 奖励宝箱
+        from 任务流程.主世界打鱼.打开进攻页面 import 打开进攻页面任务
+        from 线程.自动化机器人 import 自动化机器人
+
+        敲宝箱图 = cv2.imdecode(
+            np.fromfile(
+                str(
+                    self.根目录
+                    / "tests"
+                    / "fixtures"
+                    / "奖励宝箱"
+                    / "live_chest_tap_1280x720.png"
+                ),
+                np.uint8,
+            ),
+            cv2.IMREAD_COLOR,
+        )
+        主页图 = self._读取主世界实机图()
+        self.assertIsNotNone(敲宝箱图)
+
+        # a) 1280x720 实机图识别宝箱页准确返回 4，且页面识别器不误判为主世界主页
+        self.assertEqual(奖励宝箱.识别宝箱页(敲宝箱图), 4)
+        页面结果 = self.识别器.识别(敲宝箱图, 战斗中=False)
+        self.assertNotEqual(页面结果.页面, "主世界主页")
+        self.assertEqual(页面结果.页面, "未知")
+
+        # b) 检测游戏登录状态直接遇到敲宝箱页（无前置“领取”弹窗）立即触发开启奖励宝箱并恢复主页
+        登录上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(side_effect=[敲宝箱图, 主页图, 主页图]),
+                设备=SimpleNamespace(
+                    获取当前前台包名=Mock(return_value="com.supercell.clashofclans")
+                ),
+            ),
+            设置=SimpleNamespace(部落冲突包名="com.supercell.clashofclans"),
+            数据库=Mock(),
+            机器人标志="robot_test",
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+        登录任务 = 检测游戏登录状态任务(登录上下文)
+        登录任务.第一次检测游戏登录 = False
+        登录任务._检测断线弹窗 = Mock(return_value=(False, (0, 0)))
+        登录任务._登录主页已确认 = Mock(return_value=True)
+
+        def _匹配登录模板(_图像, 模板路径, **_参数):
+            命中 = "家乡进攻图标" in 模板路径 or "不用拉远视距" in 模板路径
+            return 命中, (100, 100), 0.95 if 命中 else 0.0
+
+        with patch("任务流程.检测游戏登录状态.模板匹配引擎") as 模板类, \
+             patch("任务流程.检测游戏登录状态.页面识别器", return_value=self.识别器), \
+             patch("任务流程.主世界打鱼.奖励宝箱.开启奖励宝箱", return_value=True) as mock_开箱:
+            模板类.return_value.执行匹配.side_effect = _匹配登录模板
+            self.assertTrue(登录任务.执行(首次登录=False))
+        mock_开箱.assert_called_once_with(登录上下文)
+
+        # b2) 登录阶段开启奖励宝箱失败时继续安全等待（不盲点）直到超时安全停止
+        失败上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=敲宝箱图),
+                设备=SimpleNamespace(
+                    获取当前前台包名=Mock(return_value="com.supercell.clashofclans")
+                ),
+            ),
+            设置=SimpleNamespace(部落冲突包名="com.supercell.clashofclans"),
+            数据库=Mock(),
+            机器人标志="robot_test",
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            点击已确认安全按钮=Mock(),
+        )
+        失败任务 = 检测游戏登录状态任务(失败上下文)
+        失败任务.第一次检测游戏登录 = False
+        失败任务._检测断线弹窗 = Mock(return_value=(False, (0, 0)))
+        失败任务._登录主页已确认 = Mock(return_value=True)
+        with patch("任务流程.检测游戏登录状态.模板匹配引擎") as 模板类, \
+             patch("任务流程.检测游戏登录状态.页面识别器", return_value=self.识别器), \
+             patch("任务流程.检测游戏登录状态.time.monotonic", side_effect=[0.0, 1.0, 201.0]), \
+             patch("任务流程.主世界打鱼.奖励宝箱.开启奖励宝箱", return_value=False) as mock_失败开箱:
+            模板类.return_value.执行匹配.side_effect = _匹配登录模板
+            self.assertFalse(失败任务.执行(首次登录=False))
+        mock_失败开箱.assert_called_once_with(失败上下文)
+        失败上下文.点击已确认安全按钮.assert_not_called()
+
+        # c) 安全待命（_等待人工恢复主世界 / _安全待命单次）直接遇到敲宝箱页立即触发开启奖励宝箱并恢复
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = Mock()
+        机器人.停止事件.is_set.return_value = False
+        机器人.停止事件.wait.return_value = False
+        机器人.继续事件 = threading.Event()
+        机器人.继续事件.set()
+        机器人.停止原因 = None
+        机器人.数据库 = None
+        机器人.记录日志 = Mock()
+        页面序列 = iter([
+            SimpleNamespace(页面="未知", 世界=None, 可信度=0.0),
+            SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.95),
+            SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.95),
+        ])
+        待命上下文 = SimpleNamespace(
+            设置=SimpleNamespace(未知页面待命通知秒数=180),
+            停止事件=机器人.停止事件,
+            页面恢复失败=True,
+            _宝箱领奖连续点击次数=0,
+            _宝石保护已触发=False,
+            _战斗中=False,
+            _战斗结束已确认=False,
+            _点击识别截图=敲宝箱图,
+            _最近点击页面结果=SimpleNamespace(页面="未知", 世界=None, 可信度=0.0),
+            识别点击画面=Mock(side_effect=lambda 强制=True: next(页面序列)),
+            置脚本状态=Mock(),
+        )
+        with patch("线程.自动化机器人.检测游戏登录状态任务"), \
+             patch("任务流程.主世界打鱼.奖励宝箱.开启奖励宝箱", return_value=True) as mock_待命开箱:
+            self.assertTrue(机器人._等待人工恢复主世界(待命上下文, Mock()))
+        mock_待命开箱.assert_called_once_with(待命上下文)
+        self.assertEqual(待命上下文.识别点击画面.call_count, 3)
+
+        # d) 输入前安全检查与打开进攻页面遇到敲宝箱页时均触发开启奖励宝箱，并遵守重入锁与次数上限
+        护栏上下文 = 任务上下文.__new__(任务上下文)
+        护栏上下文._战斗中 = False
+        护栏上下文._内存保护已触发 = False
+        护栏上下文._宝石保护已触发 = False
+        护栏上下文._正在开启奖励宝箱 = False
+        护栏上下文._敲宝箱连续尝试次数 = 0
+        护栏上下文._点击识别截图 = 敲宝箱图
+        护栏上下文._最近点击页面结果 = SimpleNamespace(页面="未知")
+        护栏上下文.停止事件 = threading.Event()
+        护栏上下文.检查宝石商店危险页面 = Mock(return_value=False)
+        护栏上下文.置脚本状态 = Mock()
+        with patch("任务流程.主世界打鱼.奖励宝箱.开启奖励宝箱", return_value=True) as mock_护栏开箱:
+            self.assertTrue(护栏上下文.输入前安全检查())
+        mock_护栏开箱.assert_called_once_with(护栏上下文)
+
+        # 重入锁激活时直接阻断且不再调用开启奖励宝箱
+        护栏上下文._正在开启奖励宝箱 = True
+        with patch("任务流程.主世界打鱼.奖励宝箱.开启奖励宝箱") as mock_重入开箱:
+            self.assertTrue(护栏上下文.输入前安全检查())
+        mock_重入开箱.assert_not_called()
+
+        # 打开进攻页面遇到敲宝箱页时优先开箱；失败则阻止进攻并受上限保护
+        进攻上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=敲宝箱图)),
+            数据库=Mock(),
+            机器人标志="robot_test",
+            _战斗中=False,
+            _宝石保护已触发=False,
+            _正在开启奖励宝箱=False,
+            _敲宝箱连续尝试次数=0,
+            _点击识别截图=敲宝箱图,
+            识别点击画面=Mock(return_value=SimpleNamespace(页面="未知", 世界=None, 可信度=0.0)),
+            停止事件=threading.Event(),
+            置脚本状态=Mock(),
+        )
+        进攻任务 = 打开进攻页面任务(进攻上下文)
+        with patch("任务流程.主世界打鱼.奖励宝箱.开启奖励宝箱", return_value=False) as mock_进攻开箱:
+            self.assertFalse(进攻任务.执行())
+        mock_进攻开箱.assert_called_once_with(进攻上下文)
+        self.assertTrue(进攻上下文.页面恢复失败)
+        self.assertEqual(进攻上下文._敲宝箱连续尝试次数, 1)
+
+        # 达到尝试上限后不再继续调用开启奖励宝箱
+        进攻上下文._敲宝箱连续尝试次数 = 3
+        with patch("任务流程.主世界打鱼.奖励宝箱.开启奖励宝箱") as mock_超限开箱:
+            self.assertFalse(进攻任务._处理敲宝箱页(进攻上下文, 敲宝箱图))
+        mock_超限开箱.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

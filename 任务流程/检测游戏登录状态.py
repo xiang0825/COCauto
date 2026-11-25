@@ -627,6 +627,9 @@ class 检测游戏登录状态任务(基础任务):
         本次特殊页面 = ""
         主世界连续确认 = 0
         主世界战斗模式连续确认 = 0
+        敲宝箱尝试次数 = 0
+        敲宝箱最多尝试次数 = 3
+        敲宝箱已失败 = False
         while True:
             检测轮次 += 1
             上下文.脚本延时(500)
@@ -828,6 +831,48 @@ class 检测游戏登录状态任务(基础任务):
                 上下文.置脚本状态("登录时出现宝箱领奖页但未能安全收起，停止输入并保留画面")
                 上下文.页面恢复失败 = True
                 return False
+            if (
+                not 敲宝箱已失败
+                and 敲宝箱尝试次数 < 敲宝箱最多尝试次数
+                and not getattr(上下文, "页面恢复失败", False)
+                and not getattr(上下文, "_宝石保护已触发", False)
+                and not getattr(上下文, "_正在开启奖励宝箱", False)
+            ):
+                停止事件 = getattr(上下文, "停止事件", None)
+                if (
+                    停止事件 is not None
+                    and callable(getattr(停止事件, "is_set", None))
+                    and 停止事件.is_set()
+                ):
+                    return False
+                from 任务流程.主世界打鱼 import 奖励宝箱
+                if 奖励宝箱.识别宝箱页(屏幕图像) is not None:
+                    敲宝箱尝试次数 += 1
+                    try:
+                        已开箱 = bool(奖励宝箱.开启奖励宝箱(上下文))
+                    except Exception as 异常:
+                        已开箱 = False
+                        上下文.置脚本状态(
+                            f"登录阶段敲宝箱处理异常，继续安全等待并保留画面：{异常}"
+                        )
+                    if (
+                        停止事件 is not None
+                        and callable(getattr(停止事件, "is_set", None))
+                        and 停止事件.is_set()
+                    ):
+                        return False
+                    if 已开箱:
+                        上下文.置脚本状态("登录阶段已安全开启奖励宝箱，继续确认主页")
+                        开始检测时间 = time.monotonic()
+                        检测轮次 = 0
+                        主世界连续确认 = 0
+                        continue
+                    敲宝箱已失败 = True
+                    主世界连续确认 = 0
+                    上下文.置脚本状态(
+                        "登录阶段遇到敲宝箱页但未能完成开箱，继续安全等待并保留画面"
+                    )
+                    continue
             # 活动面板会保留主世界 HUD，且标题栏/红色 X 可能先被轻量
             # 页面识别归为升级详情。必须在中央教程 OCR 之前交给活动
             # 专用关闭器，否则“首领，是时候参加部落竞赛”会被误当成
