@@ -15,7 +15,6 @@ from 应用.控制器 import 应用控制器
 from 界面.主窗口 import 主窗口
 from 界面.页面_运行 import 运行页
 from 界面.页面_设备连接 import 设备连接页
-from 界面.页面_自动启动 import 自动启动页
 from 界面.悬浮日志 import 悬浮日志窗
 重型模块 = ("cv2", "numpy", "onnxruntime", "PIL")
 print([名称 for 名称 in 重型模块 if 名称 in sys.modules])

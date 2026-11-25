@@ -15,10 +15,11 @@ class 打包模块测试(unittest.TestCase):
         self.assertIn("任务流程.世界跳转.到主世界任务", 模块)
         self.assertIn("任务流程.世界跳转.到夜世界任务", 模块)
 
-    def test_手机控制服务的延迟模块会被自动收集(self):
-        模块 = set(collect_submodules("服务"))
-        self.assertIn("服务.局域网控制服务", 模块)
-        self.assertIn("服务.桌面手机控制桥", 模块)
+    def test_手机控制与自动启动功能已移除(self):
+        模块 = set(collect_submodules("服务")) | set(collect_submodules("界面")) | set(collect_submodules("模块"))
+        for 名称 in ("服务.局域网控制服务", "服务.桌面手机控制桥", "界面.页面_手机控制",
+                   "界面.页面_自动启动", "模块.自动启动管理器"):
+            self.assertNotIn(名称, 模块)
 
     def test_机器人主线程是必需的打包模块(self):
         with tempfile.TemporaryDirectory(prefix="coc-package-entry-") as 临时目录:
@@ -34,10 +35,7 @@ class 打包模块测试(unittest.TestCase):
                 获取必需模块(入口源码),
                 {
                     "线程.自动化机器人",
-                    "服务.局域网控制服务",
-                    "服务.桌面手机控制桥",
                     "界面.主窗口",
-                    "界面.页面_手机控制",
                     "应用.控制器",
                     "工具包.桌面通知",
                     "PySide6",

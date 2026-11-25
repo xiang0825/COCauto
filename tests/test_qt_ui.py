@@ -57,8 +57,7 @@ class 主窗口测试(unittest.TestCase):
         self.队列 = queue.Queue()
         with mock.patch("界面.主窗口.全局快捷键"):
             self.窗口 = 主窗口(self.控制器, self.队列, "rc-test")
-        with mock.patch.object(self.窗口, "_检查更新"), mock.patch("模块.自动启动管理器.自动启动管理器") as 管理器:
-            管理器.return_value.获取所有自动启动配置.return_value = {}
+        with mock.patch.object(self.窗口, "_检查更新"):
             self.窗口.show()
             self.窗口.载入()
         self.应用.processEvents()
@@ -73,11 +72,11 @@ class 主窗口测试(unittest.TestCase):
 
     def test_只有一个游戏且没有机器人管理入口(self):
         self.assertEqual(list(self.池), ["robot_1"])
-        self.assertEqual(list(self.窗口._导航按钮), ["一键运行", "模拟器连接", "手机控制", "自动启动"])
+        self.assertEqual(list(self.窗口._导航按钮), ["一键运行", "模拟器连接"])
         self.assertFalse(hasattr(self.窗口, "机器人选择"))
 
     def test_全部页面可打开且主题可切换(self):
-        for 名称 in ("一键运行", "模拟器连接", "手机控制", "自动启动"):
+        for 名称 in ("一键运行", "模拟器连接"):
             self.窗口.打开页面(名称)
             self.窗口._每秒刷新()
             self.assertEqual(self.窗口._页标题.text(), 名称)

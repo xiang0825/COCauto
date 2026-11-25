@@ -1,7 +1,6 @@
 """主窗口：侧栏导航 + 顶部运行控制 + 页面区。只控制一个游戏。"""
 from __future__ import annotations
 
-import os
 import webbrowser
 
 from PySide6.QtCore import QObject, QSettings, Qt, QTimer, Signal
@@ -18,7 +17,7 @@ from 界面.主题 import 全部配色, 浅色, 深色, 生成样式表
 from 界面.页面基类 import 界面上下文, 页面基类
 from 界面.组件 import 后台执行, 品牌标志, 提示错误, 提示信息, 标签, 状态胶囊, 确认
 
-页面顺序 = ("一键运行", "模拟器连接", "手机控制", "自动启动")
+页面顺序 = ("一键运行", "模拟器连接")
 
 
 class _热键信号(QObject):
@@ -180,29 +179,13 @@ class 主窗口(QMainWindow):
     def _创建页面(self):
         from 界面.页面_运行 import 运行页
         from 界面.页面_设备连接 import 设备连接页
-        from 界面.页面_自动启动 import 自动启动页
 
         self._页面: dict[str, 页面基类] = {
             "一键运行": 运行页(self.上下文, self.切换悬浮窗),
             "模拟器连接": 设备连接页(self.上下文),
-            "手机控制": self._创建手机页(),
-            "自动启动": 自动启动页(self.上下文),
         }
         for 页 in self._页面.values():
             self._栈.addWidget(页)
-
-    def _创建手机页(self) -> 页面基类:
-        from 界面.页面_手机控制 import 手机控制页
-        from 服务.桌面手机控制桥 import DesktopMobileBridge
-
-        数据库 = self.控制器.数据库
-        self._手机控制桥 = DesktopMobileBridge(
-            database=数据库,
-            monitor_center=self.控制器.监控中心,
-            state_directory=os.path.join(os.path.dirname(数据库.文件路径), "手机控制"),
-            version_provider=lambda: self.版本号,
-        )
-        return 手机控制页(self.上下文, self._手机控制桥)
 
     # ================================================================ 启动后
     def 载入(self):
@@ -396,8 +379,5 @@ class 主窗口(QMainWindow):
         self._热键.关闭()
         if self._悬浮窗 is not None:
             self._悬浮窗.close()
-        手机页 = self._页面.get("手机控制")
-        if hasattr(手机页, "关闭"):
-            手机页.关闭()
         self.控制器.关闭()
         事件.accept()
