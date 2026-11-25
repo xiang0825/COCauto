@@ -1991,6 +1991,83 @@ class 页面识别测试(unittest.TestCase):
         self.assertGreaterEqual(上下文.op.获取屏幕图像cv.call_count, 2)
         self.assertTrue(any("页面=主世界主页" in 文本 for 文本 in 日志))
 
+    def test_结算回营按钮紧邻暗色草地时仍可剥离定位(self):
+        """周边暗色草地与按钮黑边在闭运算粘连时，仍能定位到实心绿色按钮。"""
+        图像 = np.full((600, 800, 3), (30, 30, 30), dtype=np.uint8)
+        cv2.rectangle(图像, (175, 130), (625, 255), (30, 185, 235), -1)
+        # 暗色背景草地 (BGR=(40,115,45), HSV V=115) 紧挨按钮边缘 1~2px，
+        # 模拟 071950 / 081054 中 (7,5) 闭运算把草地粘连成超高连通域的场景。
+        cv2.rectangle(图像, (360, 456), (440, 487), (40, 115, 45), -1)
+        cv2.rectangle(图像, (455, 478), (496, 526), (40, 115, 45), -1)
+        cv2.rectangle(图像, (349, 489), (453, 547), (70, 225, 100), -1)
+
+        识别器 = 页面识别器(Mock())
+        识别器._最佳分数 = Mock(return_value=0.0)
+        点 = 识别器.定位结算回营按钮(图像)
+        self.assertIsNotNone(点)
+        self.assertAlmostEqual(点[0], 401, delta=4)
+        self.assertAlmostEqual(点[1], 518, delta=4)
+        结果 = 识别器.识别(图像, 战斗中=False)
+        self.assertEqual(结果.页面, "战斗结算", 结果.摘要())
+        self.assertGreaterEqual(结果.可信度, 0.94)
+
+    def test_结算兜底确认主世界后仍保留页面识别战斗结算结果(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        识别器 = 页面识别器(Mock())
+        识别器._最佳分数 = Mock(return_value=0.0)
+        识别器._红色放弃按钮分数 = Mock(return_value=0.0)
+        识别器._战斗倒计时分数 = Mock(return_value=0.0)
+        识别器._奖励选择横幅分数 = Mock(return_value=0.0)
+        识别器._结算结果视觉分数 = Mock(return_value=0.96)
+        识别器.世界识别 = SimpleNamespace(
+            识别=Mock(
+                return_value=SimpleNamespace(
+                    当前世界="主世界",
+                    依据=("结算页主世界三栏资源栏0.92", "结算页回营结构"),
+                )
+            )
+        )
+
+        结果 = 识别器.识别(图像, 战斗中=False)
+        self.assertEqual(结果.页面, "战斗结算", 结果.摘要())
+        self.assertGreaterEqual(结果.可信度, 0.96)
+
+    def test_主页绿色控件与宝石商店按钮不触发结算回营按钮(self):
+        # 1) 主页草地/底部绿色控件但无结算横幅/遮罩
+        主页伪按钮 = np.full((600, 800, 3), (55, 125, 65), dtype=np.uint8)
+        cv2.rectangle(主页伪按钮, (349, 489), (453, 547), (70, 225, 100), -1)
+        self.assertIsNone(self.识别器.定位结算回营按钮(主页伪按钮))
+
+        # 2) 宝石/商店对话框（哥布林宝石按钮或右下购买按钮）
+        宝石弹窗 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(宝石弹窗, (365, 100), (740, 412), (220, 220, 220), -1)
+        cv2.rectangle(宝石弹窗, (700, 108), (730, 150), (20, 20, 210), -1)
+        cv2.rectangle(宝石弹窗, (490, 326), (613, 398), (60, 210, 80), -1)
+        self.assertIsNone(self.识别器.定位结算回营按钮(宝石弹窗))
+
+        商店绿按钮 = np.full((600, 800, 3), (45, 45, 50), dtype=np.uint8)
+        cv2.rectangle(商店绿按钮, (150, 120), (650, 440), (210, 205, 195), -1)
+        cv2.rectangle(商店绿按钮, (349, 489), (453, 547), (70, 225, 100), -1)
+        self.assertIsNone(self.识别器.定位结算回营按钮(商店绿按钮))
+
+    def test_战斗兵栏与夜世界无按钮过渡页不触发结算回营按钮(self):
+        # 1) 战斗中兵栏绿色卡槽 + 放弃/倒计时
+        战斗兵栏 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(战斗兵栏, (10, 430), (105, 470), (0, 0, 220), -1)
+        for x in range(180, 620, 72):
+            cv2.rectangle(战斗兵栏, (x, 495), (x + 56, 585), (70, 220, 100), -1)
+        self.assertIsNone(self.识别器.定位结算回营按钮(战斗兵栏))
+
+        # 2) 夜世界无回营按钮的过渡页
+        夜世界无按钮 = np.full((600, 800, 3), (18, 25, 42), dtype=np.uint8)
+        for 中心 in ((275, 175), (400, 175), (525, 175)):
+            cv2.circle(夜世界无按钮, 中心, 28, (235, 235, 235), -1)
+        cv2.putText(
+            夜世界无按钮, "0%", (350, 335), cv2.FONT_HERSHEY_SIMPLEX,
+            1.8, (255, 255, 255), 4, cv2.LINE_AA,
+        )
+        self.assertIsNone(self.识别器.定位结算回营按钮(夜世界无按钮))
+
 
 if __name__ == "__main__":
     unittest.main()

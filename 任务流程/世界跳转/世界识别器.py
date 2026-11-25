@@ -259,6 +259,260 @@ class 世界识别器:
             return 0.0
         return 0.0
 
+    _结算主资源下限 = 0.905
+    _结算主夜最小分差 = 0.035
+
+    @classmethod
+    def _主世界三栏资源证据(cls, 资源栏: np.ndarray) -> bool:
+        """确认右上角同时存在主世界独有的三栏资源图标（金币、紫色圣水、黑油）。
+
+        夜世界右上角只有两栏（建筑金币、建筑圣水），且没有黑油栏。
+        结合主世界圣水模板高置信度与明显主/夜分差，可排除黑屏、
+        空图、过渡帧和夜世界画面。
+        """
+        if not isinstance(资源栏, np.ndarray) or 资源栏.ndim != 3 or 资源栏.shape[2] < 3:
+            return False
+        if 资源栏.shape[0] < 120 or 资源栏.shape[1] < 100:
+            return False
+        try:
+            if 资源栏.shape[:2] != (190, 150):
+                区域 = cv2.resize(资源栏, (150, 190), interpolation=cv2.INTER_AREA)
+            else:
+                区域 = 资源栏
+            hsv = cv2.cvtColor(区域, cv2.COLOR_BGR2HSV)
+            金币区 = hsv[18:48, 120:146]
+            圣水区 = hsv[60:92, 120:146]
+            黑油区 = hsv[102:136, 120:146]
+            黑油条 = hsv[104:134, 25:138]
+
+            金币比例 = float(
+                (
+                    (金币区[:, :, 0] >= 14)
+                    & (金币区[:, :, 0] <= 36)
+                    & (金币区[:, :, 1] >= 80)
+                    & (金币区[:, :, 2] >= 90)
+                ).mean()
+            )
+            圣水比例 = float(
+                (
+                    (圣水区[:, :, 0] >= 130)
+                    & (圣水区[:, :, 0] <= 168)
+                    & (圣水区[:, :, 1] >= 70)
+                    & (圣水区[:, :, 2] >= 70)
+                ).mean()
+            )
+            黑油暗色 = float((黑油区[:, :, 2] < 85).mean())
+            黑油非金 = float(
+                (
+                    (黑油区[:, :, 0] >= 14)
+                    & (黑油区[:, :, 0] <= 36)
+                    & (黑油区[:, :, 1] >= 80)
+                    & (黑油区[:, :, 2] >= 90)
+                ).mean()
+            )
+            黑油非紫 = float(
+                (
+                    (黑油区[:, :, 0] >= 130)
+                    & (黑油区[:, :, 0] <= 168)
+                    & (黑油区[:, :, 1] >= 70)
+                    & (黑油区[:, :, 2] >= 70)
+                ).mean()
+            )
+            黑油条明暗差 = int(黑油条[:, :, 2].max()) - int(黑油条[:, :, 2].min())
+            return (
+                金币比例 >= 0.30
+                and 圣水比例 >= 0.25
+                and 黑油暗色 >= 0.35
+                and 黑油非金 < 0.15
+                and 黑油非紫 < 0.15
+                and 黑油条明暗差 >= 40
+            )
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return False
+
+    @classmethod
+    def _结算页上下文确认(cls, 图像: np.ndarray) -> bool:
+        """仅在非战斗、且具备结算结果结构与底部绿色回营按钮时确认结算上下文。"""
+        if not isinstance(图像, np.ndarray) or 图像.ndim != 3 or 图像.shape[2] < 3:
+            return False
+        高, 宽 = 图像.shape[:2]
+        if 高 < 300 or 宽 < 400:
+            return False
+        try:
+            hsv = cv2.cvtColor(图像, cv2.COLOR_BGR2HSV)
+
+            # 1) 排除战斗左下红色放弃按钮
+            放弃上 = int(高 * 0.67)
+            放弃高 = max(1, int(高 * 0.22))
+            放弃区 = hsv[放弃上:min(高, 放弃上 + 放弃高), 0:max(1, int(宽 * 0.22))]
+            if 放弃区.size:
+                放弃红 = (
+                    ((放弃区[:, :, 0] <= 12) | (放弃区[:, :, 0] >= 170))
+                    & (放弃区[:, :, 1] >= 90)
+                    & (放弃区[:, :, 2] >= 80)
+                ).astype(np.uint8)
+                _, _, 放弃统计, _ = cv2.connectedComponentsWithStats(放弃红, 8)
+                区宽 = 放弃区.shape[1]
+                for x, y, w, h, area in 放弃统计[1:]:
+                    if (
+                        area >= 600
+                        and w >= max(55, int(区宽 * 0.28))
+                        and w <= max(55, int(区宽 * 0.82))
+                        and h >= 20
+                        and w / max(1, h) >= 1.5
+                        and x <= max(40, int(区宽 * 0.25))
+                        and y <= int(放弃区.shape[0] * 0.75)
+                    ):
+                        return False
+
+            # 2) 排除战斗顶部倒计时（白色或红字倒计时）
+            倒计时区 = hsv[0:int(高 * 0.18), int(宽 * 0.32):int(宽 * 0.72)]
+            if 倒计时区.size:
+                开核 = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+                白字 = cv2.morphologyEx(
+                    ((倒计时区[:, :, 1] <= 95) & (倒计时区[:, :, 2] >= 165)).astype(np.uint8),
+                    cv2.MORPH_OPEN,
+                    开核,
+                )
+                _, _, 字统计, _ = cv2.connectedComponentsWithStats(白字, 8)
+                字符 = [
+                    (x, y, w, h)
+                    for x, y, w, h, area in 字统计[1:]
+                    if area >= 20
+                    and h >= max(12, int(高 * 0.018))
+                    and h <= int(高 * 0.14)
+                    and w >= 3
+                    and y <= int(高 * 0.14)
+                ]
+                字符.sort(key=lambda 项: 项[0])
+                大字 = [
+                    项 for 项 in 字符
+                    if 项[3] >= max(20, int(高 * 0.030))
+                    and 项[1] >= int(高 * 0.035)
+                ]
+                for 序列, 间距上限, y容差 in (
+                    (大字, max(24, int(宽 * 0.04)), max(12, int(高 * 0.022))),
+                    (字符, max(28, int(宽 * 0.05)), max(14, int(高 * 0.025))),
+                ):
+                    for 前, 后 in zip(序列, 序列[1:]):
+                        前y = 前[1] + 前[3] / 2
+                        后y = 后[1] + 后[3] / 2
+                        间距 = 后[0] - (前[0] + 前[2])
+                        if (
+                            -max(2, int(宽 * 0.005)) <= 间距 <= 间距上限
+                            and abs(前y - 后y) <= y容差
+                        ):
+                            return False
+                红字 = cv2.morphologyEx(
+                    (
+                        ((倒计时区[:, :, 0] <= 12) | (倒计时区[:, :, 0] >= 170))
+                        & (倒计时区[:, :, 1] >= 90)
+                        & (倒计时区[:, :, 2] >= 100)
+                    ).astype(np.uint8),
+                    cv2.MORPH_OPEN,
+                    开核,
+                )
+                _, _, 红统计, _ = cv2.connectedComponentsWithStats(红字, 8)
+                红字符 = [
+                    (x, y, w, h)
+                    for x, y, w, h, area in 红统计[1:]
+                    if area >= 20
+                    and h >= max(12, int(高 * 0.018))
+                    and h <= int(高 * 0.14)
+                    and w >= 3
+                    and y <= int(高 * 0.14)
+                ]
+                红提示 = [项 for 项 in 红字符 if 项[1] <= int(高 * 0.08)]
+                红数字 = [
+                    项 for 项 in 红字符
+                    if int(高 * 0.045) <= 项[1] <= int(高 * 0.13)
+                    and 项[3] >= max(17, int(高 * 0.028))
+                ]
+                if len(红提示) >= 3 and 红数字:
+                    return False
+
+            # 3) 底部中央绿色回营按钮
+            左, 右 = int(宽 * 0.38), int(宽 * 0.62)
+            上, 下 = int(高 * 0.76), int(高 * 0.99)
+            按钮区 = hsv[上:下, 左:右]
+            if not 按钮区.size:
+                return False
+            绿色 = (
+                (按钮区[:, :, 0] >= 30)
+                & (按钮区[:, :, 0] <= 100)
+                & (按钮区[:, :, 1] >= 70)
+                & (按钮区[:, :, 2] >= 100)
+            ).astype(np.uint8)
+            if float(np.mean(绿色)) < 0.08:
+                return False
+            最小按钮面积 = max(3500, int(宽 * 高 * 0.008))
+
+            def 存在回营按钮(掩码: np.ndarray, 最低填充: float = 0.0) -> bool:
+                _, _, 统计, _ = cv2.connectedComponentsWithStats(掩码, 8)
+                for _, _, bw, bh, area in 统计[1:]:
+                    if (
+                        area >= 最小按钮面积
+                        and bw >= int(宽 * 0.12)
+                        and bh >= int(高 * 0.06)
+                        and bw / max(1, bh) >= 1.70
+                        and bw <= int(宽 * 0.22)
+                        and bh <= int(高 * 0.14)
+                        and (最低填充 <= 0.0 or area >= bw * bh * 最低填充)
+                    ):
+                        return True
+                return False
+
+            绿色闭 = cv2.morphologyEx(
+                绿色, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (7, 5))
+            )
+            有回营按钮 = 存在回营按钮(绿色闭) or 存在回营按钮(绿色, 0.65)
+            if not 有回营按钮:
+                高亮绿 = (
+                    (按钮区[:, :, 0] >= 30)
+                    & (按钮区[:, :, 0] <= 100)
+                    & (按钮区[:, :, 1] >= 85)
+                    & (按钮区[:, :, 2] >= 140)
+                ).astype(np.uint8)
+                高亮闭 = cv2.morphologyEx(
+                    高亮绿, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3))
+                )
+                有回营按钮 = 存在回营按钮(高亮闭, 0.65)
+            if not 有回营按钮:
+                return False
+
+            # 4) 中央结算结果结构（宽金色横幅 或 星数/摧毁率亮色结构）
+            横幅区 = hsv[int(高 * 0.16):int(高 * 0.58), int(宽 * 0.22):int(宽 * 0.78)]
+            金色 = (
+                (横幅区[:, :, 0] <= 38)
+                & (横幅区[:, :, 1] >= 75)
+                & (横幅区[:, :, 2] >= 100)
+            ).astype(np.uint8)
+            金色 = cv2.morphologyEx(
+                金色, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (9, 5))
+            )
+            轮廓列表, _ = cv2.findContours(金色 * 255, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for 轮廓 in 轮廓列表:
+                _, _, w, h = cv2.boundingRect(轮廓)
+                if w >= int(宽 * 0.36) and h >= int(高 * 0.08) and w / max(1, h) >= 2.0:
+                    return True
+
+            中央 = hsv[int(高 * 0.12):int(高 * 0.60), int(宽 * 0.20):int(宽 * 0.80)]
+            亮色 = cv2.morphologyEx(
+                ((中央[:, :, 1] < 90) & (中央[:, :, 2] > 175)).astype(np.uint8),
+                cv2.MORPH_OPEN,
+                np.ones((3, 3), dtype=np.uint8),
+            )
+            _, _, 亮统计, _ = cv2.connectedComponentsWithStats(亮色, 8)
+            最小亮块 = max(80, int(中央.shape[0] * 中央.shape[1] * 0.00025))
+            大亮块数 = sum(
+                1
+                for _, _, bw, bh, area in 亮统计[1:]
+                if area >= 最小亮块 and bw >= max(8, int(宽 * 0.01)) and bh >= max(8, int(高 * 0.01))
+            )
+            return float(np.mean(亮色)) >= 0.014 and 大亮块数 >= 3
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return False
+
     def 识别(self, 屏幕图像: np.ndarray) -> 世界识别结果:
         """识别一张 800×600 逻辑截图，无法确认时返回 ``当前世界=None``。"""
         资源栏 = self._裁剪(屏幕图像, self.资源栏区域)
@@ -357,6 +611,22 @@ class 世界识别器:
             and 夜世界总分 - 主世界总分 >= self.最低分差
         ):
             当前世界 = "夜世界"
+        elif (
+            not 资源栏歧义
+            and not 夜徽章证据
+            and 夜资源分数 < self.资源图标阈值
+            and self._结算主资源下限 <= 主资源分数 < self.资源图标阈值
+            and 主资源分数 - 夜资源分数 >= self._结算主夜最小分差
+            and self._主世界三栏资源证据(资源栏)
+            and self._结算页上下文确认(屏幕图像)
+        ):
+            # 结算页左下世界入口被遮挡、右上圣水图标因暗角/压缩仅略低于
+            # 0.92 时，不放宽全局阈值，仅在同时确认“结算页上下文 + 主世界
+            # 三栏资源栏（含黑油） + 明确主/夜模板分差”后判为主世界。
+            主世界总分 = max(主世界总分, 0.58)
+            依据.append(f"结算页主世界三栏资源栏{主资源分数:.2f}")
+            依据.append("结算页回营结构")
+            当前世界 = "主世界"
         else:
             当前世界 = None
 
