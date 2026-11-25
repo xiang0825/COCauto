@@ -1674,6 +1674,10 @@ class 任务上下文:
                     )
                     return False
 
+                停止事件 = getattr(self, "停止事件", None)
+                if 停止事件 is not None and 停止事件.is_set():
+                    return False
+
                 当前次数 = int(getattr(self, "_宝箱领奖连续点击次数", 0) or 0) + 1
                 self._宝箱领奖连续点击次数 = 当前次数
                 self.置脚本状态(
@@ -1693,6 +1697,9 @@ class 任务上下文:
 
                 继续下一轮领奖 = False
                 for 复核序号 in range(6):
+                    停止事件 = getattr(self, "停止事件", None)
+                    if 停止事件 is not None and 停止事件.is_set():
+                        return False
                     self.脚本延时(250)
                     try:
                         try:
@@ -3744,6 +3751,12 @@ class 任务上下文:
         让恢复按钮永远点不下去。调用方必须先完成专用视觉确认，且
         这里固定精确点击，不接受随机偏移，也不允许用于普通任务。
         """
+        停止事件 = getattr(self, "停止事件", None)
+        if 停止事件 is not None and 停止事件.is_set():
+            记录状态 = getattr(self, "置脚本状态", None)
+            if callable(记录状态):
+                记录状态("任务已停止，取消已确认安全按钮点击")
+            return False
         if self.鼠标 is None:
             self.置脚本状态("恢复按钮点击失败：鼠标控制器未初始化")
             return False

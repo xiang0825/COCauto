@@ -27,6 +27,7 @@ def 创建上下文(屏幕图像: np.ndarray):
     上下文.置脚本状态 = Mock()
     上下文.停止事件 = Mock()
     上下文.停止事件.set = Mock()
+    上下文.停止事件.is_set.return_value = False
     上下文._宝石保护确认主页面 = Mock(return_value=False)
     上下文._战斗中 = False
     上下文._战斗结束已确认 = False

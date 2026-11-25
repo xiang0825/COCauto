@@ -2326,6 +2326,82 @@ class 页面识别测试(unittest.TestCase):
         待命上下文.清理宝箱领奖页.assert_called_once()
         self.assertEqual(待命上下文.识别点击画面.call_count, 3)
 
+    def test_宝箱领奖页清理_OCR期间触发停止事件立即中止且不点击(self):
+        领奖图 = self._读取宝箱领奖实机图()
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文._内存保护已触发 = False
+        上下文._宝箱领奖连续点击次数 = 0
+        上下文.页面恢复失败 = False
+        上下文.停止事件 = threading.Event()
+        上下文._获取点击页面识别器 = lambda: self.识别器
+        上下文.获取模板识别器 = lambda: self.引擎
+
+        def _OCR并停止(_图):
+            上下文.停止事件.set()
+            return (
+                [([[360, 500], [420, 500], [420, 530], [360, 530]], "繼續", 0.96)],
+                None,
+            )
+
+        上下文.获取OCR引擎 = lambda: _OCR并停止
+        上下文.点击已确认安全按钮 = Mock(return_value=True)
+        上下文.脚本延时 = Mock()
+        上下文.置脚本状态 = Mock()
+        上下文.op = SimpleNamespace(获取屏幕图像cv=Mock(return_value=领奖图))
+
+        self.assertFalse(上下文.清理宝箱领奖页(领奖图))
+        self.assertEqual(上下文._宝箱领奖连续点击次数, 0)
+        上下文.点击已确认安全按钮.assert_not_called()
+
+    def test_宝箱领奖页清理_复核循环入口响应停止事件立即中止(self):
+        领奖图 = self._读取宝箱领奖实机图()
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文._内存保护已触发 = False
+        上下文._宝箱领奖连续点击次数 = 0
+        上下文.页面恢复失败 = False
+        上下文.停止事件 = threading.Event()
+        上下文._获取点击页面识别器 = lambda: self.识别器
+        上下文.获取模板识别器 = lambda: self.引擎
+        上下文.获取OCR引擎 = lambda: lambda _图: (
+            [([[360, 500], [420, 500], [420, 530], [360, 530]], "繼續", 0.96)],
+            None,
+        )
+
+        def _点击后停止(_x, _y, 延时=0):
+            上下文.停止事件.set()
+            return True
+
+        上下文.点击已确认安全按钮 = Mock(side_effect=_点击后停止)
+        上下文.脚本延时 = Mock()
+        上下文.置脚本状态 = Mock()
+        上下文.op = SimpleNamespace(获取屏幕图像cv=Mock(return_value=领奖图))
+
+        self.assertFalse(上下文.清理宝箱领奖页(领奖图))
+        上下文.点击已确认安全按钮.assert_called_once()
+        上下文.脚本延时.assert_not_called()
+        上下文.op.获取屏幕图像cv.assert_not_called()
+
+    def test_点击已确认安全按钮_停止事件已置位时不移动也不点击(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.停止事件 = threading.Event()
+        上下文.停止事件.set()
+        上下文.置脚本状态 = Mock()
+        上下文.脚本延时 = Mock()
+        原回调 = Mock()
+        上下文.鼠标 = SimpleNamespace(
+            移动到=Mock(),
+            左键点击=Mock(return_value=True),
+            _安全点击检查回调=原回调,
+        )
+
+        self.assertFalse(上下文.点击已确认安全按钮(392, 515, 延时=450))
+        上下文.鼠标.移动到.assert_not_called()
+        上下文.鼠标.左键点击.assert_not_called()
+        上下文.脚本延时.assert_not_called()
+        self.assertIs(上下文.鼠标._安全点击检查回调, 原回调)
+
 
 if __name__ == "__main__":
     unittest.main()
