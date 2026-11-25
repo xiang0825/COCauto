@@ -12,6 +12,7 @@ import numpy as np
 from 模块.检测.OCR识别器 import 安全OCR引擎
 from 模块.检测.页面识别器 import 页面识别器
 from 模块.检测.模板匹配器 import 模板匹配引擎
+from 任务流程.基础任务框架 import 任务上下文
 from 任务流程.更新主世界账号资源状态 import 更新家乡资源状态任务
 from 任务流程.主世界打鱼.等待战斗结束并回营 import 等待战斗结束并回营任务
 from 任务流程.活动.部落竞赛 import 部落竞赛任务, 加载配置, 识别任务类型
@@ -181,6 +182,107 @@ class 实机截图回放测试(unittest.TestCase):
             识别任务类型(详情["文本"], 详情任务.配置, ""),
             任务样本["clan_task_type"],
         )
+
+    def test_实机宝箱领奖全屏页不被误判为主世界主页且可安全收起(self):
+        根目录 = 测试目录.parent
+        实机原图 = 读取截图(
+            根目录 / "tests" / "fixtures" / "奖励宝箱" / "live_reward_screen_1280x720.png"
+        )
+        实机800 = cv2.resize(实机原图, (800, 600), interpolation=cv2.INTER_AREA)
+        同款奖励页 = 读取截图(
+            根目录 / "tests" / "fixtures" / "奖励宝箱" / "奖励页_繼續.png"
+        )
+        主页截图 = 读取截图(根目录 / "tests" / "fixtures" / "coc_home_18_647_5.png")
+
+        for 名称, 图像 in (
+            ("live_1280x720", 实机原图),
+            ("live_800x600", 实机800),
+            ("奖励页_繼續", 同款奖励页),
+        ):
+            with self.subTest(样本=名称):
+                世界结果 = self.页面识别器.世界识别.识别(图像)
+                self.assertIsNone(世界结果.当前世界, 世界结果.摘要())
+                self.assertEqual(
+                    self.页面识别器.世界识别._新版战斗入口分数(图像),
+                    0.0,
+                    世界结果.摘要(),
+                )
+                self.assertLess(
+                    世界结果.主世界入口分数,
+                    self.页面识别器.世界识别.主世界入口阈值,
+                    世界结果.摘要(),
+                )
+                self.assertNotIn("新版战斗入口", 世界结果.摘要())
+
+                页面结果 = self.页面识别器.识别(图像, 战斗中=False)
+                self.assertEqual(页面结果.页面, "宝箱领奖页", 页面结果.摘要())
+                self.assertIsNone(页面结果.世界, 页面结果.摘要())
+                self.assertGreaterEqual(页面结果.可信度, 0.95)
+                self.assertIsNone(self.页面识别器.定位结算回营按钮(图像))
+                self.assertEqual(self.页面识别器.定位宝箱领奖继续按钮(图像), (392, 515))
+
+        # 真实 OCR + 清理宝箱领奖页：确认“繼續”后点击底部居中按钮并复核回到主世界主页
+        for 名称, 领奖图 in (("live_1280x720", 实机原图), ("live_800x600", 实机800)):
+            with self.subTest(OCR清理=名称):
+                点击记录 = []
+                当前帧 = [领奖图]
+                上下文 = 任务上下文.__new__(任务上下文)
+                上下文._战斗中 = False
+                上下文._内存保护已触发 = False
+                上下文._宝箱领奖连续点击次数 = 0
+                上下文.页面恢复失败 = False
+                上下文.停止事件 = SimpleNamespace(is_set=lambda: False)
+                上下文._获取点击页面识别器 = lambda: self.页面识别器
+                上下文.获取模板识别器 = lambda: self.页面识别器.模板识别
+                上下文.获取OCR引擎 = lambda: self.OCR引擎
+                上下文.脚本延时 = lambda *_a, **_k: None
+                上下文.置脚本状态 = lambda *_a, **_k: None
+
+                def _截(*_a, **_k):
+                    return 当前帧[0]
+
+                def _安全点击(x, y, 延时=0):
+                    点击记录.append((x, y))
+                    当前帧[0] = 主页截图
+                    return True
+
+                上下文.op = SimpleNamespace(获取屏幕图像cv=_截)
+                上下文.点击已确认安全按钮 = _安全点击
+                self.assertTrue(上下文.清理宝箱领奖页(领奖图))
+                self.assertEqual(点击记录, [(392, 515)])
+                self.assertEqual(上下文._宝箱领奖连续点击次数, 0)
+                self.assertFalse(上下文.页面恢复失败)
+
+    def test_非宝箱领奖页实机与合成负例不误命中(self):
+        根目录 = 测试目录.parent
+        商店绿按钮 = np.full((600, 800, 3), (45, 45, 50), dtype=np.uint8)
+        cv2.rectangle(商店绿按钮, (150, 120), (650, 440), (210, 205, 195), -1)
+        cv2.rectangle(商店绿按钮, (349, 489), (453, 547), (70, 225, 100), -1)
+
+        宝石弹窗 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(宝石弹窗, (365, 100), (740, 412), (220, 220, 220), -1)
+        cv2.rectangle(宝石弹窗, (700, 108), (730, 150), (20, 20, 210), -1)
+        cv2.rectangle(宝石弹窗, (340, 485), (460, 545), (60, 210, 80), -1)
+
+        负例列表 = (
+            ("coc_home", 读取截图(根目录 / "tests" / "fixtures" / "coc_home_18_647_5.png"), False),
+            ("disconnect", 读取截图(根目录 / "tests" / "fixtures" / "coc_idle_disconnect_18_647_5.png"), False),
+            ("army_config", 读取截图(根目录 / "tests" / "fixtures" / "coc_army_config_live_ui.png"), False),
+            ("clan_games_panel", 读取样本("clan_games_panel"), False),
+            ("clan_games_gold_task", 读取样本("clan_games_gold_task"), False),
+            ("settle_061956", 读取样本("settle_20261125_061956"), False),
+            ("chest_tap", 读取截图(根目录 / "tests" / "fixtures" / "奖励宝箱" / "宝箱页_4根.png"), False),
+            ("shop_green", 商店绿按钮, False),
+            ("gem_popup", 宝石弹窗, False),
+            ("battle_wood_like", 读取截图(根目录 / "tests" / "fixtures" / "奖励宝箱" / "live_reward_screen_1280x720.png"), True),
+        )
+        for 名称, 图像, 战斗中 in 负例列表:
+            with self.subTest(负例=名称, 战斗中=战斗中):
+                结果 = self.页面识别器.识别(图像, 战斗中=战斗中)
+                self.assertNotEqual(结果.页面, "宝箱领奖页", 结果.摘要())
+                if not 战斗中:
+                    self.assertIsNone(self.页面识别器.定位宝箱领奖继续按钮(图像))
+
 
 
 def _添加已知页面识别失败用例(样本ID: str) -> None:

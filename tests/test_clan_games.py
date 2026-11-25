@@ -432,6 +432,41 @@ class 流程测试(unittest.TestCase):
         self.assertEqual(任务.结果, "非主世界")
         self.assertEqual(游戏.点击记录, [])
 
+    def test_宝箱领奖页或低置信主页不误判活动结束120分钟冷却(self):
+        for 场景, 页面返回 in (
+            ("宝箱领奖页", SimpleNamespace(页面="宝箱领奖页", 世界=None, 可信度=0.96)),
+            ("低置信主页0.56", SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.56)),
+        ):
+            with self.subTest(场景=场景):
+                游戏 = 模拟游戏(有活动按钮=False)
+                数据库 = 假数据库()
+                数据库.状态["部落竞赛检查记录"] = {"本期见过入口": "2026-11"}
+                任务, 上下文, _, 通知, _ = 构造任务(游戏, 数据库=数据库)
+                上下文.识别点击画面 = lambda 强制=False, _r=页面返回: _r
+                self.assertTrue(任务.执行())
+                self.assertEqual(任务.结果, "非主世界")
+                self.assertEqual(游戏.点击记录, [])
+                self.assertEqual(通知, [])
+                记录 = 上下文.数据库.状态["部落竞赛检查记录"]
+                self.assertEqual(记录["结果"], "非主世界")
+                self.assertNotEqual(记录["结果"], "入口不存在")
+                # 确认即使首帧误过但找不到活动按钮复核仍非高置信主页时，同样拒绝误判入口不存在
+                任务2, 上下文2, _, 通知2, _ = 构造任务(游戏, 数据库=假数据库())
+                调用 = [0]
+
+                def _先通过后掉出(强制=False, _r=页面返回):
+                    调用[0] += 1
+                    return (
+                        SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.92)
+                        if 调用[0] == 1
+                        else _r
+                    )
+
+                上下文2.识别点击画面 = _先通过后掉出
+                self.assertTrue(任务2.执行())
+                self.assertEqual(任务2.结果, "非主世界")
+                self.assertEqual(通知2, [])
+
     def test_个人积分已满不接任务并提醒(self):
         游戏 = 模拟游戏(卡片=self.标准卡片(), 个人积分="10000/10000")
         任务, _, _, 通知, _ = 构造任务(游戏)

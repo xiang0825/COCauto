@@ -96,6 +96,12 @@ class 任务上下文:
     评分弹窗必需词 = ("部落", "GooglePlay")
     评分弹窗稍后词 = ("稍后", "稍後")
     评分弹窗按钮最低y = 300
+    宝箱领奖最多点击次数 = 3
+    宝箱领奖继续词 = ("继续",)
+    宝箱领奖危险词 = (
+        "宝石", "购买", "商店", "立即完成", "充值",
+        "特惠", "礼包", "gem", "gems", "shop", "buy", "store",
+    )
 
     def 请求任务计划等待(self, 秒数: float, 原因: str = "") -> None:
         """请求任务计划在本轮结束后延迟再次检查。
@@ -1477,6 +1483,268 @@ class 任务上下文:
             self.置脚本状态(f"选择卡片弹窗清理失败，禁止继续点击：{异常}")
             return False
 
+    @staticmethod
+    def _规范宝箱领奖OCR文本(文本: str) -> str:
+        """规范宝箱领奖页 OCR 字形（繁简统一、容错 續/績）。"""
+        转换 = str.maketrans({
+            "續": "续", "繼": "继", "績": "续",
+            "寶": "宝", "購": "购", "買": "买",
+            "禮": "礼", "萬": "万", "億": "亿",
+        })
+        return "".join(str(文本 or "").translate(转换).split()).lower()
+
+    @classmethod
+    def _校验宝箱领奖页OCR(
+        cls,
+        图像: np.ndarray,
+        OCR结果,
+        继续点: tuple[int, int],
+    ) -> tuple[bool, str]:
+        """校验宝箱领奖页 OCR：拒绝宝石/商店危险词，且确认底部居中存在“继续/繼續”。"""
+        if not isinstance(图像, np.ndarray) or 图像.ndim < 2 or 图像.size == 0:
+            return False, "无效图像"
+        高, 宽 = 图像.shape[:2]
+        项目 = [
+            项 for 项 in (OCR结果 or [])
+            if isinstance(项, (list, tuple)) and len(项) >= 2
+        ]
+        for 项 in 项目:
+            规范文本 = cls._规范宝箱领奖OCR文本(项[1])
+            for 危险词 in cls.宝箱领奖危险词:
+                if 危险词 in 规范文本:
+                    return False, f"命中危险词:{危险词}"
+
+        for 项 in 项目:
+            规范文本 = cls._规范宝箱领奖OCR文本(项[1])
+            if not any(词 in 规范文本 for 词 in cls.宝箱领奖继续词):
+                continue
+            框 = cls._解析升级弹窗OCR框(项)
+            if 框 is None:
+                continue
+            x1, y1, x2, y2 = 框
+            中心x = (x1 + x2) / 2.0 * 800.0 / max(1, 宽)
+            中心y = (y1 + y2) / 2.0 * 600.0 / max(1, 高)
+            if (
+                260.0 <= 中心x <= 540.0
+                and 440.0 <= 中心y <= 575.0
+                and abs(中心x - 继续点[0]) <= 80.0
+                and abs(中心y - 继续点[1]) <= 45.0
+            ):
+                return True, f"OCR确认:{规范文本}"
+        return False, "未确认底部居中继续文字"
+
+    def _存在中央宝石危险模板(self, 屏幕图像) -> tuple[bool, str]:
+        """检测中央弹窗区域的宝石/商店危险模板，不触发输入或 ESC。"""
+        if not isinstance(屏幕图像, np.ndarray) or 屏幕图像.ndim < 3 or 屏幕图像.size == 0:
+            return False, ""
+        获取识图 = getattr(self, "获取模板识别器", None)
+        if not callable(获取识图):
+            return False, ""
+        识图引擎 = 获取识图()
+        if 识图引擎 is None or not callable(getattr(识图引擎, "_安全加载模板", None)):
+            return False, ""
+        高, 宽 = 屏幕图像.shape[:2]
+        区域左, 区域上 = 180, 130
+        区域右, 区域下 = min(宽, 620), min(高, 450)
+        if 区域右 <= 区域左 or 区域下 <= 区域上:
+            return False, ""
+        危险区域 = 屏幕图像[区域上:区域下, 区域左:区域右]
+        中央命中列表 = []
+        for 模板 in ("宝石.bmp", "宝石1.bmp"):
+            命中, 坐标 = self._多尺度匹配宝石图标(
+                识图引擎,
+                危险区域,
+                模板,
+                比例列表=(0.80, 1.00),
+            )
+            if 命中:
+                中央命中列表.append((模板, (int(坐标[0]) + 区域左, int(坐标[1]) + 区域上)))
+        for 模板 in ("宝石2.bmp", "宝石3.bmp"):
+            命中, 坐标 = self._多尺度匹配宝石图标(
+                识图引擎,
+                危险区域,
+                模板,
+                比例列表=(1.00,),
+            )
+            if 命中:
+                中央命中列表.append((模板, (int(坐标[0]) + 区域左, int(坐标[1]) + 区域上)))
+        for _参考模板, 参考坐标 in 中央命中列表:
+            同区域命中 = [
+                项 for 项 in 中央命中列表
+                if abs(项[1][0] - 参考坐标[0]) <= 28
+                and abs(项[1][1] - 参考坐标[1]) <= 28
+            ]
+            if len(同区域命中) >= 2:
+                return True, f"{'、'.join(项[0] for 项 in 同区域命中)}@{参考坐标[0]},{参考坐标[1]}"
+        return False, ""
+
+    def 清理宝箱领奖页(self, 屏幕图像=None) -> bool:
+        """安全收起已确认的宝箱/魔法零食领奖全屏页。
+
+        必须同时满足：
+        1. 页面识别器确认页面为 ``宝箱领奖页`` 并定位到底部居中绿色按钮；
+        2. 中央宝石模板零命中；
+        3. OCR 未出现任何宝石/购买/商店等危险词，且底部居中按钮区确认存在“继续/繼續”文字；
+        4. 单轮及累计连续点击严格受限于 ``宝箱领奖最多点击次数``（默认 3 次），点击后强制
+           复核是否已安全退出领奖页。
+        """
+        if bool(getattr(self, "_战斗中", False)):
+            return False
+        if getattr(self, "_内存保护已触发", False):
+            return False
+        if getattr(self, "_正在清理宝箱领奖页", False):
+            return False
+
+        上限 = max(1, int(getattr(self, "宝箱领奖最多点击次数", 3) or 3))
+        if int(getattr(self, "_宝箱领奖连续点击次数", 0) or 0) >= 上限:
+            self.页面恢复失败 = True
+            self.置脚本状态(
+                f"宝箱领奖页安全点击已达上限（{上限}次），禁止继续盲点，保留当前画面"
+            )
+            return False
+
+        self._正在清理宝箱领奖页 = True
+        try:
+            识别器 = self._获取点击页面识别器()
+            首次用入参 = 屏幕图像 is not None
+            while int(getattr(self, "_宝箱领奖连续点击次数", 0) or 0) < 上限:
+                停止事件 = getattr(self, "停止事件", None)
+                if 停止事件 is not None and 停止事件.is_set():
+                    return False
+                if 首次用入参:
+                    当前图像 = 屏幕图像
+                    首次用入参 = False
+                else:
+                    try:
+                        当前图像 = self.op.获取屏幕图像cv(
+                            0, 0, 800, 600, 强制刷新=True
+                        )
+                    except TypeError:
+                        当前图像 = self.op.获取屏幕图像cv(0, 0, 800, 600)
+
+                页面结果 = 识别器.识别(当前图像, 战斗中=False)
+                当前页 = str(getattr(页面结果, "页面", "") or "")
+                if 当前页 != "宝箱领奖页":
+                    if int(getattr(self, "_宝箱领奖连续点击次数", 0) or 0) == 0:
+                        return False
+                    当前可信度 = float(getattr(页面结果, "可信度", 0.0) or 0.0)
+                    if 当前页 in {"主世界主页", "夜世界主页"} and 当前可信度 >= 0.70:
+                        self._最近点击页面结果 = 页面结果
+                        self._宝箱领奖连续点击次数 = 0
+                        self.页面恢复失败 = False
+                        self.置脚本状态(f"宝箱领奖页已收起并确认回到{当前页}")
+                        return True
+                    self.页面恢复失败 = True
+                    self.置脚本状态(f"宝箱领奖页点击继续后状态变为{当前页 or '未知'}，未确认主页")
+                    return False
+
+                继续点 = 识别器.定位宝箱领奖继续按钮(当前图像)
+                if 继续点 is None:
+                    self.页面恢复失败 = True
+                    self.置脚本状态("已识别宝箱领奖页但未确认底部居中继续按钮，禁止盲点")
+                    return False
+
+                宝石命中, 命中说明 = self._存在中央宝石危险模板(当前图像)
+                if 宝石命中:
+                    self.页面恢复失败 = True
+                    self._宝石保护已触发 = True
+                    self.置脚本状态(
+                        f"[安全拦截] 宝箱领奖页检测到中央宝石危险模板（{命中说明}），"
+                        "禁止点击继续按钮"
+                    )
+                    return False
+
+                try:
+                    OCR返回 = self.获取OCR引擎()(当前图像)
+                    OCR结果 = OCR返回[0] if isinstance(OCR返回, tuple) else OCR返回
+                except Exception as 异常:
+                    if self.是否内存异常(异常):
+                        self.触发内存保护("宝箱领奖页OCR", 异常)
+                    else:
+                        self.页面恢复失败 = True
+                        self.置脚本状态(f"宝箱领奖页OCR失败，拒绝盲点继续按钮：{异常}")
+                    return False
+
+                校验通过, 校验原因 = self._校验宝箱领奖页OCR(当前图像, OCR结果, 继续点)
+                if not 校验通过:
+                    self.页面恢复失败 = True
+                    self.置脚本状态(
+                        f"[安全拦截] 宝箱领奖页未通过OCR安全校验（{校验原因}），"
+                        "禁止点击任何按钮"
+                    )
+                    return False
+
+                当前次数 = int(getattr(self, "_宝箱领奖连续点击次数", 0) or 0) + 1
+                self._宝箱领奖连续点击次数 = 当前次数
+                self.置脚本状态(
+                    f"检测到宝箱领奖页，OCR已确认繼續按钮，执行第{当前次数}/{上限}次安全点击："
+                    f"{继续点[0]},{继续点[1]}"
+                )
+                if not self.点击已确认安全按钮(继续点[0], 继续点[1], 延时=450):
+                    self.页面恢复失败 = True
+                    self.置脚本状态("宝箱领奖页继续按钮输入未通过安全复核，禁止继续点击")
+                    return False
+
+                清理缓存 = getattr(self.op, "清理截图缓存", None)
+                if callable(清理缓存):
+                    清理缓存()
+                self._点击识别截图 = None
+                self._点击识别截图时间 = 0.0
+
+                继续下一轮领奖 = False
+                for 复核序号 in range(6):
+                    self.脚本延时(250)
+                    try:
+                        try:
+                            新画面 = self.op.获取屏幕图像cv(
+                                0, 0, 800, 600, 强制刷新=True
+                            )
+                        except TypeError:
+                            新画面 = self.op.获取屏幕图像cv(0, 0, 800, 600)
+                        新结果 = 识别器.识别(新画面, 战斗中=False)
+                        新页面 = str(getattr(新结果, "页面", "") or "")
+                        新置信度 = float(getattr(新结果, "可信度", 0.0) or 0.0)
+                        if 新页面 in {"主世界主页", "夜世界主页"} and 新置信度 >= 0.70:
+                            self._最近点击页面结果 = 新结果
+                            self._宝箱领奖连续点击次数 = 0
+                            self.页面恢复失败 = False
+                            self.置脚本状态(
+                                f"宝箱领奖页已安全点击继续，已确认回到{新页面}"
+                            )
+                            return True
+                        if 新页面 in {"断线弹窗", "选择卡片弹窗", "升级详情弹窗", "战斗星级奖励", "多按钮弹窗"}:
+                            self._最近点击页面结果 = 新结果
+                            self._宝箱领奖连续点击次数 = 0
+                            self.置脚本状态(
+                                f"宝箱领奖页已安全点击继续，后续界面为{新页面}"
+                            )
+                            return True
+                        if 新页面 == "宝箱领奖页" and 复核序号 >= 2:
+                            继续下一轮领奖 = True
+                            break
+                    except Exception as 异常:
+                        self.置脚本状态(f"宝箱领奖页点击后复核异常：{异常}")
+                if 继续下一轮领奖:
+                    continue
+                self.页面恢复失败 = True
+                self.置脚本状态("宝箱领奖页点击继续后未确认回到主页，禁止继续点击")
+                return False
+
+            self.页面恢复失败 = True
+            self.置脚本状态(
+                f"宝箱领奖页安全点击已达上限（{上限}次），停止继续点击，保留当前画面"
+            )
+            return False
+        except Exception as 异常:
+            if self.是否内存异常(异常):
+                self.触发内存保护("清理宝箱领奖页", 异常)
+            else:
+                self.页面恢复失败 = True
+                self.置脚本状态(f"宝箱领奖页安全清理异常，禁止继续点击：{异常}")
+            return False
+        finally:
+            self._正在清理宝箱领奖页 = False
+
     def 关闭军队配置页(self, 屏幕图像=None) -> bool:
         """关闭已确认的军队配置页，并连续确认已经回到主世界。
 
@@ -1882,6 +2150,7 @@ class 任务上下文:
                     "战斗过渡",
                     "战斗结算",
                     "战斗奖励选择",
+                    "宝箱领奖页",
                     "断线弹窗",
                     "系统维护",
                     "登录页",
@@ -2197,6 +2466,9 @@ class 任务上下文:
             self.清理选择卡片弹窗(getattr(self, "_点击识别截图", None))
             # 无论关闭是否成功，都阻断原始输入；失败时由清理器设置
             # 页面恢复失败，防止任何任务穿透弹窗误点卡片或宝石。
+            return True
+        if 结果 is not None and 结果.页面 == "宝箱领奖页":
+            self.清理宝箱领奖页(getattr(self, "_点击识别截图", None))
             return True
         if 结果 is not None and 结果.页面 == "升级详情弹窗":
             当前帧 = getattr(self, "_点击识别截图", None)
@@ -2650,6 +2922,7 @@ class 任务上下文:
                 页面名称 in {"主世界主页", "夜世界主页"}
                 and 页面置信度 >= 0.70
             ):
+                self._宝箱领奖连续点击次数 = 0
                 # 宝石/商店护栏在上一帧识别到危险页、但 ESC 后未能
                 # 立即拿到新画面时，会把 ``页面恢复失败`` 保留下来，
                 # 以防其它任务穿透未知页面继续点击。若后续这一帧已经
@@ -3404,6 +3677,13 @@ class 任务上下文:
         # 输入，不发送 ESC，让专门的回营流程读取结果并返回主页。
         页面结果 = getattr(self, "_最近点击页面结果", None)
         if (
+            not getattr(self, "_战斗中", False)
+            and 页面结果 is not None
+            and getattr(页面结果, "页面", "") == "宝箱领奖页"
+        ):
+            self.清理宝箱领奖页(getattr(self, "_点击识别截图", None))
+            return False
+        if (
             getattr(self, "_战斗中", False)
             and 页面结果 is not None
             and 页面结果.页面 == "战斗结算"
@@ -3504,7 +3784,7 @@ class 任务上下文:
             结果 = self._获取点击页面识别器().识别(画面, 战斗中=False)
             if getattr(结果, "页面", "") in {
                 "断线弹窗", "多按钮弹窗", "系统维护", "升级详情弹窗",
-                "选择卡片弹窗",
+                "选择卡片弹窗", "宝箱领奖页",
                 "战斗奖励选择", "战斗星级奖励",
             }:
                 self.置脚本状态(

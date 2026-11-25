@@ -902,6 +902,8 @@ class 页面识别器:
             高, 宽 = 图像.shape[:2]
             if 高 < 300 or 宽 < 400:
                 return 0.0
+            if self._宝箱领奖页分数(图像) >= 0.90:
+                return 0.0
             hsv = cv2.cvtColor(图像, cv2.COLOR_BGR2HSV)
 
             # 回营按钮只看底部中央，排除右侧战斗速度按钮和兵栏药水。
@@ -996,6 +998,8 @@ class 页面识别器:
         if not isinstance(图像, np.ndarray) or 图像.ndim < 2 or 图像.size == 0:
             return None
         try:
+            if self._宝箱领奖页分数(图像) >= 0.90:
+                return None
             高, 宽 = 图像.shape[:2]
             hsv = cv2.cvtColor(图像, cv2.COLOR_BGR2HSV)
             左, 右 = int(宽 * 0.38), int(宽 * 0.62)
@@ -1214,6 +1218,132 @@ class 页面识别器:
         if self._战斗星级奖励视觉分数(图像) < 0.90:
             return None
         return self._定位战斗星级奖励确定按钮(图像)
+
+    @staticmethod
+    def _定位宝箱领奖继续按钮(图像: np.ndarray) -> tuple[int, int] | None:
+        """定位宝箱/魔法零食领奖全屏页的底部居中绿色“继续/繼續”按钮。
+
+        要求同时满足：
+        1. 归一化到 800×600 后左右下角均为 3D 暖橙木桌纹理，排除草地/主夜世界/结算/商店。
+        2. 顶部左右为暗色木桌暗角，排除主世界草地与高亮顶部 HUD。
+        3. 右上角无高饱和资源条与图标，中央无大面积浅白商店/宝石弹窗背景。
+        4. 底部居中区域存在规范尺寸与高填充率的绿色矩形按钮，返回 800×600 中心点。
+        """
+        if not isinstance(图像, np.ndarray) or 图像.ndim != 3 or 图像.shape[2] < 3:
+            return None
+        if 图像.size == 0 or 图像.shape[0] < 300 or 图像.shape[1] < 400:
+            return None
+        try:
+            if 图像.shape[1] != 800 or 图像.shape[0] != 600:
+                参考图 = cv2.resize(图像, (800, 600), interpolation=cv2.INTER_AREA)
+            else:
+                参考图 = 图像
+            hsv = cv2.cvtColor(参考图, cv2.COLOR_BGR2HSV)
+
+            def 木桌比例(区: np.ndarray) -> float:
+                return float(
+                    (
+                        (区[:, :, 0] >= 11)
+                        & (区[:, :, 0] <= 21)
+                        & (区[:, :, 1] >= 110)
+                        & (区[:, :, 1] <= 235)
+                        & (区[:, :, 2] >= 80)
+                        & (区[:, :, 2] <= 220)
+                    ).mean()
+                )
+
+            左木 = hsv[360:570, 40:256]
+            右木 = hsv[360:570, 544:760]
+            if 木桌比例(左木) < 0.40 or 木桌比例(右木) < 0.40:
+                return None
+
+            上左 = hsv[12:108, 16:256]
+            上右 = hsv[12:108, 544:784]
+            if (
+                float((上左[:, :, 2] < 135).mean()) < 0.70
+                or float((上右[:, :, 2] < 135).mean()) < 0.70
+            ):
+                return None
+            上左草地 = float(
+                ((上左[:, :, 0] >= 22) & (上左[:, :, 0] <= 48) & (上左[:, :, 1] >= 70)).mean()
+            )
+            上右草地 = float(
+                ((上右[:, :, 0] >= 22) & (上右[:, :, 0] <= 48) & (上右[:, :, 1] >= 70)).mean()
+            )
+            if 上左草地 > 0.15 or 上右草地 > 0.15:
+                return None
+
+            右上HUD = hsv[0:150, 624:800]
+            if float(((右上HUD[:, :, 1] >= 80) & (右上HUD[:, :, 2] >= 160)).mean()) > 0.03:
+                return None
+
+            中央面板 = hsv[150:390, 200:600]
+            if float(((中央面板[:, :, 1] <= 40) & (中央面板[:, :, 2] >= 170)).mean()) >= 0.30:
+                return None
+
+            x1, y1, x2, y2 = 288, 468, 512, 564
+            按钮区 = hsv[y1:y2, x1:x2]
+            绿色 = cv2.inRange(
+                按钮区,
+                np.array([34, 80, 100], dtype=np.uint8),
+                np.array([85, 255, 255], dtype=np.uint8),
+            )
+            绿色 = cv2.morphologyEx(
+                绿色,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)),
+            )
+            _, _, 统计, _ = cv2.connectedComponentsWithStats(绿色, 8)
+            最小面积 = max(1500, int(800 * 600 * 0.008))
+            候选 = []
+            for x, y, 按钮宽, 按钮高, 面积 in 统计[1:]:
+                if not (
+                    面积 >= 最小面积
+                    and 96 <= 按钮宽 <= 192
+                    and 36 <= 按钮高 <= 84
+                    and 1.6 <= 按钮宽 / max(1, 按钮高) <= 3.2
+                    and 面积 >= 按钮宽 * 按钮高 * 0.65
+                ):
+                    continue
+                中心x = x1 + x + 按钮宽 / 2.0
+                中心y = y1 + y + 按钮高 / 2.0
+                if abs(中心x - 400.0) > 48.0:
+                    continue
+                候选.append((int(面积), (int(round(中心x)), int(round(中心y)))))
+            if not 候选:
+                return None
+            return max(候选, key=lambda 项: 项[0])[1]
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return None
+
+    def _宝箱领奖页分数(self, 图像: np.ndarray) -> float:
+        """结合强负例护栏返回宝箱/魔法零食领奖全屏页置信度。"""
+        if self._定位宝箱领奖继续按钮(图像) is None:
+            return 0.0
+        try:
+            if (
+                self.定位哥布林宝石提示关闭按钮(图像) is not None
+                or self._系统维护分数(图像) >= 0.90
+                or self._选择卡片弹窗分数(图像) >= 0.90
+                or self._升级详情弹窗分数(图像) >= 0.90
+                or self._断线弹窗分数(图像, 多按钮=True) >= 0.90
+                or self._断线弹窗分数(图像) >= 0.90
+                or self.定位联赛概况关闭按钮(图像) is not None
+                or self.定位主世界战斗模式普通按钮(图像) is not None
+                or self._红色放弃按钮分数(图像) >= 0.90
+                or self._战斗倒计时分数(图像) >= 0.90
+                or self.定位军队配置页攻击按钮(图像) is not None
+            ):
+                return 0.0
+            return 0.96
+        except Exception:
+            return 0.0
+
+    def 定位宝箱领奖继续按钮(self, 图像: np.ndarray) -> tuple[int, int] | None:
+        """仅在确认宝箱领奖全屏页且无负例遮罩时返回 800×600 居中继续按钮坐标。"""
+        if self._宝箱领奖页分数(图像) < 0.90:
+            return None
+        return self._定位宝箱领奖继续按钮(图像)
 
     @staticmethod
     def _规范战后奖励文字(文字) -> str:
@@ -1464,6 +1594,25 @@ class 页面识别器:
                     if 项
                 ),
             )
+
+        if (
+            not 战斗中
+            and 视觉战斗分数 < 0.90
+            and 倒计时分数 < 0.90
+            and 奖励选择分数 < self.奖励选择页阈值
+            and 模板结算分数 < self.结算阈值
+        ):
+            领奖分数 = self._宝箱领奖页分数(屏幕图像)
+            if 领奖分数 >= 0.90:
+                return 页面识别结果(
+                    页面="宝箱领奖页",
+                    世界=None,
+                    可信度=领奖分数,
+                    依据=(
+                        "3D木桌领奖背景",
+                        f"底部居中绿色继续按钮{领奖分数:.2f}",
+                    ),
+                )
 
         # 只有排除有效倒计时与战斗 HUD 后，才允许视觉结算候选盖过
         # 弱模板；否则它可能把实际仍在倒数的战场直接送入结算 OCR。

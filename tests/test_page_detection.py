@@ -2068,6 +2068,264 @@ class 页面识别测试(unittest.TestCase):
         )
         self.assertIsNone(self.识别器.定位结算回营按钮(夜世界无按钮))
 
+    @staticmethod
+    def _读取宝箱领奖实机图():
+        路径 = (
+            pathlib.Path(__file__).resolve().parent
+            / "fixtures"
+            / "奖励宝箱"
+            / "live_reward_screen_1280x720.png"
+        )
+        数据 = np.fromfile(str(路径), dtype=np.uint8)
+        图 = cv2.imdecode(数据, cv2.IMREAD_COLOR)
+        if 图 is None:
+            raise AssertionError(f"无法读取测试截图: {路径}")
+        return cv2.resize(图, (800, 600), interpolation=cv2.INTER_AREA)
+
+    @staticmethod
+    def _读取主世界实机图():
+        路径 = (
+            pathlib.Path(__file__).resolve().parent
+            / "fixtures"
+            / "coc_home_18_647_5.png"
+        )
+        数据 = np.fromfile(str(路径), dtype=np.uint8)
+        图 = cv2.imdecode(数据, cv2.IMREAD_COLOR)
+        if 图 is None:
+            raise AssertionError(f"无法读取测试截图: {路径}")
+        return 图
+
+    def test_宝箱领奖页安全清理_正例与连续多页收起(self):
+        领奖图 = self._读取宝箱领奖实机图()
+        主页图 = self._读取主世界实机图()
+        画面序列 = [领奖图, 领奖图, 主页图]
+        点击记录 = []
+
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文._内存保护已触发 = False
+        上下文._宝箱领奖连续点击次数 = 0
+        上下文.页面恢复失败 = False
+        上下文.停止事件 = threading.Event()
+        上下文._获取点击页面识别器 = lambda: self.识别器
+        上下文.获取模板识别器 = lambda: self.引擎
+        上下文.获取OCR引擎 = lambda: lambda _图: (
+            [([[360, 500], [420, 500], [420, 530], [360, 530]], "繼續", 0.96)],
+            None,
+        )
+        上下文.脚本延时 = Mock()
+        上下文.置脚本状态 = Mock()
+        上下文.op = SimpleNamespace(
+            获取屏幕图像cv=lambda *_a, **_k: 画面序列[0]
+        )
+
+        def _点击(x, y, 延时=0):
+            点击记录.append((x, y))
+            if len(画面序列) > 1:
+                画面序列.pop(0)
+            return True
+
+        上下文.点击已确认安全按钮 = _点击
+
+        self.assertTrue(上下文.清理宝箱领奖页(领奖图))
+        self.assertEqual(点击记录, [(392, 515), (392, 515)])
+        self.assertEqual(上下文._宝箱领奖连续点击次数, 0)
+        self.assertFalse(上下文.页面恢复失败)
+
+    def test_宝箱领奖页安全清理_拒绝危险词缺继续宝石模板与点击上限(self):
+        领奖图 = self._读取宝箱领奖实机图()
+
+        # 1) OCR 含危险词（寶石/購買/商店/立即完成）→ 严禁点击
+        for 危险词 in ("寶石", "購買", "商店", "立即完成"):
+            with self.subTest(危险词=危险词):
+                上下文 = 任务上下文.__new__(任务上下文)
+                上下文._战斗中 = False
+                上下文._内存保护已触发 = False
+                上下文._宝箱领奖连续点击次数 = 0
+                上下文.页面恢复失败 = False
+                上下文.停止事件 = threading.Event()
+                上下文._获取点击页面识别器 = lambda: self.识别器
+                上下文.获取模板识别器 = lambda: self.引擎
+                上下文.获取OCR引擎 = lambda: lambda _图, 词=危险词: (
+                    [
+                        ([[360, 500], [420, 500], [420, 530], [360, 530]], "繼續", 0.96),
+                        ([[340, 260], [460, 290], [460, 310], [340, 310]], f"花費50{词}", 0.95),
+                    ],
+                    None,
+                )
+                上下文.点击已确认安全按钮 = Mock(return_value=True)
+                上下文.脚本延时 = Mock()
+                上下文.置脚本状态 = Mock()
+                上下文.op = SimpleNamespace(获取屏幕图像cv=Mock(return_value=领奖图))
+
+                self.assertFalse(上下文.清理宝箱领奖页(领奖图))
+                上下文.点击已确认安全按钮.assert_not_called()
+                self.assertTrue(上下文.页面恢复失败)
+
+        # 2) OCR 缺少底部居中“继续/繼續” → 不盲点
+        上下文无继续 = 任务上下文.__new__(任务上下文)
+        上下文无继续._战斗中 = False
+        上下文无继续._内存保护已触发 = False
+        上下文无继续._宝箱领奖连续点击次数 = 0
+        上下文无继续.页面恢复失败 = False
+        上下文无继续.停止事件 = threading.Event()
+        上下文无继续._获取点击页面识别器 = lambda: self.识别器
+        上下文无继续.获取模板识别器 = lambda: self.引擎
+        上下文无继续.获取OCR引擎 = lambda: lambda _图: (
+            [([[300, 380], [500, 380], [500, 410], [300, 410]], "2倍戰鬥糕點", 0.95)],
+            None,
+        )
+        上下文无继续.点击已确认安全按钮 = Mock(return_value=True)
+        上下文无继续.脚本延时 = Mock()
+        上下文无继续.置脚本状态 = Mock()
+        上下文无继续.op = SimpleNamespace(获取屏幕图像cv=Mock(return_value=领奖图))
+        self.assertFalse(上下文无继续.清理宝箱领奖页(领奖图))
+        上下文无继续.点击已确认安全按钮.assert_not_called()
+        self.assertTrue(上下文无继续.页面恢复失败)
+
+        # 3) 中央宝石模板命中 → 严禁点击并触发宝石保护
+        上下文宝石 = 任务上下文.__new__(任务上下文)
+        上下文宝石._战斗中 = False
+        上下文宝石._内存保护已触发 = False
+        上下文宝石._宝箱领奖连续点击次数 = 0
+        上下文宝石.页面恢复失败 = False
+        上下文宝石._宝石保护已触发 = False
+        上下文宝石.停止事件 = threading.Event()
+        上下文宝石._获取点击页面识别器 = lambda: self.识别器
+        上下文宝石._存在中央宝石危险模板 = Mock(return_value=(True, "宝石.bmp、宝石1.bmp@390,280"))
+        上下文宝石.获取OCR引擎 = Mock()
+        上下文宝石.点击已确认安全按钮 = Mock(return_value=True)
+        上下文宝石.脚本延时 = Mock()
+        上下文宝石.置脚本状态 = Mock()
+        上下文宝石.op = SimpleNamespace(获取屏幕图像cv=Mock(return_value=领奖图))
+        self.assertFalse(上下文宝石.清理宝箱领奖页(领奖图))
+        上下文宝石.点击已确认安全按钮.assert_not_called()
+        上下文宝石.获取OCR引擎.assert_not_called()
+        self.assertTrue(上下文宝石.页面恢复失败)
+        self.assertTrue(上下文宝石._宝石保护已触发)
+
+        # 4) 达到点击上限 3 次后拒绝继续点击
+        上下文上限 = 任务上下文.__new__(任务上下文)
+        上下文上限._战斗中 = False
+        上下文上限._内存保护已触发 = False
+        上下文上限._宝箱领奖连续点击次数 = 0
+        上下文上限.页面恢复失败 = False
+        上下文上限.停止事件 = threading.Event()
+        上下文上限._获取点击页面识别器 = lambda: self.识别器
+        上下文上限.获取模板识别器 = lambda: self.引擎
+        上下文上限.获取OCR引擎 = lambda: lambda _图: (
+            [([[360, 500], [420, 500], [420, 530], [360, 530]], "繼續", 0.96)],
+            None,
+        )
+        上下文上限.点击已确认安全按钮 = Mock(return_value=True)
+        上下文上限.脚本延时 = Mock()
+        上下文上限.置脚本状态 = Mock()
+        上下文上限.op = SimpleNamespace(获取屏幕图像cv=Mock(return_value=领奖图))
+        self.assertFalse(上下文上限.清理宝箱领奖页(领奖图))
+        self.assertEqual(上下文上限.点击已确认安全按钮.call_count, 3)
+        self.assertTrue(上下文上限.页面恢复失败)
+        # 再次调用直接拒绝
+        self.assertFalse(上下文上限.清理宝箱领奖页(领奖图))
+        self.assertEqual(上下文上限.点击已确认安全按钮.call_count, 3)
+
+    def test_宝箱领奖页在安全护栏_登录_进攻与待命链路安全处理(self):
+        领奖图 = self._读取宝箱领奖实机图()
+        主页图 = self._读取主世界实机图()
+
+        # 1) 输入前安全检查拦截宝箱领奖页并清理
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文._点击识别截图 = 领奖图
+        上下文.检查宝石商店危险页面 = Mock(return_value=False)
+        上下文._最近点击页面结果 = SimpleNamespace(页面="宝箱领奖页")
+        上下文.清理宝箱领奖页 = Mock(return_value=True)
+        self.assertTrue(上下文.输入前安全检查())
+        上下文.清理宝箱领奖页.assert_called_once_with(领奖图)
+
+        # 2) 登录检测任务遇到宝箱领奖页先安全收起再继续确认主页
+        登录上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(side_effect=[领奖图, 主页图, 主页图]),
+                设备=SimpleNamespace(
+                    获取当前前台包名=Mock(return_value="com.supercell.clashofclans")
+                ),
+            ),
+            设置=SimpleNamespace(部落冲突包名="com.supercell.clashofclans"),
+            数据库=Mock(),
+            机器人标志="robot_test",
+            停止事件=threading.Event(),
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            清理宝箱领奖页=Mock(return_value=True),
+        )
+        登录任务 = 检测游戏登录状态任务(登录上下文)
+        登录任务.第一次检测游戏登录 = False
+        登录任务._检测断线弹窗 = Mock(return_value=(False, (0, 0)))
+        登录任务._登录主页已确认 = Mock(return_value=True)
+        def _匹配登录模板(_图像, 模板路径, **_参数):
+            命中 = "家乡进攻图标" in 模板路径 or "不用拉远视距" in 模板路径
+            return 命中, (100, 100), 0.95 if 命中 else 0.0
+
+        with patch("任务流程.检测游戏登录状态.模板匹配引擎") as 模板类, \
+             patch("任务流程.检测游戏登录状态.页面识别器", return_value=self.识别器):
+            模板类.return_value.执行匹配.side_effect = _匹配登录模板
+            self.assertTrue(登录任务.执行(首次登录=False))
+        登录上下文.清理宝箱领奖页.assert_called_once()
+
+        # 3) 打开进攻页面识别到宝箱领奖页并尝试安全收起；失败则阻止打开进攻页
+        from 任务流程.主世界打鱼.打开进攻页面 import 打开进攻页面任务
+        进攻上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=领奖图)),
+            数据库=Mock(),
+            机器人标志="robot_test",
+            获取模板识别器=lambda: self.引擎,
+            _获取点击页面识别器=lambda: self.识别器,
+            _战斗中=False,
+            识别点击画面=Mock(return_value=SimpleNamespace(页面="宝箱领奖页", 世界=None, 可信度=0.96)),
+            清理宝箱领奖页=Mock(return_value=False),
+            停止事件=threading.Event(),
+            置脚本状态=Mock(),
+        )
+        进攻任务 = 打开进攻页面任务(进攻上下文)
+        self.assertEqual(进攻任务._识别已存在的战斗页面(进攻上下文, 强制=True), "宝箱领奖页")
+        self.assertFalse(进攻任务.执行())
+        进攻上下文.清理宝箱领奖页.assert_called_once()
+
+        # 4) 自动化机器人._安全待命单次 遇到宝箱领奖页能安全收起并在双帧主页后恢复
+        from 线程.自动化机器人 import 自动化机器人
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.停止事件 = Mock()
+        机器人.停止事件.is_set.return_value = False
+        机器人.停止事件.wait.return_value = False
+        机器人.继续事件 = threading.Event()
+        机器人.继续事件.set()
+        机器人.停止原因 = None
+        机器人.数据库 = None
+        机器人.记录日志 = Mock()
+        页面序列 = iter([
+            SimpleNamespace(页面="宝箱领奖页", 世界=None, 可信度=0.96),
+            SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.95),
+            SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.95),
+        ])
+        待命上下文 = SimpleNamespace(
+            设置=SimpleNamespace(未知页面待命通知秒数=180),
+            停止事件=机器人.停止事件,
+            页面恢复失败=True,
+            _宝箱领奖连续点击次数=0,
+            _宝石保护已触发=False,
+            _战斗中=False,
+            _战斗结束已确认=False,
+            _最近点击页面结果=SimpleNamespace(页面="宝箱领奖页"),
+            识别点击画面=Mock(side_effect=lambda 强制=True: next(页面序列)),
+            清理宝箱领奖页=Mock(return_value=True),
+            置脚本状态=Mock(),
+        )
+        with patch("线程.自动化机器人.检测游戏登录状态任务"):
+            self.assertTrue(机器人._安全待命单次(待命上下文, "主世界"))
+        待命上下文.清理宝箱领奖页.assert_called_once()
+        self.assertEqual(待命上下文.识别点击画面.call_count, 3)
+
 
 if __name__ == "__main__":
     unittest.main()

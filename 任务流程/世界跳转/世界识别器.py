@@ -233,10 +233,13 @@ class 世界识别器:
         try:
             高度, 宽度 = 区域.shape[:2]
             hsv = cv2.cvtColor(区域, cv2.COLOR_BGR2HSV)
+            # 3D 宝箱/魔法零食领奖界面的木桌边缘在左下角 ROI 右上方也会形成暖橙棕色块
+            # （H≈16、饱和度与亮度均明显偏低，且贴近 ROI 右上边界）；新版黄色“战斗”入口
+            # 卡片锚定在左下边缘内侧，且拥有高饱和、高亮度的纯金黄核心。
             黄色 = cv2.inRange(
                 hsv,
-                np.array([15, 95, 110], dtype=np.uint8),
-                np.array([42, 255, 255], dtype=np.uint8),
+                np.array([19, 115, 100], dtype=np.uint8),
+                np.array([33, 255, 255], dtype=np.uint8),
             )
             # 卡片内的剑图标会挖出空洞，但外轮廓本身连续。闭运算会将
             # 邻近的星级条/底部棕框连成大轮廓，再因尺寸过大拒绝入口。
@@ -248,12 +251,28 @@ class 世界识别器:
                 比例 = w / max(1.0, float(h))
                 if w < max(35, int(宽度 * 0.30)) or h < max(22, int(高度 * 0.12)):
                     continue
-                # 新版“战斗”是纵向大卡片：在 800×600 参考画布上宽高比
-                # 约 0.7；旧门槛只接收横向按钮，导致真实主页始终被判未知。
-                if w > 宽度 * 0.98 or h > 高度 or not 0.55 <= 比例 <= 3.8:
+                # 新版“战斗”是纵向大卡片：在 800×600 参考画布上宽高比约 0.5~0.8
+                # （弹窗遮罩压暗后轮廓会略微收窄到 ~0.50），且左边界锚定在屏幕左下内侧；
+                # 排除紧贴 ROI 右边界的木桌/草地边缘色块。
+                if (
+                    x > 宽度 * 0.30
+                    or x + w > 宽度 * 0.96
+                    or w > 宽度 * 0.98
+                    or h > 高度
+                    or not 0.45 <= 比例 <= 3.8
+                ):
                     continue
                 填充率 = cv2.contourArea(项) / max(1.0, float(w * h))
-                if 填充率 >= 0.55:
+                if 填充率 < 0.55:
+                    continue
+                框hsv = hsv[y:y + h, x:x + w]
+                纯金核心 = (
+                    (框hsv[:, :, 0] >= 19)
+                    & (框hsv[:, :, 0] <= 33)
+                    & (框hsv[:, :, 1] >= 130)
+                    & (框hsv[:, :, 2] >= 100)
+                )
+                if float(纯金核心.mean()) >= 0.45:
                     return min(0.99, 0.90 + 0.09 * 填充率)
         except (AttributeError, TypeError, ValueError, cv2.error):
             return 0.0
@@ -330,6 +349,45 @@ class 世界识别器:
         except (AttributeError, TypeError, ValueError, cv2.error):
             return False
 
+    @staticmethod
+    def _是宝箱领奖背景(hsv: np.ndarray) -> bool:
+        """识别 3D 木桌宝箱/魔法零食领奖背景（双侧暗角木桌、无草地）。"""
+        高, 宽 = hsv.shape[:2]
+        if 高 < 300 or 宽 < 400:
+            return False
+        左木 = hsv[int(高 * 0.60):int(高 * 0.95), int(宽 * 0.05):int(宽 * 0.32)]
+        右木 = hsv[int(高 * 0.60):int(高 * 0.95), int(宽 * 0.68):int(宽 * 0.95)]
+        if 左木.size == 0 or 右木.size == 0:
+            return False
+
+        def 木桌比例(区: np.ndarray) -> float:
+            return float(
+                (
+                    (区[:, :, 0] >= 11)
+                    & (区[:, :, 0] <= 21)
+                    & (区[:, :, 1] >= 110)
+                    & (区[:, :, 1] <= 235)
+                    & (区[:, :, 2] >= 80)
+                    & (区[:, :, 2] <= 220)
+                ).mean()
+            )
+
+        if 木桌比例(左木) < 0.40 or 木桌比例(右木) < 0.40:
+            return False
+
+        上左 = hsv[int(高 * 0.02):int(高 * 0.18), int(宽 * 0.02):int(宽 * 0.32)]
+        上右 = hsv[int(高 * 0.02):int(高 * 0.18), int(宽 * 0.68):int(宽 * 0.98)]
+        if 上左.size == 0 or 上右.size == 0:
+            return False
+        暗度 = min(float((上左[:, :, 2] < 135).mean()), float((上右[:, :, 2] < 135).mean()))
+        if 暗度 < 0.70:
+            return False
+        草地 = max(
+            float(((上左[:, :, 0] >= 22) & (上左[:, :, 0] <= 48) & (上左[:, :, 1] >= 70)).mean()),
+            float(((上右[:, :, 0] >= 22) & (上右[:, :, 0] <= 48) & (上右[:, :, 1] >= 70)).mean()),
+        )
+        return 草地 <= 0.15
+
     @classmethod
     def _结算页上下文确认(cls, 图像: np.ndarray) -> bool:
         """仅在非战斗、且具备结算结果结构与底部绿色回营按钮时确认结算上下文。"""
@@ -340,6 +398,8 @@ class 世界识别器:
             return False
         try:
             hsv = cv2.cvtColor(图像, cv2.COLOR_BGR2HSV)
+            if cls._是宝箱领奖背景(hsv):
+                return False
 
             # 1) 排除战斗左下红色放弃按钮
             放弃上 = int(高 * 0.67)

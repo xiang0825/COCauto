@@ -459,10 +459,19 @@ class 部落竞赛任务(基础任务):
             结果 = 识别(强制=True)
         except Exception:
             return False
-        return (
-            getattr(结果, "页面", "") == "主世界主页"
-            and getattr(结果, "世界", "主世界") == "主世界"
-        )
+        if (
+            getattr(结果, "页面", "") != "主世界主页"
+            or getattr(结果, "世界", None) != "主世界"
+        ):
+            return False
+        可信度 = getattr(结果, "可信度", None)
+        if 可信度 is not None:
+            try:
+                if float(可信度) < 0.70:
+                    return False
+            except (TypeError, ValueError):
+                return False
+        return True
 
     # ---------------------------------------------------------------- 冷却
     def _读状态(self) -> dict:
@@ -653,6 +662,9 @@ class 部落竞赛任务(基础任务):
         图像 = self._截图()
         活动按钮 = self._匹配模板(图像, "活动按钮")
         if 活动按钮 is None:
+            if not self._是主世界主页():
+                self._日志("未找到活动按钮且当前页面非高置信主世界主页，按非主世界跳过")
+                return "非主世界"
             self._日志("底栏没有找到活动按钮，跳过")
             return "入口不存在"
         if not self._点击(活动按钮, "活动按钮"):
@@ -663,6 +675,9 @@ class 部落竞赛任务(基础任务):
         self._设置面板标记(True)
         开启点 = self._找部落竞赛开启()
         if 开启点 is None:
+            if self._活动列表已打开() is None and not self._是主世界主页():
+                self._日志("活动列表已失去确认且不在主世界主页，不判定活动结束")
+                return "非主世界"
             self._日志("活动列表里没有部落竞赛（活动可能已结束）")
             return "入口不存在"
         if not self._点击(开启点, "部落竞赛开启"):
