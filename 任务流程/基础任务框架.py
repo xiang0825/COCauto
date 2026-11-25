@@ -127,6 +127,52 @@ class 任务上下文:
             self._共享模板识别器 = 识别器
         return 识别器
 
+    def _获取模型空闲释放协调器(self):
+        协调器 = getattr(self, "_模型空闲释放协调器", None)
+        if 协调器 is None:
+            from 模块.运行节流与复盘 import 模型空闲释放协调器
+
+            协调器 = 模型空闲释放协调器()
+            self._模型空闲释放协调器 = 协调器
+        return 协调器
+
+    def 标记模型使用(self, 模型名: str = "") -> float:
+        """记录 OCR/YOLO 模型最近使用时间，防止连刷间隙误卸载。"""
+        return self._获取模型空闲释放协调器().标记使用()
+
+    def 检查空闲或内存释放识别模型(
+        self,
+        *,
+        空闲阈值秒: float | None = None,
+        检查间隔秒: float = 0.0,
+        强制检查内存: bool = True,
+    ) -> tuple[bool, str]:
+        """待机/暂停超阈值或主机内存紧张时懒释放识别模型。"""
+        return self._获取模型空闲释放协调器().按需释放(
+            self,
+            空闲阈值秒=空闲阈值秒,
+            检查间隔秒=检查间隔秒,
+            强制检查内存=强制检查内存,
+        )
+
+    def 设置运行节流场景(
+        self,
+        场景: str,
+        *,
+        间隔秒: float | None = None,
+    ) -> str:
+        """按活跃/低频场景动态调节截图和点击页面缓存频率。"""
+        from 模块.运行节流与复盘 import 解析截图节流配置
+
+        规范场景, _, 点击缓存秒 = 解析截图节流配置(场景, 间隔秒=间隔秒)
+        self._运行节流场景 = 规范场景
+        self._低频点击缓存秒 = 点击缓存秒
+        操作 = getattr(self, "op", None)
+        设置方法 = getattr(操作, "设置截图节流场景", None)
+        if callable(设置方法):
+            设置方法(场景, 间隔秒=间隔秒)
+        return 规范场景
+
     def 获取OCR引擎(self):
         """延迟创建并复用 OCR 引擎，避免任务循环重复触碰 native 模型。"""
         if getattr(self, "_内存保护已触发", False):
@@ -139,6 +185,7 @@ class 任务上下文:
 
             引擎 = 安全OCR引擎()
             self._共享OCR引擎 = 引擎
+        self.标记模型使用("OCR")
         return 引擎
 
     def 获取YOLO检测器(self):
@@ -152,10 +199,11 @@ class 任务上下文:
 
             检测器 = 线程安全YOLO检测器()
             self._共享YOLO检测器 = 检测器
+        self.标记模型使用("YOLO")
         return 检测器
 
     def 释放识别模型(self) -> None:
-        """机器人停止时释放 ONNX/OpenCV native 对象，避免反复运行逐渐涨内存。"""
+        """机器人停止或长时空闲时释放 ONNX/OpenCV native 对象，避免反复运行逐渐涨内存。"""
         OCR = getattr(self, "_共享OCR引擎", None)
         释放OCR = getattr(OCR, "释放模型", None)
         if callable(释放OCR):
@@ -177,6 +225,10 @@ class 任务上下文:
         self._战斗开始兵栏画面 = None
         self._共享OCR引擎 = None
         self._共享YOLO检测器 = None
+        self._模型释放版本号 = int(getattr(self, "_模型释放版本号", 0)) + 1
+        协调器 = getattr(self, "_模型空闲释放协调器", None)
+        if 协调器 is not None:
+            协调器.重置计时()
         gc.collect()
 
     def 清除战斗结算保护状态(self, 来源: str = "结算回营") -> None:
@@ -1898,7 +1950,10 @@ class 任务上下文:
         上次时间 = float(getattr(self, "_点击识别截图时间", 0.0))
         上次截图 = getattr(self, "_点击识别截图", None)
         战斗中 = bool(getattr(self, "_战斗中", False))
-        缓存窗口秒 = 0.75 if 战斗中 else 0.20
+        if getattr(self, "_运行节流场景", "活跃") == "低频":
+            缓存窗口秒 = float(getattr(self, "_低频点击缓存秒", 1.60) or 1.60)
+        else:
+            缓存窗口秒 = 0.75 if 战斗中 else 0.20
         # 强制仅用于主世界点击后的确认。战斗中的“强制”不应绕过底层
         # ADB 截图节流，否则一次连点会产生一张新全屏图。
         if (
@@ -3178,9 +3233,23 @@ class 任务上下文:
                 raise 主机内存保护暂停请求("宿主机内存保护已触发，暂停当前任务并等待恢复")
 
             if not self.继续事件.is_set():
+                防休眠 = getattr(self, "_防休眠控制器", None)
+                if 防休眠 is not None and callable(getattr(防休眠, "允许休眠", None)):
+                    防休眠.允许休眠()
+                检查释放 = getattr(self, "检查空闲或内存释放识别模型", None)
+                if callable(检查释放):
+                    检查释放(检查间隔秒=10.0)
                 # 暂停时也用有界等待，这样停止事件仍能快速唤醒线程。
                 self.继续事件.wait(timeout=0.25)
+                if self.继续事件.is_set() and not self.停止事件.is_set():
+                    if 防休眠 is not None and callable(getattr(防休眠, "保持唤醒", None)):
+                        防休眠.保持唤醒()
                 continue
+
+            if bool(getattr(self, "_任务计划长时间等待", False)):
+                检查释放 = getattr(self, "检查空闲或内存释放识别模型", None)
+                if callable(检查释放):
+                    检查释放(检查间隔秒=10.0)
 
             当前单调时间 = time.monotonic()
             if 当前单调时间 >= 截止时间:
@@ -3504,13 +3573,27 @@ class 基础任务(ABC):
     @property
     def ocr引擎(self):
         """只在任务真正读取 OCR 属性时，才从运行上下文取得共享引擎。"""
+        上下文 = getattr(self, "上下文", None)
+        当前版本 = int(getattr(上下文, "_模型释放版本号", 0) or 0) if 上下文 is not None else 0
         if "ocr引擎" in self.__dict__:
-            return self.__dict__["ocr引擎"]
-        获取器 = getattr(self.上下文, "获取OCR引擎", None)
+            if (
+                "_ocr引擎关联版本" not in self.__dict__
+                or self.__dict__["_ocr引擎关联版本"] == 当前版本
+            ):
+                标记 = getattr(上下文, "标记模型使用", None) if 上下文 is not None else None
+                if callable(标记):
+                    标记("OCR")
+                return self.__dict__["ocr引擎"]
+            self.__dict__.pop("ocr引擎", None)
+            self.__dict__.pop("_ocr引擎关联版本", None)
+        获取器 = getattr(上下文, "获取OCR引擎", None) if 上下文 is not None else None
         if callable(获取器):
             引擎 = 获取器()
             if 引擎 is not None:
                 self.__dict__["ocr引擎"] = 引擎
+                self.__dict__["_ocr引擎关联版本"] = int(
+                    getattr(上下文, "_模型释放版本号", 0) or 0
+                )
             return 引擎
 
         # 兼容旧版上下文：首次用到时创建，并缓存在任务对象上。
@@ -3524,6 +3607,7 @@ class 基础任务(ABC):
     def ocr引擎(self, 引擎):
         # 保留旧任务和测试通过赋值注入替代引擎的兼容行为。
         self.__dict__["ocr引擎"] = 引擎
+        self.__dict__.pop("_ocr引擎关联版本", None)
 
     @property
     def 检测器(self):

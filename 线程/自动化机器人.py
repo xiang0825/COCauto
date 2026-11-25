@@ -298,10 +298,23 @@ class 自动化机器人:
         else:
             _安全控制台打印("目前线程未停止,无需再次启动")
 
+    def _获取防休眠控制器(self):
+        控制器 = getattr(self, "_防休眠控制器", None)
+        if 控制器 is None:
+            from 模块.防休眠 import 防休眠控制器
+
+            控制器 = 防休眠控制器(日志回调=getattr(self, "置脚本状态", None))
+            self._防休眠控制器 = 控制器
+        return 控制器
+
     def 暂停(self):
         """标记暂停状态"""
         _安全控制台打印("已暂停")
         self.继续事件.clear()
+        try:
+            self._获取防休眠控制器().允许休眠()
+        except Exception:
+            pass
 
     def 继续(self):
         """清除暂停状态"""
@@ -312,6 +325,11 @@ class 自动化机器人:
             # 继续判定，避免 F1 刚恢复就被旧日志的截止时间误停。
             self.记录日志("机器人已从暂停状态继续，等待下一条任务心跳", 120)
         self.继续事件.set()
+        if not self.停止事件.is_set():
+            try:
+                self._获取防休眠控制器().保持唤醒()
+            except Exception:
+                pass
 
     def 停止(self, 停止原因="", 等待=True, 超时: float = 10.0):
         """标记终止状态
@@ -907,13 +925,38 @@ class 自动化机器人:
             黑油储存上限 = getattr(
                 getattr(self, "设置", None), "黑油储存上限", 500_000
             )
-            if 是否目标资源打满(
+            已满仓 = 是否目标资源打满(
                 家乡资源, 当前优先级, 历史峰值, 黑油储存上限
-            ) and self._满仓继续打鱼(上下文, "主世界"):
+            )
+            当前设置 = getattr(self, "设置", None) or getattr(上下文, "设置", None)
+            if getattr(当前设置, "满仓自动顺手刷墙", False):
+                from 模块.运行节流与复盘 import (
+                    尝试满仓顺手刷墙,
+                    金水是否达到刷墙阈值,
+                )
+
+                阈值比例 = getattr(当前设置, "刷墙资源阈值比例", 90)
+                金水达标, _ = 金水是否达到刷墙阈值(
+                    家乡资源, 阈值比例=阈值比例, 历史峰值=历史峰值
+                )
+                if (已满仓 or 金水达标) and 尝试满仓顺手刷墙(
+                    self, 上下文, 家乡资源, 历史峰值
+                ):
+                    try:
+                        if 更新家乡资源状态任务(上下文).执行():
+                            最新状态 = 上下文.数据库.获取最新完整状态(self.机器人标志)
+                            新资源 = self._取已确认家乡资源(最新状态)
+                            if 新资源 is not None:
+                                家乡资源 = 新资源
+                                当前状态 = 最新状态
+                                已满仓 = 是否目标资源打满(
+                                    家乡资源, 当前优先级, 历史峰值, 黑油储存上限
+                                )
+                    except Exception:
+                        pass
+            if 已满仓 and self._满仓继续打鱼(上下文, "主世界"):
                 pass
-            elif 是否目标资源打满(
-                家乡资源, 当前优先级, 历史峰值, 黑油储存上限
-            ):
+            elif 已满仓:
                 上下文._资源计划已打满 = True
                 上下文.置脚本状态(
                     f"战利品优先级[{当前优先级}]对应资源已接近已知储存容量；"
@@ -1780,16 +1823,32 @@ class 自动化机器人:
         )
         self.记录日志("安全待命：等待人工处理或游戏内恢复；当前不发送游戏输入", 120)
 
-        while not self.停止事件.is_set():
+        节流设置 = getattr(上下文, "设置运行节流场景", None)
+        原节流场景 = getattr(上下文, "_运行节流场景", "活跃")
+        if callable(节流设置):
+            节流设置("待命观察")
+        防休眠 = getattr(self, "_获取防休眠控制器", lambda: None)()
+        检查释放 = getattr(上下文, "检查空闲或内存释放识别模型", None)
+
+        try:
+          while not self.停止事件.is_set():
             继续事件 = getattr(self, "继续事件", None)
             while (
                 继续事件 is not None
                 and not 继续事件.is_set()
                 and not self.停止事件.is_set()
             ):
+                if 防休眠 is not None:
+                    防休眠.允许休眠()
+                if callable(检查释放):
+                    检查释放(检查间隔秒=10.0)
                 继续事件.wait(timeout=0.5)
             if self.停止事件.is_set():
                 break
+            if 防休眠 is not None and (继续事件 is None or 继续事件.is_set()):
+                防休眠.保持唤醒()
+            if callable(检查释放):
+                检查释放(检查间隔秒=10.0)
 
             if callable(检查可恢复) and 检查可恢复():
                 检查预算恢复 = getattr(上下文, "检查主机内存预算恢复", None)
@@ -1973,6 +2032,9 @@ class 自动化机器人:
             # 停止和暂停都可及时中断/冻结这段低频页面复核。
             if self.停止事件.wait(timeout=5.0):
                 break
+        finally:
+            if callable(节流设置):
+                节流设置(原节流场景)
 
         return False
 
@@ -2049,7 +2111,12 @@ class 自动化机器人:
     def _满仓待机并监测断线(self, 上下文, 检测登录) -> bool:
         """满仓待机时复核连接和资源；资源下降后请求任务计划继续刷资源。"""
         上下文.置脚本状态("资源已达到目标，按设置进入待机；每分钟复核连接，不启动战斗")
-        while not self.停止事件.is_set():
+        节流设置 = getattr(上下文, "设置运行节流场景", None)
+        原节流场景 = getattr(上下文, "_运行节流场景", "活跃")
+        if callable(节流设置):
+            节流设置("满仓待机")
+        try:
+          while not self.停止事件.is_set():
             原长时间等待状态 = bool(
                 getattr(上下文, "_任务计划长时间等待", False)
             )
@@ -2128,6 +2195,9 @@ class 自动化机器人:
                 continue
             if self.停止原因 or self.停止事件.is_set():
                 break
+        finally:
+            if callable(节流设置):
+                节流设置(原节流场景)
 
         return False
 
@@ -2161,7 +2231,14 @@ class 自动化机器人:
             return
 
         try:
-
+            防休眠 = self._获取防休眠控制器()
+            上下文._防休眠控制器 = 防休眠
+            继续事件 = getattr(self, "继续事件", None)
+            停止事件 = getattr(self, "停止事件", None)
+            if (继续事件 is None or 继续事件.is_set()) and not (
+                停止事件 is not None and 停止事件.is_set()
+            ):
+                防休眠.保持唤醒()
 
             检测登录 = 检测游戏登录状态任务(上下文)#检测任务需要重复调用，这里先创建，但是不执行
 
@@ -2322,6 +2399,10 @@ class 自动化机器人:
                             f"本轮任务计划完成，{int(等待秒)}秒后自动开始下一轮"
                         )
                     上下文._任务计划长时间等待 = 等待秒 >= 60
+                    节流设置 = getattr(上下文, "设置运行节流场景", None)
+                    原节流场景 = getattr(上下文, "_运行节流场景", "活跃")
+                    if 上下文._任务计划长时间等待 and callable(节流设置):
+                        节流设置("长时等待")
                     try:
                         上下文.脚本延时(int(等待秒 * 1000))
                     except 主机内存保护暂停请求 as 内存暂停:
@@ -2337,6 +2418,8 @@ class 自动化机器人:
                         # 下一轮必须恢复普通维护频率；异常/停止也不能把
                         # 这个运行期标志带入后续任务。
                         上下文._任务计划长时间等待 = False
+                        if callable(节流设置):
+                            节流设置(原节流场景)
 
             if 是否有资源打满 and 设置.资源打满后动作 != "待机":
                 上下文.置脚本状态("资源已达到目标，按设置退出任务")
@@ -2378,6 +2461,10 @@ class 自动化机器人:
             self._写入未处理异常日志(诊断信息)
             self.停止事件.set()
         finally:
+            try:
+                self._获取防休眠控制器().允许休眠()
+            except Exception:
+                pass
             # 早期检查直接 return、截图异常和任务分支主动退出都必须把
             # 线程状态收敛为“已停止”；保留已有的外部停止或异常原因。
             if not self.停止原因:
