@@ -29,7 +29,7 @@ import numpy as np
 敲击间隔毫秒 = 600
 开箱等待毫秒 = 3000
 继续按钮文字 = ("繼續", "继续")
-继续按钮默认点 = (392, 513)
+继续按钮区域 = (280, 460, 520, 570)       # 800×600 下奖励页底部居中绿色“繼續”按钮范围（实测约 327..458, 487..543）
 继续按钮等待秒 = 10.0
 回主世界等待秒 = 15.0
 危险文字 = (
@@ -106,8 +106,52 @@ def _停止已置位(上下文) -> bool:
     return bool(callable(is_set) and is_set())
 
 
+def _规范逻辑画布(图像):
+    """将有效彩色截图规范到 800×600 逻辑画布，无效图像返回 None。"""
+    if (
+        not isinstance(图像, np.ndarray)
+        or 图像.ndim != 3
+        or 图像.shape[2] < 3
+        or 图像.size == 0
+    ):
+        return None
+    if 图像.shape[1] != 800 or 图像.shape[0] != 600:
+        return cv2.resize(图像, (800, 600), interpolation=cv2.INTER_AREA)
+    return 图像
+
+
+def _解析继续按钮框中心(框) -> tuple[int, int] | None:
+    """解析 OCR 框中心并严格校验其落在 800×600 奖励页底部居中按钮区域内。"""
+    try:
+        点 = np.asarray(框, dtype=float)
+    except (TypeError, ValueError):
+        return None
+    if 点.ndim == 2 and 点.shape[0] >= 4 and 点.shape[1] >= 2:
+        xs = 点[:, 0]
+        ys = 点[:, 1]
+    elif 点.ndim == 1 and 点.shape[0] == 4:
+        xs = np.array([点[0], 点[2]], dtype=float)
+        ys = np.array([点[1], 点[3]], dtype=float)
+    else:
+        return None
+    if not (np.all(np.isfinite(xs)) and np.all(np.isfinite(ys))):
+        return None
+    x_min, x_max = float(xs.min()), float(xs.max())
+    y_min, y_max = float(ys.min()), float(ys.max())
+    if x_max <= x_min or y_max <= y_min:
+        return None
+    中心x = float(xs.mean())
+    中心y = float(ys.mean())
+    左, 上, 右, 下 = 继续按钮区域
+    if not (左 <= 中心x <= 右 and 上 <= 中心y <= 下):
+        return None
+    if (x_max - x_min) > (右 - 左) or (y_max - y_min) > (下 - 上):
+        return None
+    return int(中心x), int(中心y)
+
+
 def 定位继续按钮(OCR结果) -> tuple[int, int] | None:
-    """在奖励页 OCR 结果里找“繼續”按钮中心；画面有宝石/购买/商店字样时不返回。"""
+    """在奖励页 OCR 结果里找底部居中“繼續”按钮中心；越界、解析失败或有危险字样时返回 None。"""
     有效项 = [
         项 for 项 in (OCR结果 or [])
         if isinstance(项, (list, tuple)) and len(项) >= 2
@@ -116,12 +160,60 @@ def 定位继续按钮(OCR结果) -> tuple[int, int] | None:
         return None
     for 项 in 有效项:
         if any(字 in str(项[1]) for 字 in 继续按钮文字):
-            try:
-                点 = np.asarray(项[0], dtype=float)
-                return int(点[:, 0].mean()), int(点[:, 1].mean())
-            except (TypeError, ValueError, IndexError):
-                return 继续按钮默认点
+            中心 = _解析继续按钮框中心(项[0])
+            if 中心 is not None:
+                return 中心
     return None
+
+
+def _确认是奖励领奖页(上下文, 图像) -> tuple[bool, tuple[int, int] | None, str]:
+    """显式确认当前画面为宝箱领奖页，未确认时严禁 OCR 回退点击。"""
+    画布 = _规范逻辑画布(图像)
+    if 画布 is None:
+        return False, None, "无效截图"
+    if (
+        getattr(上下文, "_战斗中", False)
+        or getattr(上下文, "_内存保护已触发", False)
+        or getattr(上下文, "_宝石保护已触发", False)
+    ):
+        return False, None, "运行保护状态禁止点击"
+
+    识别器 = None
+    获取识别器 = getattr(上下文, "_获取点击页面识别器", None)
+    if callable(获取识别器):
+        try:
+            识别器 = 获取识别器()
+        except Exception:
+            识别器 = None
+    if 识别器 is None:
+        from 模块.检测.页面识别器 import 页面识别器
+        识别器 = 页面识别器(None)
+
+    识别方法 = getattr(识别器, "识别", None)
+    if callable(识别方法):
+        try:
+            结果 = 识别方法(画布, 战斗中=False)
+        except Exception as 异常:
+            return False, None, f"页面识别异常:{异常}"
+        页面名 = str(getattr(结果, "页面", "") or "")
+        if 页面名 != "宝箱领奖页":
+            return False, None, f"当前画面为{页面名 or '未知'}，非宝箱领奖页"
+
+    定位按钮 = getattr(识别器, "定位宝箱领奖继续按钮", None)
+    绿色按钮点 = None
+    if callable(定位按钮):
+        try:
+            候选点 = 定位按钮(画布)
+        except Exception as 异常:
+            return False, None, f"继续按钮视觉校验异常:{异常}"
+        if 候选点 is None:
+            return False, None, "未确认底部居中绿色继续按钮"
+        if isinstance(候选点, (tuple, list)) and len(候选点) >= 2:
+            绿色按钮点 = (int(候选点[0]), int(候选点[1]))
+
+    if not callable(识别方法) and 绿色按钮点 is None:
+        return False, None, "缺少奖励领奖页识别证据"
+    return True, 绿色按钮点, "已确认宝箱领奖页"
 
 
 def 开启奖励宝箱(上下文, 等待出现秒: float = 0.0) -> bool:
@@ -200,15 +292,22 @@ def 开启奖励宝箱(上下文, 等待出现秒: float = 0.0) -> bool:
         # 3. 再点一次：奖励页的“繼續”按钮（优先衔接上下文.清理宝箱领奖页，支持多张领奖页）
         清理领奖 = getattr(上下文, "清理宝箱领奖页", None)
         已通过清理领奖收起 = False
+        已确认奖励页 = False
+        未确认原因 = "未确认宝箱领奖页"
         截止 = time.time() + 继续按钮等待秒
         按钮 = None
         图像 = None
         while time.time() < 截止:
             if _停止已置位(上下文):
                 return False
-            图像 = 截图()
+            原始图像 = 截图()
             if _停止已置位(上下文):
                 return False
+            图像 = _规范逻辑画布(原始图像)
+            if 图像 is None:
+                未确认原因 = "无效截图"
+                上下文.脚本延时(800)
+                continue
             if callable(清理领奖) and not getattr(上下文, "_宝石保护已触发", False):
                 原页面恢复失败 = bool(getattr(上下文, "页面恢复失败", False))
                 if 原页面恢复失败:
@@ -232,11 +331,11 @@ def 开启奖励宝箱(上下文, 等待出现秒: float = 0.0) -> bool:
                 ):
                     _保存截图(图像, "奖励页安全拦截")
                     return False
-            OCR结果 = _OCR(上下文, 图像)
+
+            是领奖页, 绿色按钮点, 未确认原因 = _确认是奖励领奖页(上下文, 图像)
             if _停止已置位(上下文):
                 return False
-            按钮 = 定位继续按钮(OCR结果)
-            if 按钮 is not None:
+            if 是领奖页:
                 宝石检测 = getattr(上下文, "_存在中央宝石危险模板", None)
                 if callable(宝石检测):
                     宝石命中, 命中说明 = 宝石检测(图像)
@@ -244,7 +343,27 @@ def 开启奖励宝箱(上下文, 等待出现秒: float = 0.0) -> bool:
                         置状态(f"奖励宝箱：奖励页命中中央宝石危险模板（{命中说明}），禁止点击")
                         _保存截图(图像, "奖励页宝石拦截")
                         return False
-                break
+                OCR结果 = _OCR(上下文, 图像)
+                if _停止已置位(上下文):
+                    return False
+                候选按钮 = 定位继续按钮(OCR结果)
+                if (
+                    候选按钮 is not None
+                    and 绿色按钮点 is not None
+                    and (
+                        abs(候选按钮[0] - 绿色按钮点[0]) > 80
+                        or abs(候选按钮[1] - 绿色按钮点[1]) > 45
+                    )
+                ):
+                    候选按钮 = None
+                    未确认原因 = "繼續OCR坐标与奖励页绿色按钮位置不一致"
+                if 候选按钮 is None:
+                    if 未确认原因 == "已确认宝箱领奖页":
+                        未确认原因 = "未定位到底部居中有效繼續OCR按钮"
+                else:
+                    按钮 = 候选按钮
+                    已确认奖励页 = True
+                    break
             if _停止已置位(上下文):
                 return False
             上下文.脚本延时(800)
@@ -253,8 +372,8 @@ def 开启奖励宝箱(上下文, 等待出现秒: float = 0.0) -> bool:
         if 图像 is not None:
             _保存截图(图像, "奖励页")
         if not 已通过清理领奖收起:
-            if 按钮 is None:
-                置状态("奖励宝箱：开箱后没找到“繼續”按钮，交给原流程处理")
+            if not 已确认奖励页 or 按钮 is None:
+                置状态(f"奖励宝箱：未执行繼續点击（{未确认原因}），交给原流程处理")
                 return False
             if _停止已置位(上下文):
                 return False
