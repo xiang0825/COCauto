@@ -54,12 +54,28 @@ class 城墙升级任务(基础任务):
     )
     墙体满级关键词 = ("已满级", "已滿級", "满级", "滿級", "最高等级", "最高等級", "maxed", "maxlevel")
 
+    def __init__(
+        self,
+        上下文: 任务上下文,
+        *,
+        最大升级块数: int | None = None,
+        忽略开关: bool = False,
+    ):
+        super().__init__(上下文)
+        self._默认最大升级块数 = 最大升级块数
+        self._默认忽略开关 = bool(忽略开关)
+
     @property
     def 设置(self) -> 机器人设置:
         配置 = self.数据库.获取机器人设置(self.机器人标志)
         return 配置
 
-    def 执行(self) -> bool:
+    def 执行(
+        self,
+        *,
+        最大升级块数: int | None = None,
+        忽略开关: bool | None = None,
+    ) -> bool:
         try:
             上下文 = self.上下文
             # 这些字段由主任务线程读取，用于在资源不足时自动切换到刷资源。
@@ -68,20 +84,43 @@ class 城墙升级任务(基础任务):
             # 继续把同一批墙体记录当成可重试候选再次点击。
             上下文.刷墙安全中止 = False
             上下文.刷墙墙体记录 = []
+            默认上限 = getattr(self, "_默认最大升级块数", None)
+            目标上限 = 默认上限 if 最大升级块数 is None else 最大升级块数
+            if 目标上限 is not None:
+                try:
+                    目标上限 = max(0, int(目标上限))
+                except (TypeError, ValueError):
+                    目标上限 = None
+            强制忽略开关 = (
+                bool(getattr(self, "_默认忽略开关", False))
+                if 忽略开关 is None
+                else bool(忽略开关)
+            )
             # 初始化配置
-            if not self.检查功能开启(上下文):
+            if not 强制忽略开关 and not self.检查功能开启(上下文):
                 return True
 
+            已升级块数 = 0
+            上下文._本次顺手刷墙成功块数 = 0
             # 不再用“刷墙起始金币/圣水”挡住扫描。起始值只能决定任务优先级，
             # 不能替代对当前墙段实际升级费用的判断；否则资源不足时永远不会
             # 进入墙体面板，也就无法自动转去刷资源。
             for _ in range(300):
                 if 上下文.停止事件.is_set():
                     break
+                if 目标上限 is not None and 已升级块数 >= 目标上限:
+                    break
                 if not self.刷一次墙():
                     if getattr(上下文, "刷墙需要资源", False):
                         return True
                     上下文.置脚本状态("本次刷墙未完成升级，结束本轮墙体扫描")
+                    break
+                已升级块数 += 1
+                上下文._本次顺手刷墙成功块数 = 已升级块数
+                if 目标上限 is not None and 已升级块数 >= 目标上限:
+                    上下文.置脚本状态(
+                        f"已达到单次刷墙上限（{已升级块数}/{目标上限} 块），结束本轮顺手刷墙"
+                    )
                     break
 
             return True

@@ -38,12 +38,29 @@ class ADB屏幕:
         self._已告警分辨率: set[tuple[int, int]] = set()
         # 一张逻辑画面足以覆盖同一批点击护栏检测。限制为每秒
         # 最多约两帧，避免高频 screencap 把雷电 ADB transport 和提交额度
-        # 堵死；战斗页面需要更快刷新时由上层识别节流单独控制。
-        self._最短截图间隔秒 = 0.50
+        # 堵死；低频场景（待机/战斗观察）可由上层动态下调采样频率节能。
+        self._默认最短截图间隔秒 = 0.50
+        self._最短截图间隔秒 = self._默认最短截图间隔秒
+        self._当前节流场景 = "活跃"
         if 日志回调 is not None:
             设置回调 = getattr(设备, "设置日志回调", None)
             if callable(设置回调):
                 设置回调(日志回调)
+
+    def 设置截图节流场景(self, 场景: str, *, 间隔秒: float | None = None) -> float:
+        """按运行场景动态调整最小截图间隔，默认保持 0.50 秒活跃采样。"""
+        from 模块.运行节流与复盘 import 解析截图节流配置
+
+        规范场景, 目标间隔, _ = 解析截图节流配置(场景, 间隔秒=间隔秒)
+        self._当前节流场景 = 规范场景
+        self._最短截图间隔秒 = 目标间隔
+        return self._最短截图间隔秒
+
+    def 获取最短截图间隔秒(self) -> float:
+        return float(getattr(self, "_最短截图间隔秒", 0.50))
+
+    def 获取当前节流场景(self) -> str:
+        return str(getattr(self, "_当前节流场景", "活跃"))
 
     def 测速选择截图后端(self, *, 采样帧数: int = 2, 强制重测: bool = False):
         """转发底层设备的截图后端自动测速入口。"""
