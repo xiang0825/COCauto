@@ -1,0 +1,227 @@
+"""对少量实机截图调用现有识别函数的离线回放回归。"""
+from __future__ import annotations
+
+import json
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+
+import cv2
+import numpy as np
+
+from 模块.检测.OCR识别器 import 安全OCR引擎
+from 模块.检测.页面识别器 import 页面识别器
+from 模块.检测.模板匹配器 import 模板匹配引擎
+from 任务流程.更新主世界账号资源状态 import 更新家乡资源状态任务
+from 任务流程.主世界打鱼.等待战斗结束并回营 import 等待战斗结束并回营任务
+from 任务流程.活动.部落竞赛 import 部落竞赛任务, 加载配置, 识别任务类型
+
+
+测试目录 = Path(__file__).resolve().parent
+样本目录 = 测试目录 / "回放样本"
+标注 = json.loads((样本目录 / "标注.json").read_text(encoding="utf-8"))
+样本表 = {样本["id"]: 样本 for 样本 in 标注["样本"]}
+结算样本ID = (
+    "settle_20261125_061956",
+    "settle_20261125_071950",
+    "settle_20261125_081054",
+)
+
+
+def 读取截图(文件: Path) -> np.ndarray:
+    数据 = np.fromfile(str(文件), dtype=np.uint8)
+    图像 = cv2.imdecode(数据, cv2.IMREAD_COLOR)
+    if 图像 is None:
+        raise AssertionError(f"截图无法解码：{文件}")
+    return 图像
+
+
+def 读取样本(样本ID: str) -> np.ndarray:
+    return 读取截图(样本目录 / 样本表[样本ID]["image"])
+
+
+class 实机截图回放测试(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        根目录 = 测试目录.parent
+        cls.页面识别器 = 页面识别器(
+            模板匹配引擎(图片库路径=根目录 / "img")
+        )
+        cls.OCR引擎 = 安全OCR引擎()
+        cls._结算OCR缓存 = None
+
+    @classmethod
+    def _结算OCR结果(cls):
+        if cls._结算OCR缓存 is None:
+            结果任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+            结果任务.ocr引擎 = cls.OCR引擎
+            cls._结算OCR缓存 = {}
+            for 样本ID in 结算样本ID:
+                图像 = 读取样本(样本ID)
+                OCR结果, 文本, 战斗结果, 摧毁率 = 结果任务.识别结算帧(图像)
+                星数 = 结果任务.识别星数(图像, 文本)
+                cls._结算OCR缓存[样本ID] = {
+                    "OCR结果": OCR结果,
+                    "文本": 文本,
+                    "战斗结果": 战斗结果,
+                    "摧毁率": 摧毁率,
+                    "星数": 星数,
+                }
+        return cls._结算OCR缓存
+
+    def _部落竞赛任务(self, 图像: np.ndarray) -> 部落竞赛任务:
+        任务 = 部落竞赛任务.__new__(部落竞赛任务)
+        任务._配置 = 加载配置()
+        任务._模板缓存 = {}
+        任务.ocr引擎 = self.OCR引擎
+        操作 = SimpleNamespace(
+            获取屏幕图像cv=lambda *args, **kwargs: 图像,
+        )
+        任务.上下文 = SimpleNamespace(
+            op=操作,
+            获取OCR引擎=lambda: self.OCR引擎,
+            置脚本状态=lambda *args: None,
+        )
+        return 任务
+
+    def test_现有主页和断线截图页面识别(self):
+        根目录 = 测试目录.parent
+        样本 = (
+            ("coc_home_18_647_5.png", "主世界主页"),
+            ("coc_idle_disconnect_18_647_5.png", "断线弹窗"),
+        )
+        for 文件名, 预期页面 in 样本:
+            with self.subTest(文件=文件名):
+                图像 = 读取截图(根目录 / "tests" / "fixtures" / 文件名)
+                实际 = self.页面识别器.识别(图像)
+                self.assertEqual(实际.页面, 预期页面, 实际.摘要())
+
+    def test_结算页类型识别(self):
+        for 样本ID in 结算样本ID:
+            with self.subTest(样本=样本ID):
+                实际 = self.页面识别器.识别(读取样本(样本ID))
+                self.assertEqual(
+                    实际.页面,
+                    样本表[样本ID]["expected"]["page"],
+                    实际.摘要(),
+                )
+
+    def test_部落竞赛截图主世界识别(self):
+        for 样本ID in ("clan_games_panel", "clan_games_gold_task"):
+            with self.subTest(样本=样本ID):
+                结果 = self.页面识别器.世界识别.识别(读取样本(样本ID))
+                self.assertEqual(
+                    结果.当前世界,
+                    样本表[样本ID]["expected"]["world"],
+                    结果.摘要(),
+                )
+
+    def test_结算页资源OCR数值(self):
+        资源任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        资源任务.ocr引擎 = self.OCR引擎
+        for 样本ID in 结算样本ID:
+            图像 = 读取样本(样本ID)
+            操作 = SimpleNamespace(
+                获取屏幕图像cv=lambda x1, y1, x2, y2, **kwargs: 图像[y1:y2, x1:x2]
+            )
+            上下文 = SimpleNamespace(
+                op=操作,
+                置脚本状态=lambda *args: None,
+                脚本延时=lambda *args: None,
+            )
+            实际 = 资源任务.识别当前资源(上下文)
+            预期 = 样本表[样本ID]["expected"]["resources"]
+            with self.subTest(样本=样本ID):
+                self.assertTrue(实际["识别成功"], 实际)
+                self.assertEqual(
+                    {键: 实际[键] for 键 in 预期},
+                    预期,
+                    f"{样本ID}：{实际}",
+                )
+
+    def test_结算页OCR摧毁率(self):
+        结果 = self._结算OCR结果()
+        for 样本ID in 结算样本ID:
+            with self.subTest(样本=样本ID):
+                预期 = 样本表[样本ID]["expected"]["settlement"]["摧毁率"]
+                self.assertEqual(结果[样本ID]["摧毁率"], 预期, 结果[样本ID]["文本"])
+
+    def test_部落竞赛面板和任务卡OCR(self):
+        面板样本 = 样本表["clan_games_panel"]["expected"]
+        面板图像 = 读取样本("clan_games_panel")
+        面板任务 = self._部落竞赛任务(面板图像)
+        面板 = 面板任务._识别竞赛面板()
+        self.assertIsNotNone(面板, "标题、面板模板或关闭按钮未识别")
+        关闭点 = 面板任务._匹配模板(面板图像, "关闭按钮")
+        self.assertEqual(关闭点, tuple(面板样本["buttons"]["关闭"]))
+
+        任务样本 = 样本表["clan_games_gold_task"]["expected"]
+        详情图像 = 读取样本("clan_games_gold_task")
+        详情任务 = self._部落竞赛任务(详情图像)
+        详情 = 详情任务._识别详情()
+        self.assertIsNotNone(详情, "任务开始按钮或详情文字未识别")
+        self.assertEqual(详情["开始点"], tuple(任务样本["buttons"]["开始"]))
+        实际文本 = 详情["文本"].replace(" ", "")
+        self.assertIn("200000", 实际文本)
+        self.assertIn("金", 实际文本)
+        self.assertEqual(
+            识别任务类型(详情["文本"], 详情任务.配置, ""),
+            任务样本["clan_task_type"],
+        )
+
+
+def _添加已知页面识别失败用例(样本ID: str) -> None:
+    def 检查(self):
+        标注 = 样本表[样本ID]["expected"]
+        实际 = self.页面识别器.识别(读取样本(样本ID))
+        self.assertEqual(
+            (实际.页面, 实际.世界),
+            (标注["page"], 标注["world"]),
+            实际.摘要(),
+        )
+
+    检查.__name__ = f"test_页面识别_{样本ID}"
+    setattr(实机截图回放测试, 检查.__name__, unittest.expectedFailure(检查))
+
+
+def _添加已知结算世界识别失败用例(样本ID: str) -> None:
+    def 检查(self):
+        预期 = 样本表[样本ID]["expected"]["world"]
+        实际 = self.页面识别器.世界识别.识别(读取样本(样本ID))
+        self.assertEqual(实际.当前世界, 预期, 实际.摘要())
+
+    检查.__name__ = f"test_结算截图世界识别_{样本ID}"
+    setattr(实机截图回放测试, 检查.__name__, unittest.expectedFailure(检查))
+
+
+def _添加已知回营按钮定位失败用例(样本ID: str) -> None:
+    def 检查(self):
+        预期 = 样本表[样本ID]["expected"]["buttons"]["回营"]
+        实际 = self.页面识别器.定位结算回营按钮(读取样本(样本ID))
+        self.assertIsNotNone(实际, "没有定位到可见的绿色回营按钮")
+        self.assertLessEqual(abs(实际[0] - 预期[0]), 8)
+        self.assertLessEqual(abs(实际[1] - 预期[1]), 8)
+
+    检查.__name__ = f"test_回营按钮定位_{样本ID}"
+    if 样本ID != "settle_20261125_061956":
+        检查 = unittest.expectedFailure(检查)
+    setattr(实机截图回放测试, 检查.__name__, 检查)
+
+
+def _添加星数回归用例(样本ID: str) -> None:
+    def 检查(self):
+        结果 = self._结算OCR结果()[样本ID]
+        预期 = 样本表[样本ID]["expected"]["settlement"]["星数"]
+        self.assertEqual(结果["星数"], 预期, 结果["文本"])
+
+    检查.__name__ = f"test_结算星数识别_{样本ID}"
+    setattr(实机截图回放测试, 检查.__name__, 检查)
+
+
+for _样本ID in ("clan_games_panel", "clan_games_gold_task"):
+    _添加已知页面识别失败用例(_样本ID)
+
+for _样本ID in 结算样本ID:
+    _添加已知结算世界识别失败用例(_样本ID)
+    _添加已知回营按钮定位失败用例(_样本ID)
+    _添加星数回归用例(_样本ID)

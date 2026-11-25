@@ -1,0 +1,71 @@
+{
+  "说明": "每条标注只记录截图可见或已由对应识别函数复核的内容。按钮坐标采用 800x600 参考画布；null 表示截图不能确认。",
+  "样本": [
+    {
+      "id": "settle_20261125_061956",
+      "image": "settle_20261125_061956.jpg",
+      "source": "E:/codex.task/coc/数据集/待命现场/standby_20261125_061956_859_0001.png",
+      "expected": {
+        "page": "战斗结算",
+        "world": "主世界",
+        "buttons": {"回营": [401, 518]},
+        "resources": {"金币": 31000000, "圣水": 31000000, "黑油": 500000},
+        "settlement": {"摧毁率": 56, "星数": 1},
+        "clan_task_text": null
+      }
+    },
+    {
+      "id": "settle_20261125_071950",
+      "image": "settle_20261125_071950.jpg",
+      "source": "E:/codex.task/coc/数据集/待命现场/standby_20261125_071950_509_0002.png",
+      "expected": {
+        "page": "战斗结算",
+        "world": "主世界",
+        "buttons": {"回营": [401, 518]},
+        "resources": {"金币": 31000000, "圣水": 31000000, "黑油": 500000},
+        "settlement": {"摧毁率": 100, "星数": 3},
+        "clan_task_text": null
+      }
+    },
+    {
+      "id": "settle_20261125_081054",
+      "image": "settle_20261125_081054.jpg",
+      "source": "E:/codex.task/coc/数据集/待命现场/standby_20261125_081054_880_0003.png",
+      "expected": {
+        "page": "战斗结算",
+        "world": "主世界",
+        "buttons": {"回营": [401, 518]},
+        "resources": {"金币": 31000000, "圣水": 31000000, "黑油": 500000},
+        "settlement": {"摧毁率": 72, "星数": 1},
+        "clan_task_text": null
+      }
+    },
+    {
+      "id": "clan_games_panel",
+      "image": "clan_games_panel.jpg",
+      "source": "docs/实测/部落竞赛-2026-11-24/03_竞赛面板_个人积分.jpg",
+      "expected": {
+        "page": "部落竞赛面板",
+        "world": "主世界",
+        "buttons": {"关闭": [710, 40]},
+        "resources": null,
+        "settlement": null,
+        "clan_task_text": null
+      }
+    },
+    {
+      "id": "clan_games_gold_task",
+      "image": "clan_games_gold_task.jpg",
+      "source": "docs/实测/部落竞赛-2026-11-24/04_详情_掠夺金币.jpg",
+      "expected": {
+        "page": "部落竞赛任务详情",
+        "world": "主世界",
+        "buttons": {"关闭": [710, 40], "开始": [571, 406]},
+        "resources": null,
+        "settlement": null,
+        "clan_task_text": "在單場多人遊戲戰鬥中掠奪200000金幣。",
+        "clan_task_type": "掠夺金币"
+      }
+    }
+  ]
+}
