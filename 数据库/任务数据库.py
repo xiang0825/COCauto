@@ -798,6 +798,15 @@ class 机器人设置:
         }
     )
 
+    @staticmethod
+    def _安全整型(值: object, 默认值: int) -> int:
+        if isinstance(值, bool) or 值 is None:
+            return 默认值
+        try:
+            return int(值)
+        except (TypeError, ValueError, OverflowError):
+            return 默认值
+
     def __post_init__(self):
         self.部落冲突包名 = ("com.supercell.clashofclans"
                         if self.服务器 == "国际服" else
@@ -806,32 +815,20 @@ class 机器人设置:
             self.资源打满后动作 = "退出"
         if self.战利品优先级 not in {"均衡", "金币", "圣水", "黑水"}:
             self.战利品优先级 = "均衡"
-        try:
-            self.黑油储存上限 = max(0, min(1_000_000, int(self.黑油储存上限)))
-        except (TypeError, ValueError, OverflowError):
-            self.黑油储存上限 = 500_000
+        self.黑油储存上限 = max(0, min(1_000_000, self._安全整型(self.黑油储存上限, 500_000)))
         if self.自动配兵玩法 not in {"资源优先", "稳健三星", "快速速刷"}:
             self.自动配兵玩法 = "资源优先"
         if self.高速下兵方式 not in {"快速连点", "短按压"}:
             self.高速下兵方式 = "快速连点"
-        try:
-            self.下兵间隔毫秒 = max(5, min(300, int(self.下兵间隔毫秒)))
-        except (TypeError, ValueError):
-            self.下兵间隔毫秒 = 25
+        self.下兵间隔毫秒 = max(5, min(300, self._安全整型(self.下兵间隔毫秒, 25)))
         已选白名单 = self.部落竞赛任务白名单 if isinstance(self.部落竞赛任务白名单, list) else []
         if set(map(str, 已选白名单)) == 部落竞赛旧默认白名单:
             已选白名单 = list(部落竞赛默认白名单)
         self.部落竞赛任务白名单 = [
             名 for 名 in 部落竞赛白名单选项 if 名 in set(map(str, 已选白名单))
         ]
-        try:
-            self.部落竞赛检查间隔分钟 = max(10, min(240, int(self.部落竞赛检查间隔分钟)))
-        except (TypeError, ValueError):
-            self.部落竞赛检查间隔分钟 = 30
-        try:
-            self.部落竞赛个人积分上限 = max(0, int(self.部落竞赛个人积分上限))
-        except (TypeError, ValueError):
-            self.部落竞赛个人积分上限 = 0
+        self.部落竞赛检查间隔分钟 = max(10, min(240, self._安全整型(self.部落竞赛检查间隔分钟, 30)))
+        self.部落竞赛个人积分上限 = max(0, self._安全整型(self.部落竞赛个人积分上限, 0))
         # 兼容旧配置，同时丢弃未知任务键并补齐新增任务。
         self.任务计划顺序 = 规范化任务计划顺序(self.任务计划顺序)
         # 只保留已登记的兵种并去重，旧配置或手改数据库不会带入未知名字。
@@ -860,10 +857,7 @@ class 机器人设置:
             ("搜索目标最低下限", 100000, 0, 2000000),
             ("集中主力目标上限", 2, 1, 6),
         ):
-            try:
-                数值 = int(getattr(self, 字段名))
-            except (TypeError, ValueError, OverflowError):
-                数值 = 默认值
+            数值 = self._安全整型(getattr(self, 字段名), 默认值)
             setattr(self, 字段名, max(最小值, min(最大值, 数值)))
         for 字段名, 默认值, 最小值, 最大值 in (
             ("资源易窃取最低评分", 5.0, 0.0, 9.5),
@@ -874,7 +868,10 @@ class 机器人设置:
         ):
             try:
                 原始 = getattr(self, 字段名)
-                数值 = float(默认值 if 原始 is None else 原始)
+                if isinstance(原始, bool) or 原始 is None:
+                    数值 = 默认值
+                else:
+                    数值 = float(原始)
                 if not math.isfinite(数值):
                     数值 = 默认值
             except (TypeError, ValueError, OverflowError):

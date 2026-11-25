@@ -176,7 +176,9 @@ class 搜索目标敌人任务(基础任务):
         def 正整数(字段名: str, 默认值: int) -> int:
             try:
                 原始值 = getattr(设置, 字段名, 默认值)
-                return max(1, int(默认值 if 原始值 is None else 原始值))
+                if isinstance(原始值, bool) or 原始值 is None:
+                    return 默认值
+                return max(1, int(原始值))
             except (TypeError, ValueError, OverflowError):
                 return 默认值
 
@@ -589,6 +591,7 @@ class 搜索目标敌人任务(基础任务):
             上下文, "黑水优先放宽候选数上限", cls.黑水优先放宽候选数上限,
             整数=True, 最小值=1, 最大值=200, 设置=设置,
         )
+        放宽上限 = max(前期上限, 放宽上限)
         if 搜索次数 <= 前期上限:
             return 前期最低黑油
         if 搜索次数 <= 放宽上限:

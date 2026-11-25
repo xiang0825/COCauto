@@ -148,9 +148,71 @@ class 搜索调优配置兼容与校验测试(unittest.TestCase):
             {"自适应最低高价值可达折算": "1.2"},
             {"黑水优先最低黑油": "40000"},
             {"搜索目标每次降幅比例": "0.8"},
+            {"黑水优先前期候选数上限": "40", "黑水优先放宽候选数上限": "20"},
+            {"黑水优先放宽候选数上限": "10"},
+            {"黑水优先前期候选数上限": "70"},
         ):
             with self.assertRaises(ValueError):
                 计划.应用参数(设置, "main_resource", 非法提交)
+        self.assertEqual(设置.黑水优先前期候选数上限, 25)
+        self.assertEqual(设置.黑水优先放宽候选数上限, 55)
+
+        计划.应用参数(
+            设置,
+            "main_resource",
+            {"黑水优先前期候选数上限": "30", "黑水优先放宽候选数上限": "30"},
+        )
+        self.assertEqual((设置.黑水优先前期候选数上限, 设置.黑水优先放宽候选数上限), (30, 30))
+
+    def test_数据库配置整型与浮点转换排除布尔值(self):
+        畸形 = 机器人设置(
+            黑油储存上限=True,
+            下兵间隔毫秒=False,
+            部落竞赛检查间隔分钟=True,
+            部落竞赛个人积分上限=True,
+            最大搜索次数=True,
+            黑水优先前期候选数上限=False,
+            集中主力目标上限=True,
+            资源易窃取最低评分=True,
+            搜索目标每次降幅比例=False,
+        )
+        self.assertEqual(畸形.黑油储存上限, 500_000)
+        self.assertEqual(畸形.下兵间隔毫秒, 25)
+        self.assertEqual(畸形.部落竞赛检查间隔分钟, 30)
+        self.assertEqual(畸形.部落竞赛个人积分上限, 0)
+        self.assertEqual(畸形.最大搜索次数, 150)
+        self.assertEqual(畸形.黑水优先前期候选数上限, 25)
+        self.assertEqual(畸形.集中主力目标上限, 2)
+        self.assertEqual(畸形.资源易窃取最低评分, 5.0)
+        self.assertEqual(畸形.搜索目标每次降幅比例, 0.10)
+
+        with tempfile.TemporaryDirectory() as 临时目录:
+            数据库路径 = str(Path(临时目录) / "任务系统.db")
+            数据库 = 任务数据库(数据库路径)
+            数据库.保存机器人设置("robot_bool", 机器人设置())
+            连接 = sqlite3.connect(数据库路径)
+            try:
+                数据 = json.loads(
+                    连接.execute(
+                        "SELECT 设置JSON FROM 机器人设置 WHERE 机器人标志=?",
+                        ("robot_bool",),
+                    ).fetchone()[0]
+                )
+                数据["最大搜索次数"] = True
+                数据["集中主力目标上限"] = False
+                数据["黑油储存上限"] = True
+                连接.execute(
+                    "UPDATE 机器人设置 SET 设置JSON=? WHERE 机器人标志=?",
+                    (json.dumps(数据), "robot_bool"),
+                )
+                连接.commit()
+            finally:
+                连接.close()
+
+            加载 = 数据库.获取机器人设置("robot_bool")
+            self.assertEqual(加载.最大搜索次数, 150)
+            self.assertEqual(加载.集中主力目标上限, 2)
+            self.assertEqual(加载.黑油储存上限, 500_000)
 
 
 class 搜索调优策略逻辑测试(unittest.TestCase):
@@ -235,6 +297,31 @@ class 搜索调优策略逻辑测试(unittest.TestCase):
         self.assertEqual(默认获取("黑水", 13, 设置=自定义设置), 7500)
         self.assertEqual(默认获取("黑水", 30, 设置=自定义设置), 7500)
         self.assertEqual(默认获取("黑水", 31, 设置=自定义设置), 0)
+
+        # 若外部设置把放宽上限写得小于前期上限，运行期应兜底钳制为至少等于前期上限
+        倒挂设置 = 机器人设置(
+            黑水优先最低黑油=12000,
+            黑水优先前期候选数上限=30,
+            黑水优先放宽后最低黑油=6000,
+            黑水优先放宽候选数上限=10,
+        )
+        self.assertEqual(默认获取("黑水", 20, 设置=倒挂设置), 12000)
+        self.assertEqual(默认获取("黑水", 30, 设置=倒挂设置), 12000)
+        self.assertEqual(默认获取("黑水", 31, 设置=倒挂设置), 0)
+
+        布尔限制上下文 = SimpleNamespace(
+            设置=SimpleNamespace(
+                最大搜索次数=True,
+                最长搜索分钟=False,
+                YOLO连续失败熔断次数=True,
+            ),
+            数据库=None,
+            机器人标志="robot_bool",
+        )
+        self.assertEqual(
+            搜索目标敌人任务._读取搜索限制配置(布尔限制上下文),
+            (150, 15 * 60.0, 10),
+        )
 
     def test_搜索目标递减参数可配置且不抬高更低的原始目标(self):
         日志 = []

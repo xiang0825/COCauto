@@ -337,6 +337,27 @@ def 应用参数(设置, 页键: str, 表单值: Mapping[str, Any]) -> list[str]
     for 字段 in 页.字段:
         if 字段.字段 in 表单值:
             已解析[字段.字段] = 字段.解析(表单值[字段.字段])
+    if "黑水优先前期候选数上限" in 已解析 or "黑水优先放宽候选数上限" in 已解析:
+        def _取整型值(值: object, 默认: int) -> int:
+            if isinstance(值, bool) or 值 is None:
+                return 默认
+            try:
+                return int(值)
+            except (TypeError, ValueError, OverflowError):
+                return 默认
+
+        前期上限 = _取整型值(
+            已解析.get("黑水优先前期候选数上限", getattr(设置, "黑水优先前期候选数上限", 25)),
+            25,
+        )
+        放宽上限 = _取整型值(
+            已解析.get("黑水优先放宽候选数上限", getattr(设置, "黑水优先放宽候选数上限", 55)),
+            55,
+        )
+        if 放宽上限 < 前期上限:
+            raise ValueError(
+                f"黑水优先放宽候选上限（{放宽上限}）不能小于黑水优先前期候选上限（{前期上限}）"
+            )
     for 名称, 值 in 已解析.items():
         setattr(设置, 名称, 值)
     return list(已解析)

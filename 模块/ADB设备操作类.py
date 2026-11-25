@@ -1781,6 +1781,11 @@ class ADB设备操作类:
         """解析 ``screencap``（不带 -p）的原始像素，返回 BGR 图像或 None。"""
         return 解码原始截图(数据)
 
+    @staticmethod
+    def _是MuMu游戏显示层未确认错误(异常: object) -> bool:
+        """判断异常是否为 MuMu 多显/后台视图未能定位 CoC 游戏显示层。"""
+        return "未确认 CoC 所在的 MuMu 游戏显示层" in str(异常 or "")
+
     def _获取当前ADB截图显示ID(self) -> str | None:
         if not self._是MuMu连接():
             return None
@@ -1915,8 +1920,8 @@ class ADB设备操作类:
                     if 参考ADB画面 is None:
                         参考ADB画面 = 画面
                 except (ADB错误, cv2.error, ValueError, TypeError) as 异常:
-                    # 主机内存保护必须立即向上抛出，不能吞掉护栏异常。
-                    if "主机内存保护" in str(异常):
+                    # 主机内存保护和 MuMu 多显未定位游戏层必须立即向上抛出，不能吞掉护栏异常。
+                    if "主机内存保护" in str(异常) or self._是MuMu游戏显示层未确认错误(异常):
                         raise
                     失败原因 = str(异常)
                     break
@@ -2133,7 +2138,7 @@ class ADB设备操作类:
                     if "主机内存保护" in str(异常) or "安全冷却" in str(异常):
                         raise
                     最后错误 = 异常 if isinstance(异常, ADB错误) else ADB错误(f"ADB 截图解码失败：{异常}")
-                    if self._MuMu显示服务仍缺失():
+                    if self._MuMu显示服务仍缺失() or self._是MuMu游戏显示层未确认错误(异常):
                         break
                     失败次数 = int(self._截图后端连续失败.get(后端, 0)) + 1
                     self._截图后端连续失败[后端] = 失败次数

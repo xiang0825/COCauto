@@ -669,6 +669,84 @@ class 启动测速与自动回退测试(unittest.TestCase):
             屏幕.绑定(设备)
             self.assertIsNone(屏幕._原始截图缓存)
 
+    def test_MuMu运行期找不到游戏显示层时不跨后端重复dumpsys并可外层重试恢复(self):
+        时钟 = 模拟Clock()
+        画面 = 构造测试画面BGR(128, 72)
+        runner = 按命令路由Runner(时钟=时钟, MuMu模式=True)
+        runner.后端延迟ms = {
+            BACKEND_ADB_RAW: 15.0,
+            BACKEND_ADB_RAW_GZIP: 30.0,
+            BACKEND_ADB_PNG: 80.0,
+        }
+        runner.后端默认输出 = {
+            BACKEND_ADB_RAW: 编码原始像素(画面),
+            BACKEND_ADB_RAW_GZIP: gzip.compress(编码原始像素(画面)),
+            BACKEND_ADB_PNG: 编码PNG(画面),
+        }
+        日志: list[str] = []
+        设备 = ADB设备操作类(
+            ADB,
+            "127.0.0.1:16384",
+            runner=runner,
+            启用截图测速=True,
+            日志回调=日志.append,
+        )
+        设备.设置目标包名("com.supercell.clashofclans")
+
+        with (
+            self._内存充足(),
+            patch("模块.ADB设备操作类.time.perf_counter", side_effect=时钟.perf_counter),
+            patch("模块.ADB设备操作类.time.monotonic", side_effect=时钟.monotonic),
+        ):
+            首帧 = 设备.获取屏幕图像cv(0, 0, 2000, 2000)
+            self.assertTrue(np.array_equal(首帧, 画面))
+            self.assertEqual(设备._已选截图后端, BACKEND_ADB_RAW)
+
+            # 1) 切屏瞬间找不到 CoC 显示层：同轮只尝试首选后端，不跨后端重复 dumpsys，外层退避后恢复
+            时钟.推进秒(设备._显示层缓存有效秒数 + 5.0)
+            runner.窗口状态文本 = "FocusedWindows:\n  displayId=0, name='Window{1 u0 com.mumu.launcher}'"
+            runner.命令历史.clear()
+
+            def 模拟休眠并按需恢复(秒):
+                时钟.推进秒(秒)
+                if 秒 >= 0.30:
+                    runner.窗口状态文本 = MUMU窗口CoC
+
+            with patch("模块.ADB设备操作类.time.sleep", side_effect=模拟休眠并按需恢复) as mock_sleep:
+                恢复帧 = 设备.获取屏幕图像cv(0, 0, 2000, 2000)
+
+            self.assertTrue(np.array_equal(恢复帧, 画面))
+            self.assertGreaterEqual(mock_sleep.call_count, 3)
+            self.assertEqual(设备._已选截图后端, BACKEND_ADB_RAW)
+            self.assertEqual(设备._截图后端冷却截止, {})
+            self.assertEqual(设备._截图后端连续失败.get(BACKEND_ADB_RAW, 0), 0)
+            self.assertFalse(any("[截图回退]" in 项 for 项 in 日志))
+            # 第1轮只尝试1次首选后端（内部0.20s缓存命中1次，共2次 dumpsys input），外层重试恢复后1次成功
+            dumpsys_input次数 = sum(
+                1 for cmd in runner.命令历史 if "dumpsys" in cmd and "input" in cmd
+            )
+            self.assertEqual(dumpsys_input次数, 3)
+
+            # 2) 持续找不到 CoC 显示层时，每轮仅尝试 1 次首选后端后外层退避，不触发其余后端 dumpsys
+            时钟.推进秒(设备._显示层缓存有效秒数 + 5.0)
+            runner.窗口状态文本 = "FocusedWindows:\n  displayId=0, name='Window{1 u0 com.mumu.launcher}'"
+            runner.命令历史.clear()
+
+            with patch("模块.ADB设备操作类.time.sleep", side_effect=时钟.推进秒) as mock_sleep:
+                with self.assertRaisesRegex(ADB错误, "MuMu 游戏显示层"):
+                    设备.获取屏幕图像cv(0, 0, 2000, 2000)
+
+            # 3 轮外层重试 × 每轮只跑 1 个后端（每轮 2 次实际 dumpsys input），共 6 次（而非 3 后端的 18 次）
+            dumpsys_input次数 = sum(
+                1 for cmd in runner.命令历史 if "dumpsys" in cmd and "input" in cmd
+            )
+            self.assertEqual(dumpsys_input次数, 6)
+            self.assertGreaterEqual(mock_sleep.call_count, 8)
+            self.assertFalse(any("exec-out" in cmd for cmd in runner.命令历史))
+            self.assertEqual(设备._已选截图后端, BACKEND_ADB_RAW)
+            self.assertEqual(设备._截图后端冷却截止, {})
+            self.assertFalse(any("[截图回退]" in 项 for 项 in 日志))
+
 
 if __name__ == "__main__":
     unittest.main()
