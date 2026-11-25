@@ -57,7 +57,8 @@ class 模拟游戏:
     """极简状态机：home → events → panel(page, detail)。"""
 
     def __init__(self, 卡片=None, 有活动按钮=True, 有部落竞赛=True, 需滑动=1,
-                 个人积分="3350/10000", 面板会出现=True, 开始后显示放弃=True, 已有任务=False):
+                 个人积分="3350/10000", 面板会出现=True, 开始后显示放弃=True, 已有任务=False,
+                 开始后收起详情=False):
         self.状态 = "home"
         self.页 = 0
         self.详情 = None
@@ -68,6 +69,7 @@ class 模拟游戏:
         self.个人积分 = 个人积分
         self.面板会出现 = 面板会出现
         self.开始后显示放弃 = 开始后显示放弃
+        self.开始后收起详情 = 开始后收起详情
         默认 = [dict(文本=文本_夜世界, 积分="150")] * 12
         self.卡片 = list(卡片 or 默认)
         self.点击记录 = []
@@ -90,8 +92,10 @@ class 模拟游戏:
             self.状态, self.详情 = "home", None
         elif self.状态 == "panel" and self.详情 is not None and 近((507, 418)):
             self.开始点击.append(self.详情)
-            if self.开始后显示放弃:
+            if self.开始后显示放弃 or self.开始后收起详情:
                 self.已接 = self.详情
+            if self.开始后收起详情:
+                self.详情 = None
         elif self.状态 == "panel" and 近((160, 500)):
             self.详情 = None
         elif self.状态 == "panel":
@@ -116,6 +120,8 @@ class 模拟游戏:
             return 结果
         if self.状态 == "panel":
             结果 = [ocr("部落競赛", 95, 26, 216, 93), ocr(self.个人积分, 120, 532, 210, 552)]
+            if self.开始后收起详情 and self.已接 is not None and self.详情 is None:
+                结果.append(ocr("0/12", 329, 223, 357, 241))
             if self.详情 is not None:
                 卡 = self.卡片[self.详情]
                 if self.已接 == self.详情:
@@ -468,6 +474,32 @@ class 流程测试(unittest.TestCase):
         self.assertEqual(任务.结果, "超时")
         self.assertEqual(游戏.开始点击, [11])  # 只点了一次，没有重复点
         self.assertEqual(游戏.状态, "home")
+
+    def test_开始后详情收起只剩进度和灰卡也算已接(self):
+        游戏 = 模拟游戏(卡片=self.标准卡片(), 开始后显示放弃=False, 开始后收起详情=True)
+        任务, _, 日志, _, _ = 构造任务(游戏)
+        任务.执行()
+        self.assertEqual(任务.结果, "已接任务")
+        self.assertEqual(游戏.开始点击, [11])
+        self.assertEqual(游戏.状态, "home")
+
+    def test_开始确认不把页码当进度(self):
+        游戏 = 模拟游戏(卡片=self.标准卡片())
+        任务, _, _, _, _ = 构造任务(游戏)
+        任务._截图 = lambda: np.full((600, 800, 3), (40, 160, 230), np.uint8)
+        任务._OCR = lambda _图: [文字项("1/2", (400, 440, 420, 455)), 文字项("1508", (335, 233, 383, 262))]
+        self.assertFalse(任务._任务已开始())
+        任务._OCR = lambda _图: [文字项("0/12", (329, 223, 357, 241))]
+        self.assertTrue(任务._任务已开始())
+        任务._OCR = lambda _图: [文字项("放棄", (494, 407, 524, 430))]
+        self.assertTrue(任务._任务已开始())
+
+    def test_详情仍显示开始时灰底不算已接(self):
+        游戏 = 模拟游戏(卡片=self.标准卡片())
+        任务, _, _, _, _ = 构造任务(游戏)
+        任务._截图 = lambda: np.full((600, 800, 3), (128, 128, 128), np.uint8)
+        任务._OCR = lambda _图: [文字项("開始", (494, 407, 524, 430))]
+        self.assertFalse(任务._任务已开始())
 
     def test_未校准或缺模板时不点击(self):
         游戏 = 模拟游戏(卡片=self.标准卡片())
