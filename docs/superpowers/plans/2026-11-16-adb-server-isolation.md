@@ -1,5 +1,7 @@
 # ADB Server Isolation Implementation Plan
 
+> **历史计划。** 本文记录 Tkinter 时代的实现设想；当前桌面界面使用 PySide6，普通用户只通过发布 exe 启动。请勿将旧技术栈描述当作现状。
+
 > **For agentic workers:** Use the systematic debugging and test-driven development workflows. Preserve all unrelated existing worktree changes.
 
 **Goal:** Prevent CoC recovery from restarting the shared default ADB server used by MuMu and other tools.
