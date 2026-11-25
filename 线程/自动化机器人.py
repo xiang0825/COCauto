@@ -2427,6 +2427,52 @@ class 自动化机器人:
             except Exception as e:
                 _安全控制台打印(f"关闭企业微信通知线程失败: {e}")
 
+    def 只读确认主世界主页(self, 帧数: int = 2, 间隔秒: float = 2.0) -> tuple[bool, str]:
+        """自动重启前的只读复核：连续多帧新截图都识别为主世界主页才返回 True。
+
+        只截图和识别，绝不发送任何输入；线程运行中调用直接拒绝。
+        """
+        if not self.停止事件.is_set():
+            return False, "机器人仍在运行"
+        设置 = self.数据库.获取机器人设置(self.机器人标志)
+        if not getattr(设置, "ADB已确认模拟器", False) or not getattr(设置, "ADB设备序列号", ""):
+            return False, "未配置模拟器连接"
+        设备 = ADB设备操作类(
+            设置.ADB路径,
+            设置.ADB设备序列号,
+            自动检测路径=getattr(设置, "ADB自动检测路径", True),
+            内存保护提交额度阈值MB=getattr(设置, "内存保护提交额度阈值MB", 1536),
+        )
+        屏幕 = ADB屏幕(设备, 日志回调=self.记录日志)
+        try:
+            from 模块.检测.模板匹配器 import 模板匹配引擎
+            from 模块.检测.页面识别器 import 页面识别器
+
+            识别器 = 页面识别器(模板匹配引擎())
+            说明 = ""
+            for 序号 in range(max(1, int(帧数))):
+                if 序号:
+                    time.sleep(max(0.0, float(间隔秒)))
+                try:
+                    图像 = 屏幕.获取屏幕图像cv(0, 0, 800, 600, 强制刷新=True)
+                except TypeError:
+                    图像 = 屏幕.获取屏幕图像cv(0, 0, 800, 600)
+                结果 = 识别器.识别(图像, 战斗中=False)
+                页面 = str(getattr(结果, "页面", "") or "")
+                世界 = str(getattr(结果, "世界", "") or "")
+                可信度 = float(getattr(结果, "可信度", 0.0) or 0.0)
+                说明 = f"页面={页面 or '未知'} 世界={世界 or '未知'} 置信度={可信度:.2f}"
+                if not (页面 == "主世界主页" and 世界 == "主世界" and 可信度 >= 0.70):
+                    return False, 说明
+            return True, 说明
+        except Exception as 异常:
+            return False, f"截图/识别失败：{异常}"
+        finally:
+            try:
+                屏幕.安全清理()
+            except Exception:
+                pass
+
     人工停止原因 = frozenset({"控制台关闭", "手动终止", "界面停止按钮", "未启动"})
 
     def _桌面通知线程停止(self) -> None:

@@ -32,6 +32,84 @@ from 模块.ADB设备操作类 import ADB设备操作类
 from 线程.自动化机器人 import 自动化机器人
 
 
+class 自动重启策略:
+    """非人工停止后的自动重启节流：冷却、连续失败计数、放弃。
+
+    纯状态机，不做 I/O，方便单测；监控中心负责截图复核和真正启动。
+    """
+
+    冷却秒 = 600.0
+    最大连续失败 = 3
+    人工或终止原因 = frozenset({"", "未启动", "控制台关闭", "手动终止", "界面停止按钮", "任务自然完成"})
+
+    def __init__(self, 时钟=time.monotonic):
+        self._时钟 = 时钟
+        self._状态: dict[str, dict] = {}
+
+    def _取(self, 标志: str) -> dict:
+        return self._状态.setdefault(标志, {
+            "停止线程": None, "停止时间": 0.0, "上次重启": None,
+            "上次尝试": None, "连续失败": 0, "已放弃": False, "复核中": False,
+        })
+
+    @classmethod
+    def 原因可自动重启(cls, 原因: str) -> bool:
+        原因 = str(原因 or "").strip()
+        if 原因 in cls.人工或终止原因:
+            return False
+        # 内存保护：重启只会再次压垮主机，必须人工处理。
+        return "内存" not in 原因
+
+    def 记录人工操作(self, 标志: str) -> None:
+        """人工开始/停止后清零：人工永远优先，失败计数从头算。"""
+        self._状态.pop(标志, None)
+
+    def 判定(self, 标志: str, 线程标识, 原因: str, 已暂停: bool) -> str:
+        """返回 'ignore' | 'wait' | 'give_up' | 'check'。
+
+        线程标识：已停止的主线程对象 id，用来区分“同一次停止”和“新的停止”。
+        """
+        状态 = self._取(标志)
+        现在 = self._时钟()
+        if 状态["停止线程"] != 线程标识:
+            # 新的一次停止。重启后不到冷却时间又停了，算这次重启失败。
+            状态["停止线程"] = 线程标识
+            状态["停止时间"] = 现在
+            if 状态["上次重启"] is not None and 现在 - 状态["上次重启"] < self.冷却秒:
+                状态["连续失败"] += 1
+            elif 状态["上次重启"] is not None:
+                状态["连续失败"] = 0
+            状态["上次重启"] = None
+        if not self.原因可自动重启(原因):
+            if 原因 not in ("", "未启动"):
+                self.记录人工操作(标志)
+            return "ignore"
+        if 已暂停 or 状态["复核中"]:
+            return "ignore"
+        if 状态["已放弃"]:
+            return "ignore"
+        if 状态["连续失败"] >= self.最大连续失败:
+            状态["已放弃"] = True
+            return "give_up"
+        起点 = 状态["上次尝试"] if 状态["上次尝试"] is not None else 状态["停止时间"]
+        if 现在 - 起点 < self.冷却秒:
+            return "wait"
+        状态["复核中"] = True
+        状态["上次尝试"] = 现在
+        return "check"
+
+    def 复核结果(self, 标志: str, 已重启: bool) -> None:
+        状态 = self._取(标志)
+        状态["复核中"] = False
+        if 已重启:
+            状态["上次重启"] = self._时钟()
+        else:
+            状态["连续失败"] += 1
+
+    def 连续失败(self, 标志: str) -> int:
+        return int(self._取(标志)["连续失败"])
+
+
 # ==== 监控中心 ====
 class 机器人监控中心:
     """增强型监控服务"""
@@ -46,6 +124,7 @@ class 机器人监控中心:
         self.全局消息队列 = queue.Queue(maxsize=500)
         self.数据库 = 任务数据库()
         self.运行标志 = True#用于控制监控线程退出的标志
+        self.自动重启 = 自动重启策略()
 
         # 启动监控线程,监控每一个机器人的行为
         self.监控线程 = threading.Thread(
@@ -80,6 +159,10 @@ class 机器人监控中心:
             raise ValueError(f"机器人标志[{机器人标志}]不存在")
         self._检查设备是否已被其它机器人占用(机器人标志)
         self.机器人池[机器人标志].启动()
+        # 人工启动（界面/F1）把自动重启的失败计数清零。
+        策略 = getattr(self, "自动重启", None)
+        if 策略 is not None:
+            策略.记录人工操作(机器人标志)
 
     def _检查设备是否已被其它机器人占用(self, 机器人标志: str) -> None:
         """启动前阻止多个机器人同时控制同一模拟器。"""
@@ -130,17 +213,96 @@ class 机器人监控中心:
                     self._加入全局消息队列(f"机器人{用户标识} "+原因)
                     线程.停止("无心跳")
                     # 无心跳时画面可能正处于战斗、结算或 ADB 断连的中间态。
-                    # 这里绝不能为了“恢复”把任意应用拉到前台，也不能重建
-                    # 机器人线程；否则一次识别抖动就会中断游戏并造成掉线。
-                    # 保留原实例，用户确认模拟器画面后可从界面再次启动。
+                    # 这里绝不把任意应用拉到前台，也不立即重建线程；只有
+                    # 冷却后只读确认回到主世界主页，才由自动重启策略重启。
                     self._加入全局消息队列(
-                        f"机器人{用户标识} 已安全停止；无心跳时不自动切换、重启或关闭任何 Android 应用，"
-                        "请确认当前页面后从界面手动继续。"
+                        f"机器人{用户标识} 已安全停止；不切换、重启或关闭任何 Android 应用，"
+                        "确认回到主世界主页后才会自动重启。"
                     )
+
+                try:
+                    self._检查自动重启(用户标识, 线程)
+                except Exception as 异常:
+                    print(f"[监控中心] 自动重启检查失败：{异常}")
 
                 # 处理消息
             self._处理消息()
             time.sleep(1)
+
+    def _检查自动重启(self, 标志: str, 机器人) -> None:
+        停止事件 = getattr(机器人, "停止事件", None)
+        if 停止事件 is None or not 停止事件.is_set() or not self.运行标志:
+            return
+        主线程 = getattr(机器人, "主线程", None)
+        if 主线程 is None or 主线程.is_alive():
+            return
+        try:
+            允许 = bool(getattr(self.数据库.获取机器人设置(标志), "非人工停止后自动重启", True))
+        except Exception:
+            允许 = False
+        if not 允许:
+            return
+        继续事件 = getattr(机器人, "继续事件", None)
+        已暂停 = 继续事件 is not None and not 继续事件.is_set()
+        原因 = str(getattr(机器人, "停止原因", "") or "")
+        动作 = self.自动重启.判定(标志, id(主线程), 原因, 已暂停)
+        if 动作 == "give_up":
+            文本 = (
+                f"非人工停止后自动重启已连续失败 {self.自动重启.最大连续失败} 次，"
+                f"不再自动重启；最后停止原因：{原因}"
+            )
+            self._记录机器人日志(机器人, 文本)
+            self._桌面通知(标志, "自动重启已放弃", 文本)
+        elif 动作 == "check":
+            threading.Thread(
+                target=self._复核并自动重启, args=(标志, 机器人, 原因, 主线程),
+                name=f"自动重启复核-{标志}", daemon=True,
+            ).start()
+
+    def _复核并自动重启(self, 标志: str, 机器人, 原因: str, 原线程) -> None:
+        已重启 = False
+        try:
+            确认, 说明 = 机器人.只读确认主世界主页()
+            # 复核期间人工点了开始/停止/暂停：人工优先，放弃这次自动重启。
+            继续事件 = getattr(机器人, "继续事件", None)
+            人工介入 = (
+                getattr(机器人, "主线程", None) is not 原线程
+                or str(getattr(机器人, "停止原因", "") or "") != 原因
+                or (继续事件 is not None and not 继续事件.is_set())
+                or not self.运行标志
+            )
+            if 人工介入:
+                return
+            if not 确认:
+                self._记录机器人日志(
+                    机器人,
+                    f"自动重启前只读复核未确认主世界主页（{说明}），"
+                    f"10 分钟后再试（已失败 {self.自动重启.连续失败(标志) + 1} 次）",
+                )
+                return
+            self._记录机器人日志(机器人, f"非人工停止（{原因}）后已确认主世界主页（{说明}），自动重启任务计划")
+            self._检查设备是否已被其它机器人占用(标志)
+            机器人.启动()
+            已重启 = True
+        except Exception as 异常:
+            self._记录机器人日志(机器人, f"自动重启失败：{异常}")
+        finally:
+            self.自动重启.复核结果(标志, 已重启)
+
+    @staticmethod
+    def _记录机器人日志(机器人, 文本: str) -> None:
+        try:
+            机器人.记录日志(文本, 300, "警告")
+        except Exception:
+            print(f"[监控中心] {文本}")
+
+    def _桌面通知(self, 标志: str, 标题: str, 正文: str) -> None:
+        try:
+            from 工具包.桌面通知 import 机器人桌面通知
+
+            机器人桌面通知(self.数据库.获取机器人设置(标志), 标志, "自动重启", 标题, 正文, 级别="错误")
+        except Exception:
+            pass
 
     def _处理消息(self):
         """处理来自各个机器人的消息"""
