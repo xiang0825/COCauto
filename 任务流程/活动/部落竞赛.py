@@ -165,12 +165,49 @@ def 含禁点文字(文本: str, 配置: dict) -> str | None:
     return None
 
 
-def 识别任务类型(文本: str, 配置: dict) -> str | None:
-    """按白名单定义判断任务类型；全局排除词命中时返回 None。"""
+def 纠正OCR文本(文本: str, 配置: dict) -> str:
+    """规范化后按配置替换常见 OCR 错字（建菜→建筑、多人避→多人对战…）。"""
     文本 = 规范文本(文本)
+    for 错, 对 in (配置.get("OCR纠错") or {}).items():
+        if 错:
+            文本 = 文本.replace(规范文本(错), 规范文本(对))
+    return 文本
+
+
+def 阵容单位(阵容签名: str | None) -> list[str]:
+    """'弓箭手x2+雷龙x11+飞龙+攻城战车' → ['弓箭手', '雷龙', '飞龙', '攻城战车']。"""
+    单位 = []
+    for 段 in str(阵容签名 or "").split("+"):
+        名 = re.sub(r"[x×]\d+$", "", 规范文本(段))
+        if 名:
+            单位.append(名)
+    return 单位
+
+
+def 兵种要求满足(文本: str, 配置: dict, 阵容签名: str | None) -> bool:
+    """没有兵种要求返回 True；有要求时只有阵容里有同名单位才算满足。
+
+    OCR 常把兵种名读错（亡x1、戈俞冰人、攻城车），读不出或对不上一律不接。
+    """
+    要求词 = [规范文本(词) for 词 in (配置.get("兵种要求") or {}).get("要求词", ["使用", "至少需"]) if 词]
+    位置 = [文本.find(词) + len(词) for 词 in 要求词 if 词 in 文本]
+    if not 位置:
+        return True
+    要求 = re.split(r"[x×\d。，,.]", 文本[max(位置):], maxsplit=1)[0]
+    if len(要求) < 2:
+        return False
+    return any(单位 == 要求 or (len(单位) >= 2 and 要求.endswith(单位) and len(要求) - len(单位) <= 1)
+               for 单位 in 阵容单位(阵容签名))
+
+
+def 识别任务类型(文本: str, 配置: dict, 阵容签名: str | None = None) -> str | None:
+    """按白名单定义判断任务类型；全局排除词命中、指定兵种阵容里没有时返回 None。"""
+    文本 = 纠正OCR文本(文本, 配置)
     if not 文本:
         return None
     if any(规范文本(词) in 文本 for 词 in 配置.get("全局排除词", []) if 词):
+        return None
+    if not 兵种要求满足(文本, 配置, 阵容签名):
         return None
     for 名称, 定义 in (配置.get("白名单") or {}).items():
         if any(规范文本(词) in 文本 for 词 in 定义.get("排除词", []) if 词):
@@ -241,7 +278,8 @@ class 任务候选:
 
 
 def 选择任务(候选列表: Iterable[任务候选], 启用白名单: Iterable[str], 配置: dict) -> 任务候选 | None:
-    """先按白名单层级（1=核心打鱼类，2=可选），同层选积分最高，再按白名单顺序。"""
+    """积分最高优先；同分选完成快的（层级小：掠夺 1 > 摧毁资源 2 > 拆建筑/墙 3 >
+    防御/指定建筑 4 > 胜利拿星 5 > 摧毁率 6），再按白名单顺序。"""
     启用 = [名 for 名 in 启用白名单]
     白名单 = 配置.get("白名单") or {}
     可选 = [
@@ -251,8 +289,8 @@ def 选择任务(候选列表: Iterable[任务候选], 启用白名单: Iterable
     if not 可选:
         return None
     return min(可选, key=lambda 候选: (
-        int(白名单.get(候选.类型, {}).get("层级", 9)),
         -(候选.积分 or 0),
+        int(白名单.get(候选.类型, {}).get("层级", 9)),
         启用.index(候选.类型),
     ))
 
@@ -668,6 +706,10 @@ class 部落竞赛任务(基础任务):
         self._日志(f"选择 {最佳.类型}（{最佳.积分 or '?'}分）")
         return self._开始任务(最佳)
 
+    def _阵容签名(self) -> str:
+        """最近一场进攻识别到的兵栏签名；还没打过仗时为空，指定兵种任务一律不接。"""
+        return str(getattr(self.上下文, "本场阵容签名", "") or "")
+
     def _存在进行中任务(self, 图像, 项列表: list[文字项]) -> bool:
         卡片区 = self.配置.get("面板", {}).get("卡片区ROI")
         文本 = 拼接文本(区域文字(项列表, 卡片区) if 卡片区 else 项列表)
@@ -738,7 +780,7 @@ class 部落竞赛任务(基础任务):
         候选.开始点 = 详情["开始点"]
         候选.禁点原因 = 详情["禁点"]
         候选.冷却 = 详情["冷却"]
-        候选.类型 = 识别任务类型(详情["文本"], self.配置)
+        候选.类型 = 识别任务类型(详情["文本"], self.配置, self._阵容签名())
         return 候选
 
     def _识别详情(self):
@@ -810,7 +852,7 @@ class 部落竞赛任务(基础任务):
         详情 = self._等待(lambda: self._识别详情(), "选中任务详情")
         if not 详情:
             return "超时"
-        类型 = 识别任务类型(详情["文本"], self.配置)
+        类型 = 识别任务类型(详情["文本"], self.配置, self._阵容签名())
         if 类型 != 目标.类型:
             self._日志(f"复核任务类型不一致（{类型} ≠ {目标.类型}），不点开始")
             return "护栏阻止"
