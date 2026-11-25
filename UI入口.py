@@ -35,6 +35,25 @@ def _配置高DPI():
             pass
 
 
+def _整理上次日志(启动提示, 应用) -> None:
+    """每次打开都是空日志：上一次会话导出到 数据库/上次日志.bak.jsonl 后清空。
+
+    必须在单实例检查之后、监控中心创建之前执行，第二个实例不会清空正在
+    运行的实例的日志。首次运行要导出全部历史日志并 VACUUM，会多等十几秒。
+    """
+    try:
+        from 数据库.任务数据库 import 任务数据库
+        from 数据库.日志轮转 import 会话日志轮转, 需要压缩
+
+        路径 = 任务数据库.默认数据库路径()
+        if 需要压缩(路径):
+            启动提示.setText("城控正在启动…（首次整理历史日志，约需 20 秒）")
+            应用.processEvents()
+        会话日志轮转(路径)
+    except Exception:
+        traceback.print_exc()
+
+
 def main() -> int:
     if "--自检" in sys.argv:
         from 工具包.自检 import 运行自检
@@ -70,6 +89,8 @@ def main() -> int:
     启动提示.show()
     应用.processEvents()
 
+    _整理上次日志(启动提示, 应用)
+
     监控中心 = None
     try:
         from 主入口 import 机器人监控中心
@@ -97,6 +118,13 @@ def main() -> int:
         if 监控中心 is not None:
             try:
                 监控中心.关闭()
+            except Exception:
+                pass
+            # 干净退出：本次会话日志导出为 上次日志.bak.jsonl 并清空。
+            try:
+                from 数据库.任务数据库 import 任务数据库
+                from 数据库.日志轮转 import 会话日志轮转
+                会话日志轮转(任务数据库.默认数据库路径(), 压缩=False, 轮转错误=False)
             except Exception:
                 pass
 
