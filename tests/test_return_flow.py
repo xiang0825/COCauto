@@ -2475,6 +2475,32 @@ class 回营状态机测试(unittest.TestCase):
         上下文 = _上下文()
         上下文._获取点击页面识别器 = lambda: 页面识别器()
 
+        任务.等待主界面就绪 = unittest.mock.Mock(return_value=True)
+
+        # rc147：字段补拍仍不完整时，两张新帧确认结算页与同位置回营按钮
+        # 后安全回营，本场不计入统计（原先会停在结算页安全待命 10~20 分钟）。
+        结果 = 任务.等待回营地按钮出现(上下文)
+
+        self.assertTrue(结果)
+        self.assertEqual(上下文.点击记录[:1], [(409, 520)])
+        self.assertIn("不计入", " ".join(上下文.状态))
+
+    def test_战斗统计不完整且新帧不是结算页时不点击回营(self):
+        class 评分匹配器:
+            def 执行匹配(self, _图像, 模板路径, 相似度阈值=0.8, **_参数):
+                if "回营" in 模板路径:
+                    return 相似度阈值 <= 0.85, (409, 520), None
+                return False, (0, 0), None
+
+        任务 = 等待战斗结束并回营任务.__new__(等待战斗结束并回营任务)
+        任务.模板识别 = 评分匹配器()
+        任务.记录战斗结果 = lambda *_参数, **_关键字: False
+        任务._两帧确认结算页可回营 = lambda *_参数: False
+        上下文 = _上下文()
+        上下文._获取点击页面识别器 = lambda: SimpleNamespace(
+            识别=lambda *_a, **_k: SimpleNamespace(页面="战斗结算", 可信度=0.85)
+        )
+
         结果 = 任务.等待回营地按钮出现(上下文)
 
         self.assertFalse(结果)
