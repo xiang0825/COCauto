@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- L2 自动循环：品牌橙底 + 白色循环箭头环绕播放三角，表达"挂机自动跑"。 -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#c2602d"/>
+  <path d="M190 128a62 62 0 1 1-18.2-43.8" fill="none" stroke="#ffffff" stroke-width="22" stroke-linecap="round"/>
+  <path fill="#ffffff" d="M196 52v58h-58z"/>
+  <path fill="#ffffff" d="M110 96v64l52-32z"/>
+</svg>

@@ -1,0 +1,81 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>方案B 抽屉</title><link rel="stylesheet" href="base.css"><style>
+.hero{display:flex;align-items:center;gap:14px;padding:14px 16px}
+.hero .big{font-size:18px;font-weight:700}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.kc{padding:10px 12px}.kc .v{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}.kc .k{font-size:12px;color:var(--text3)}
+.flow{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.step{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:14px;padding:3px 10px;font-size:12px;background:#fff}
+.step.done{color:var(--text3)} .step.cur{border-color:var(--acc);background:var(--acc-l);color:var(--acc-t);font-weight:600}
+.arrow{color:#c3cad3}
+.al{display:flex;gap:8px;font-size:12px;padding:3px 0}
+.dot{width:7px;height:7px;border-radius:50%;margin-top:6px;flex:none}
+
+.mask{position:absolute;inset:30px 0 0 0;background:rgba(20,24,30,.35)}
+.drawer{position:absolute;top:30px;right:0;bottom:0;width:470px;background:#fff;box-shadow:-8px 0 24px rgba(0,0,0,.15);display:flex;flex-direction:column}
+.ti{display:flex;align-items:center;gap:7px;height:30px;padding:0 6px;border-radius:6px;white-space:nowrap}
+.ti .n{flex:1}.ti.sel{background:var(--acc-l)}.ti .sum{font-size:11px;color:var(--text3)}
+</style>
+<body><div class="win"><div class="titlebar"><svg width="22" height="22" viewBox="0 0 256 256"><rect x="8" y="8" width="240" height="240" rx="56" fill="#c2602d"/><path fill="#fff" d="M56 204V100h28V64h32v36h24V64h32v36h28v104H148v-38a20 20 0 0 0-40 0v38z"/></svg><span>城控 · 部落冲突控制台</span><span class="sp"></span><span class="wb">—</span><span class="wb">☐</span><span class="wb">✕</span></div>
+<div style="padding:12px 14px;display:flex;flex-direction:column;gap:10px;flex:1;min-height:0">
+ <div class="card hero">
+  <span class="pill run" style="font-size:13px;padding:4px 12px">运行中</span>
+  <div style="flex:1"><div class="big">主世界刷资源 · 搜索第 12 个村庄</div><div class="faint">已运行 2:14:08 · 模拟器 127.0.0.1:16384 ✓ · 下一步：刷墙</div></div>
+  <span class="btn pri" style="height:36px;width:96px;font-size:14px">⏸ 暂停</span><span class="btn" style="height:36px">停止</span>
+  <span class="btn ghost" style="font-size:16px">⚙</span>
+ </div>
+ <div class="grid">
+  <div class="card kc"><div class="k">今日战斗</div><div class="v">18 <span style="font-size:13px;color:var(--ok)">胜率 83%</span></div><div class="faint">平均 1.7★ · 68%</div></div>
+  <div class="card kc"><div class="k">今日收益 · 金/水</div><div class="v">+4.2M <span style="font-size:13px;color:var(--text2)">/ 3.9M</span></div><div class="faint">黑油 +21k</div></div>
+  <div class="card kc"><div class="k">部落竞赛</div><div class="v">2350<span style="font-size:13px;color:var(--text3)"> / 4000</span></div><div class="bar" style="margin-top:4px"><i style="width:59%"></i></div></div>
+  <div class="card kc"><div class="k">刷墙 / 升级</div><div class="v">3 <span style="font-size:13px;color:var(--text2)">段墙</span></div><div class="faint">工人 2/5 空闲</div></div>
+ </div>
+ <div style="display:flex;gap:10px;flex:1;min-height:0">
+  <div class="card" style="flex:1.25;padding:10px 12px;display:flex;flex-direction:column;gap:8px">
+   <div style="display:flex;align-items:center"><span class="h" style="flex:1">今日任务顺序</span><span class="btn sm">✎ 编辑任务</span></div>
+   <div class="flow">
+    <span class="step done">✓ 部落竞赛</span><span class="arrow">›</span><span class="step cur">▶ 主世界刷资源</span><span class="arrow">›</span><span class="step">刷墙</span><span class="arrow">›</span><span class="step">建议升级建筑</span><span class="arrow">›</span><span class="step">英雄/建筑升级</span>
+   </div>
+   <div class="faint">未勾选：夜世界刷资源 · 兵种/法术研究（未填目标） · 战宠升级</div>
+   <div style="border-top:1px solid var(--sep);padding-top:8px" class="h">最近提醒</div>
+   <div class="al"><span class="dot" style="background:var(--warn)"></span><span class="t faint">10:42</span><span>未知页面 3 分钟进入待命，已自动恢复</span></div>
+   <div class="al"><span class="dot" style="background:var(--ok)"></span><span class="t faint">10:45</span><span>部落竞赛接取「掠夺 100 万金币」(+200)</span></div>
+   <div class="al"><span class="dot" style="background:var(--err)"></span><span class="t faint">昨天 23:10</span><span>研究升级失败：圣水不足（已跳过）</span></div>
+  </div>
+  <div class="card log" style="flex:1;padding:10px 12px;overflow:hidden">
+   <div style="display:flex;align-items:center;margin-bottom:6px"><span class="h" style="flex:1">日志</span><span class="seg"><span class="on">重点</span><span>全部</span></span></div>
+   <div class="r"><span class="t">10:52</span><span>搜索第 12 个：评分 6.8 → 进攻</span></div>
+   <div class="r"><span class="t">10:52</span><span class="s">跳过：评分 4.1</span></div>
+   <div class="r"><span class="t">10:49</span><span class="ok">胜利 ★★ 74%，金 38万</span></div>
+   <div class="r"><span class="t">10:46</span><span>阵容「天使野蛮」配兵完成</span></div>
+   <div class="r"><span class="t">10:42</span><span class="w">未知页面，进入待命</span></div>
+   <div class="r"><span class="t">10:41</span><span class="ok">刷墙：升级 3 段</span></div>
+   <div class="r"><span class="t">10:38</span><span class="ok">胜利 ★ 58%，金 31万</span></div>
+  </div>
+ </div>
+</div>
+<div class="mask"></div>
+<div class="drawer">
+ <div style="display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid var(--sep)"><span class="h" style="flex:1;font-size:15px">编辑任务</span><span class="faint" style="margin-right:12px">✓ 已自动保存</span><span class="btn ghost">✕</span></div>
+ <div style="display:flex;flex:1;min-height:0">
+  <div style="width:190px;padding:10px;border-right:1px solid var(--sep)">
+   <div class="ti"><span class="grip">⋮⋮</span><span class="chk on"></span><span class="n">部落竞赛</span></div>
+   <div class="ti sel"><span class="grip">⋮⋮</span><span class="chk on"></span><span class="n">主世界刷资源</span></div>
+   <div class="ti"><span class="grip">⋮⋮</span><span class="chk on"></span><span class="n">刷墙</span></div>
+   <div class="ti"><span class="grip">⋮⋮</span><span class="chk on"></span><span class="n">建议升级建筑</span></div>
+   <div class="ti"><span class="grip">⋮⋮</span><span class="chk on"></span><span class="n">英雄/建筑升级</span></div>
+   <div class="ti"><span class="grip">⋮⋮</span><span class="chk"></span><span class="n">夜世界刷资源</span></div>
+   <div class="ti"><span class="grip">⋮⋮</span><span class="chk"></span><span class="n">兵种/法术研究</span></div>
+   <div class="ti"><span class="grip">⋮⋮</span><span class="chk"></span><span class="n">战宠升级</span></div>
+  </div>
+  <div style="flex:1;padding:12px 16px;display:flex;flex-direction:column;gap:10px">
+   <div class="h">主世界刷资源</div>
+   <div class="field"><label>最低目标资源</label><div class="input">300000</div></div>
+   <div class="field"><label>战利品优先级</label><div class="seg"><span class="on">均衡</span><span>金币</span><span>圣水</span><span>黑水</span></div></div>
+   <div class="field"><label>阵容预设</label><div class="input sel">天使野蛮（推荐）</div></div>
+   <div style="display:flex;align-items:center;gap:8px"><span class="switch on"></span>速刷（下完兵即结束）</div>
+   <div class="field"><label>资源打满后</label><div class="seg"><span>退出</span><span class="on">待机</span><span>继续打鱼</span></div></div>
+   <div style="flex:1"></div><span style="color:var(--acc);font-size:12px">更多参数（高级设置）›</span>
+  </div>
+ </div>
+</div>
+</div></body></html>

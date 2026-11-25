@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- L1 城垛（延续版）：品牌橙底 + 白色三齿城楼 + 拱门。只用几何形，无文字。 -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#c2602d"/>
+  <path fill="#ffffff" d="M56 204V100h28V64h32v36h24V64h32v36h28v104H148v-38a20 20 0 0 0-40 0v38z"/>
+</svg>

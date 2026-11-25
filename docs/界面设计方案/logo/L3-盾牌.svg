@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- L3 盾牌播放：深色底 + 品牌橙盾牌 + 白色播放三角，深浅主题下都醒目。 -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#1f2733"/>
+  <path fill="#e07a43" d="M128 40l76 26v58c0 48-32 80-76 96-44-16-76-48-76-96V66z"/>
+  <path fill="#ffffff" d="M108 92v76l62-38z"/>
+</svg>

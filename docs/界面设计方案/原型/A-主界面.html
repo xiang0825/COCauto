@@ -1,0 +1,80 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>方案A 主界面</title><link rel="stylesheet" href="base.css">
+<style>
+.top{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#fff;border-bottom:1px solid var(--sep)}
+.top .act{flex:1;min-width:0}
+.top .act b{font-size:14px}
+.top .act div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dev{font-size:12px;color:var(--text2);border:1px solid var(--line);border-radius:6px;padding:2px 8px}
+.gear{width:30px;height:30px;border-radius:7px;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;background:#fff;color:var(--text2);font-size:15px}
+.kpis{display:flex;gap:0;padding:8px 14px;background:#fff;border-bottom:1px solid var(--sep)}
+.kpi{flex:1;padding:0 12px;border-left:1px solid var(--sep)} .kpi:first-child{border-left:0;padding-left:0}
+.kpi.wide{flex:1.8}
+.body{flex:1;display:flex;gap:10px;padding:10px 14px 12px;min-height:0}
+.col{display:flex;flex-direction:column;min-height:0;padding:10px 12px}
+.ti{display:flex;align-items:center;gap:7px;height:30px;padding:0 6px;border-radius:6px;font-size:13px}
+.ti .n{flex:1;white-space:nowrap} .ti .sum{font-size:11px;color:var(--text3)} .ti .sum.warn{color:var(--warn)}
+.ti.cur{background:var(--acc-l)} .ti .now{font-size:11px;color:var(--ok);font-weight:600}
+.colh{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.colh .h{flex:1}
+.log{flex:1;overflow:hidden;border-radius:6px;padding:4px 2px}
+</style>
+<body><div class="win"><div class="titlebar"><svg width="22" height="22" viewBox="0 0 256 256"><rect x="8" y="8" width="240" height="240" rx="56" fill="#c2602d"/><path fill="#fff" d="M56 204V100h28V64h32v36h24V64h32v36h28v104H148v-38a20 20 0 0 0-40 0v38z"/></svg><span>城控 · 部落冲突控制台</span><span class="sp"></span><span class="wb">—</span><span class="wb">☐</span><span class="wb">✕</span></div>
+<div class="top">
+  <span class="pill run">运行中</span>
+  <div class="act"><b>主世界刷资源</b> <span class="muted">· 搜索第 12 个村庄 · 已运行 2:14</span></div>
+  <span class="dev">模拟器 127.0.0.1:16384 ✓</span>
+  <span class="btn pri" style="width:88px">⏸ 暂停</span>
+  <span class="btn ghost sm">停止</span>
+  <span class="gear" title="高级设置">⚙</span>
+</div>
+<div class="kpis">
+  <div class="kpi"><div class="k">今日场次</div><div class="v">18</div></div>
+  <div class="kpi"><div class="k">胜率</div><div class="v">83%</div></div>
+  <div class="kpi"><div class="k">金币</div><div class="v" style="color:#b7791f">+4.2M</div></div>
+  <div class="kpi"><div class="k">圣水</div><div class="v" style="color:#a43fb5">+3.9M</div></div>
+  <div class="kpi"><div class="k">黑油</div><div class="v">+21k</div></div>
+  <div class="kpi wide"><div class="k">部落竞赛 · 2350 / 4000</div><div class="bar" style="margin-top:8px"><i style="width:59%"></i></div></div>
+</div>
+<div style="padding:8px 14px 0"><div class="alert w">⚠ <b>10:42</b> 未知页面 3 分钟进入待命，已自动恢复<span style="flex:1"></span><span style="text-decoration:underline">查看</span><span>✕</span></div></div>
+<div class="body">
+  <div class="card col" style="width:212px">
+    <div class="colh"><span class="h">任务</span><span class="faint">拖动排序</span></div>
+    
+<div class="ti"><span class="grip">⋮⋮</span><span class="chk on"></span><span class="n">部落竞赛</span><span class="sum">2350/4000</span></div>
+<div class="ti cur"><span class="grip">⋮⋮</span><span class="chk on"></span><span class="n">主世界刷资源</span><span class="now">▶ 进行中</span></div>
+<div class="ti"><span class="grip">⋮⋮</span><span class="chk on"></span><span class="n">刷墙</span><span class="sum">金≥800万</span></div>
+<div class="ti"><span class="grip">⋮⋮</span><span class="chk on"></span><span class="n">建议升级建筑</span><span class="sum"></span></div>
+<div class="ti"><span class="grip">⋮⋮</span><span class="chk"></span><span class="n">夜世界刷资源</span><span class="sum"></span></div>
+<div class="ti"><span class="grip">⋮⋮</span><span class="chk on"></span><span class="n">英雄/建筑升级</span><span class="sum">弓箭女皇</span></div>
+<div class="ti"><span class="grip">⋮⋮</span><span class="chk"></span><span class="n">兵种/法术研究</span><span class="sum warn">未填目标</span></div>
+<div class="ti"><span class="grip">⋮⋮</span><span class="chk"></span><span class="n">战宠升级</span><span class="sum"></span></div>
+    <div style="flex:1"></div>
+    <div class="faint">启动游戏、收集资源总会先执行</div>
+  </div>
+  <div class="card col" style="width:236px">
+    <div class="colh"><span class="h">主世界刷资源</span></div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="field"><label>最低目标资源</label><div class="input">300000</div></div>
+      <div class="field"><label>战利品优先级</label><div class="seg"><span class="on">均衡</span><span>金币</span><span>圣水</span><span>黑水</span></div></div>
+      <div class="field"><label>阵容预设</label><div class="input sel">天使野蛮（推荐）</div></div>
+      <div style="display:flex;align-items:center;gap:8px"><span class="switch on"></span>速刷（下完兵即结束）</div>
+      <div class="field"><label>资源打满后</label><div class="seg"><span>退出</span><span class="on">待机</span><span>继续打鱼</span></div></div>
+    </div>
+    <div style="flex:1"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center"><span class="faint">✓ 已自动保存</span><span style="color:var(--acc);font-size:12px">更多参数 ›</span></div>
+  </div>
+  <div class="card col" style="flex:1;min-width:0">
+    <div class="colh"><span class="h">日志</span><div class="seg"><span class="on">重点</span><span>全部</span><span>异常</span></div><span class="btn sm" title="置顶小窗">⧉</span></div>
+    <div class="log">
+<div class="r"><span class="t">10:52:31</span><span>搜索第 12 个村庄：金 42万 / 水 38万 / 黑 2100，评分 6.8 → 进攻</span></div>
+<div class="r"><span class="t">10:52:02</span><span class="s">跳过：评分 4.1（≤5）</span></div>
+<div class="r"><span class="t">10:49:47</span><span class="ok">战斗结束：胜利 ★★ 74%，掠夺 金 38万 水 35万</span></div>
+<div class="r"><span class="t">10:46:10</span><span>阵容「天使野蛮」配兵完成</span></div>
+<div class="r"><span class="t">10:45:58</span><span class="ok">部落竞赛：接取「掠夺 100 万金币」(+200)</span></div>
+<div class="r"><span class="t">10:42:15</span><span class="w">未知页面 3 分钟，进入待命，已自动恢复</span></div>
+<div class="r"><span class="t">10:41:02</span><span class="ok">刷墙：升级 3 段城墙（金币）</span></div>
+<div class="r"><span class="t">10:38:40</span><span class="ok">战斗结束：胜利 ★ 58%，掠夺 金 31万 水 29万</span></div>
+<div class="r"><span class="t">10:34:12</span><span>收集资源完成</span></div></div>
+  </div>
+</div>
+</div></body></html>

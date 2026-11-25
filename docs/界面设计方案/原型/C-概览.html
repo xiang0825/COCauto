@@ -1,0 +1,35 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>方案C 概览</title><link rel="stylesheet" href="base.css"><style>
+.tabs{display:flex;align-items:center;gap:4px;padding:0 14px;background:#fff;border-bottom:1px solid var(--sep);height:46px}
+.tab{padding:0 14px;height:46px;display:flex;align-items:center;font-weight:600;color:var(--text2);border-bottom:2px solid transparent}
+.tab.on{color:var(--acc-t);border-bottom-color:var(--acc)}
+.ti{display:flex;align-items:center;gap:7px;height:32px;padding:0 8px;border-radius:6px;white-space:nowrap}
+.ti .n{flex:1}.ti.sel{background:var(--acc-l)}.ti .sum{font-size:11px;color:var(--text3)}
+</style>
+<body><div class="win"><div class="titlebar"><svg width="22" height="22" viewBox="0 0 256 256"><rect x="8" y="8" width="240" height="240" rx="56" fill="#c2602d"/><path fill="#fff" d="M56 204V100h28V64h32v36h24V64h32v36h28v104H148v-38a20 20 0 0 0-40 0v38z"/></svg><span>城控 · 部落冲突控制台</span><span class="sp"></span><span class="wb">—</span><span class="wb">☐</span><span class="wb">✕</span></div><div class="tabs"><span class="tab on">概览</span><span class="tab">任务</span><span class="tab">日志</span><span style="flex:1"></span><span class="pill run">运行中</span><span class="btn pri sm" style="height:28px;padding:0 14px">⏸ 暂停</span><span class="btn ghost sm">停止</span><span class="btn ghost" title="迷你条">⇲</span><span class="btn ghost">⚙</span></div>
+<div style="padding:14px;display:flex;flex-direction:column;gap:12px;flex:1">
+ <div class="card" style="padding:14px 16px">
+  <div class="faint">现在</div>
+  <div style="font-size:20px;font-weight:700;margin:2px 0">主世界刷资源 · 搜索第 12 个村庄</div>
+  <div class="muted">已运行 2:14:08 · 下一步：刷墙 · 模拟器 127.0.0.1:16384 ✓</div>
+ </div>
+ <div style="display:flex;gap:12px">
+  <div class="card" style="flex:1;padding:12px 16px">
+   <div class="h" style="margin-bottom:8px">今天</div>
+   <div style="display:grid;grid-template-columns:repeat(3,1fr);row-gap:10px" class="kpi">
+    <div><div class="k">战斗场次</div><div class="v">18</div></div><div><div class="k">胜率</div><div class="v">83%</div></div><div><div class="k">平均星数</div><div class="v">1.7★</div></div>
+    <div><div class="k">金币</div><div class="v" style="color:#b7791f">+4.2M</div></div><div><div class="k">圣水</div><div class="v" style="color:#a43fb5">+3.9M</div></div><div><div class="k">黑油</div><div class="v">+21k</div></div>
+   </div>
+  </div>
+  <div class="card" style="width:270px;padding:12px 16px">
+   <div class="h" style="margin-bottom:8px">部落竞赛</div>
+   <div style="font-size:22px;font-weight:700">2350 <span style="font-size:13px;color:var(--text3)">/ 4000 分</span></div>
+   <div class="bar" style="margin:6px 0 8px"><i style="width:59%"></i></div>
+   <div class="faint">当前任务：掠夺 100 万金币（+200）</div><div class="faint">下次检查 11:30</div>
+  </div>
+ </div>
+ <div class="card" style="padding:10px 16px;flex:1">
+  <div class="h" style="margin-bottom:6px">需要注意 <span class="tag">2</span></div>
+  <div class="alert w" style="margin-bottom:6px">⚠ 10:42 未知页面 3 分钟进入待命，已自动恢复</div>
+  <div class="alert e">✕ 昨天 23:10 研究升级失败：圣水不足（已跳过）</div>
+ </div>
+</div></div></body></html>

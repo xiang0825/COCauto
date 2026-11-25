@@ -1,0 +1,54 @@
+/* 原型共用样式：沿用现有 浅色 配色令牌（界面/主题.py） */
+:root{
+  --bg:#f5f6f8; --side:#ffffff; --card:#ffffff; --line:#e3e7ec; --sep:#e8ebef;
+  --text:#1f2733; --text2:#5c6878; --text3:#8b96a5;
+  --acc:#c2602d; --acc-h:#a9521f; --acc-l:#fdeee3; --acc-t:#8f4321;
+  --ok:#1f9d63; --warn:#b7791f; --err:#c53030; --logbg:#fbfcfd;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#d9dde3}
+body{font:13px/1.45 "Microsoft YaHei UI","Microsoft YaHei","PingFang SC",sans-serif;color:var(--text)}
+.win{width:800px;height:540px;background:var(--bg);display:flex;flex-direction:column;overflow:hidden;position:relative}
+.titlebar{height:30px;background:#fff;border-bottom:1px solid var(--sep);display:flex;align-items:center;padding:0 10px;gap:8px;font-size:12px;color:var(--text2)}
+.titlebar .sp{flex:1}
+.titlebar .wb{width:28px;text-align:center;color:var(--text3)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px}
+.h{font-weight:700;font-size:13px}
+.muted{color:var(--text2)} .faint{color:var(--text3);font-size:12px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:30px;padding:0 14px;border-radius:7px;border:1px solid var(--line);background:#fff;font-weight:600;font-size:13px;color:var(--text)}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+.btn.sm{height:24px;padding:0 9px;font-size:12px;font-weight:500}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--text2)}
+.pill{display:inline-flex;align-items:center;gap:6px;border-radius:11px;padding:2px 10px;font-weight:600;font-size:12px}
+.pill.run{color:var(--ok);background:rgba(31,157,99,.12)}
+.pill.pause{color:var(--warn);background:rgba(183,121,31,.13)}
+.pill.stop{color:var(--text3);background:rgba(139,150,165,.15)}
+.pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.chk{width:15px;height:15px;border-radius:4px;border:1.5px solid #b8c0cb;display:inline-flex;align-items:center;justify-content:center;flex:none;background:#fff}
+.chk.on{background:var(--acc);border-color:var(--acc)}
+.chk.on::after{content:"";width:7px;height:4px;border:2px solid #fff;border-top:0;border-right:0;transform:rotate(-45deg) translate(1px,-1px)}
+.grip{color:#c3cad3;font-size:11px;letter-spacing:-2px;width:10px;flex:none}
+.field{display:flex;flex-direction:column;gap:4px}
+.field label{font-size:12px;color:var(--text2)}
+.input{height:28px;border:1px solid var(--line);border-radius:6px;padding:0 9px;display:flex;align-items:center;background:#fff;font-size:13px}
+.input.sel::after{content:"▾";margin-left:auto;color:var(--text3);font-size:11px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden;background:#fff}
+.seg span{padding:3px 10px;font-size:12px;color:var(--text2);border-left:1px solid var(--line)}
+.seg span:first-child{border-left:0}
+.seg span.on{background:var(--acc-l);color:var(--acc-t);font-weight:600}
+.switch{width:30px;height:17px;border-radius:9px;background:#cfd5dd;position:relative;flex:none}
+.switch::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#fff}
+.switch.on{background:var(--acc)} .switch.on::after{left:15px}
+.log{font:12px/1.55 "Microsoft YaHei UI",sans-serif;background:var(--logbg)}
+.log .r{display:flex;gap:10px;padding:1px 0}
+.log .t{color:var(--text3);flex:none;font-variant-numeric:tabular-nums}
+.log .ok{color:var(--ok)} .log .w{color:var(--warn)} .log .e{color:var(--err)} .log .s{color:var(--text3)}
+.kpi .v{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2}
+.kpi .k{font-size:11px;color:var(--text3)}
+.bar{height:6px;border-radius:3px;background:var(--sep);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--acc);border-radius:3px}
+.alert{display:flex;align-items:center;gap:8px;border-radius:8px;padding:6px 10px;font-size:12px}
+.alert.w{background:#fff6e5;color:#8a5a12;border:1px solid #f3dfb5}
+.alert.e{background:#fdecec;color:#9b2525;border:1px solid #f4c9c9}
+.tag{font-size:11px;color:var(--text3);border:1px solid var(--line);border-radius:4px;padding:0 5px}
+.note{position:absolute;background:#2563eb;color:#fff;font-size:11px;border-radius:10px;width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-weight:700;box-shadow:0 0 0 2px #fff}

@@ -1,0 +1,42 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>高级设置</title><link rel="stylesheet" href="base.css">
+<style>
+.nav{width:170px;background:#fff;border-right:1px solid var(--sep);padding:12px 8px;display:flex;flex-direction:column;gap:2px}
+.nav span{padding:7px 12px;border-radius:6px;color:var(--text2)}
+.nav span.on{background:var(--acc-l);color:var(--acc-t);font-weight:600}
+.sec{font-size:11px;color:var(--text3);padding:10px 12px 2px}
+.row{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--sep)}
+.row .l{flex:1}.row .l div:last-child{font-size:11px;color:var(--text3)}
+.row .input{width:130px}
+.troops{display:grid;grid-template-columns:repeat(4,1fr);gap:6px 10px;font-size:12px}
+.troops span{display:flex;align-items:center;gap:5px}
+</style>
+<body><div class="win">
+<div class="titlebar"><span style="font-weight:600;color:var(--text)">高级设置</span><span class="sp"></span><span class="wb">✕</span></div>
+<div style="display:flex;flex:1;min-height:0">
+ <div class="nav">
+  <span>模拟器连接</span>
+  <span class="on">进攻与配兵</span>
+  <span>搜索与资源</span>
+  <span>部落竞赛</span>
+  <span>通知</span>
+  <span>官方账号数据</span>
+  <span>常规</span>
+  <div style="flex:1"></div>
+  <div class="faint" style="padding:0 12px;white-space:nowrap">版本 rc145 · <span style="color:var(--acc)">检查更新</span></div>
+ </div>
+ <div style="flex:1;padding:14px 20px;overflow:hidden">
+  <div class="h" style="font-size:15px">进攻与配兵</div>
+  <div class="faint" style="margin-bottom:6px">平时不用改；改错可点右下角“恢复默认”。</div>
+  <div class="row"><div class="l"><div>下兵间隔（毫秒）</div><div>越小越快，太小可能漏兵</div></div><div class="input">120</div></div>
+  <div class="row"><div class="l"><div>高速下兵</div><div>快速连点 / 短按压</div></div><span class="seg"><span class="on">快速连点</span><span>短按压</span></span><span class="switch on"></span></div>
+  <div class="row"><div class="l"><div>自动配兵玩法</div><div>资源优先 / 稳健三星 / 快速速刷</div></div><span class="seg"><span class="on">资源优先</span><span>稳健三星</span><span>快速速刷</span></span></div>
+  <div class="row"><div class="l"><div>采集进攻界面图像</div><div>调试用，会占磁盘</div></div><span class="switch"></span></div>
+  <div class="sec" style="padding-left:0">自定义阵容（选“自定义”预设时生效）</div>
+  <div class="troops">
+   <span><span class="chk on"></span>野蛮人</span><span><span class="chk on"></span>弓箭手</span><span><span class="chk"></span>巨人</span><span><span class="chk"></span>哥布林</span>
+   <span><span class="chk"></span>炸弹人</span><span><span class="chk on"></span>气球兵</span><span><span class="chk"></span>法师</span><span><span class="chk on"></span>天使</span>
+   <span><span class="chk"></span>飞龙</span><span><span class="chk"></span>皮卡超人</span><span><span class="chk"></span>亡灵</span><span><span class="chk"></span>野猪骑士</span>
+  </div>
+  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px"><span class="faint" style="margin-right:auto;align-self:center">✓ 已自动保存</span><span class="btn sm">恢复默认</span></div>
+ </div>
+</div></div></body></html>
