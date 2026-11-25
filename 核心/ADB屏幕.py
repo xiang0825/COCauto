@@ -40,6 +40,17 @@ class ADB屏幕:
         # 最多约两帧，避免高频 screencap 把雷电 ADB transport 和提交额度
         # 堵死；战斗页面需要更快刷新时由上层识别节流单独控制。
         self._最短截图间隔秒 = 0.50
+        if 日志回调 is not None:
+            设置回调 = getattr(设备, "设置日志回调", None)
+            if callable(设置回调):
+                设置回调(日志回调)
+
+    def 测速选择截图后端(self, *, 采样帧数: int = 2, 强制重测: bool = False):
+        """转发底层设备的截图后端自动测速入口。"""
+        测速方法 = getattr(self.设备, "测速选择截图后端", None)
+        if callable(测速方法):
+            return 测速方法(采样帧数=采样帧数, 强制重测=强制重测)
+        return None
 
     def 检查主机内存预算(self, 强制刷新: bool = True) -> tuple[bool, str]:
         """将恢复等待所需的宿主机内存检查转发给实际 ADB 设备。"""
@@ -127,4 +138,10 @@ class ADB屏幕:
             raise RuntimeError("ADB 模式只能绑定到已选择的 ADB 设备。")
         self.设备 = 设备
         self.是否已绑定 = True
+        self._原始截图缓存 = None
+        self._原始截图缓存时间 = 0.0
+        if self._日志回调 is not None:
+            设置回调 = getattr(设备, "设置日志回调", None)
+            if callable(设置回调):
+                设置回调(self._日志回调)
         return 1

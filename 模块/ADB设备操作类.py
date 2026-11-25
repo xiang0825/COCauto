@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import ctypes
 import ipaddress
+import logging
 import re
 import shutil
 import subprocess
@@ -17,6 +18,24 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from 核心.异常 import ADB异常
+from 模块.截图后端 import (
+    BACKEND_ADB_PNG,
+    BACKEND_ADB_RAW,
+    BACKEND_ADB_RAW_GZIP,
+    BACKEND_MUMU_IPC,
+    后端测速结果,
+    截图测速报告,
+    默认ADB候选顺序,
+    默认后端优先级,
+    校验截图帧,
+    构造ADB截图命令参数,
+    画面像素一致,
+    解码Gzip原始截图,
+    解码PNG截图,
+    解码原始截图,
+)
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ADB错误(ADB异常, RuntimeError):
@@ -139,6 +158,8 @@ class ADB设备操作类:
             runner: Callable = subprocess.run,
             自动检测路径: bool = True,
             内存保护提交额度阈值MB: int = 1536,
+            启用截图测速: bool | None = None,
+            日志回调: Callable[[str], None] | None = None,
     ):
         self.自动检测路径 = bool(自动检测路径)
         self.adb路径 = self.解析ADB路径(adb路径, 自动检测=self.自动检测路径)
@@ -147,6 +168,14 @@ class ADB设备操作类:
         self.内存保护提交额度阈值MB = self._规范化内存保护提交额度阈值MB(
             内存保护提交额度阈值MB
         )
+        # 测试注入假 runner 时默认保持单次直连行为，避免打乱已有测试的命令序列；
+        # 真实运行（subprocess.run）或显式传入 启用截图测速=True 时启用启动自动测速。
+        self.启用截图测速 = (
+            (runner is subprocess.run)
+            if 启用截图测速 is None
+            else bool(启用截图测速)
+        )
+        self._日志回调 = 日志回调
         self._屏幕尺寸: tuple[int, int] | None = None
         self._截图显示ID: str | None = None
         self._截图显示ID更新时间 = 0.0
@@ -210,6 +239,15 @@ class ADB设备操作类:
         self._高速截图 = None
         self._高速截图键: tuple[str, str] | None = None
         self._高速截图已核对 = False
+        self._截图测速已完成 = False
+        self._截图测速报告: 截图测速报告 | None = None
+        self._可用截图后端顺序: list[str] = []
+        self._已选截图后端: str | None = None
+        self._永久禁用截图后端: set[str] = set()
+        self._截图后端冷却截止: dict[str, float] = {}
+        self._截图后端连续失败: dict[str, int] = {}
+        self._截图后端冷却秒数 = 15.0
+        self._测速采样帧数 = 2
         锁键 =(os.path.normcase(os.path.abspath(self.adb路径)), self.设备序列号)
         with self._设备命令锁容器锁:
             self._命令锁 = self._设备命令锁容器.setdefault(锁键, threading.RLock())
@@ -942,6 +980,7 @@ class ADB设备操作类:
                 self._最近有效截图显示ID时间 = 0.0
                 self._最近有效输入显示ID = None
                 self._最近有效输入显示ID时间 = 0.0
+                self._重置截图测速状态()
                 锁键 = (os.path.normcase(os.path.abspath(self.adb路径)), self.设备序列号)
                 with self._设备命令锁容器锁:
                     self._命令锁 = self._设备命令锁容器.setdefault(锁键, threading.RLock())
@@ -981,7 +1020,10 @@ class ADB设备操作类:
 
     def 设置目标包名(self, 包名: str) -> None:
         """绑定运行期输入目标；不执行启动、切换或关闭应用。"""
-        self._目标包名 = str(包名 or "").strip()
+        新包名 = str(包名 or "").strip()
+        if 新包名 != getattr(self, "_目标包名", ""):
+            self._重置截图测速状态()
+        self._目标包名 = 新包名
         self._前台包名缓存 = ""
         self._前台包名缓存时间 = 0.0
         self._截图显示ID = None
@@ -1682,31 +1724,457 @@ class ADB设备操作类:
         self._高速截图 = None
         self._高速截图键 = None
         self._高速截图已核对 = False
+        self._待核对高速截图 = False
+        self._截图测速已完成 = False
+        if getattr(self, "_已选截图后端", None) == BACKEND_MUMU_IPC:
+            self._已选截图后端 = None
+
+    def 设置日志回调(self, 日志回调: Callable[[str], None] | None) -> None:
+        """设置截图测速与回退日志回调（由 ADB屏幕 注入）。"""
+        self._日志回调 = 日志回调
+
+    def _记录截图日志(self, 消息: str, *, 警告: bool = False) -> None:
+        if 警告:
+            _LOGGER.warning(消息)
+        else:
+            _LOGGER.info(消息)
+        回调 = getattr(self, "_日志回调", None)
+        if callable(回调):
+            try:
+                回调(消息)
+            except Exception:
+                pass
+
+    def _确保测速字段(self) -> None:
+        """兼容通过 ``__new__`` 构造的测试实例，惰性补齐测速/回退字段。"""
+        if not hasattr(self, "_可用截图后端顺序"):
+            self._可用截图后端顺序 = []
+        if not hasattr(self, "_永久禁用截图后端"):
+            self._永久禁用截图后端 = set()
+        if not hasattr(self, "_截图后端冷却截止"):
+            self._截图后端冷却截止 = {}
+        if not hasattr(self, "_截图后端连续失败"):
+            self._截图后端连续失败 = {}
+        if not hasattr(self, "_截图后端冷却秒数"):
+            self._截图后端冷却秒数 = 15.0
+        if not hasattr(self, "_测速采样帧数"):
+            self._测速采样帧数 = 2
+        if not hasattr(self, "_截图测速已完成"):
+            self._截图测速已完成 = False
+        if not hasattr(self, "_截图测速报告"):
+            self._截图测速报告 = None
+        if not hasattr(self, "_已选截图后端"):
+            self._已选截图后端 = None
+
+    def _重置截图测速状态(self) -> None:
+        self._截图测速已完成 = False
+        self._截图测速报告 = None
+        self._可用截图后端顺序 = []
+        self._已选截图后端 = None
+        self._永久禁用截图后端 = set()
+        self._截图后端冷却截止 = {}
+        self._截图后端连续失败 = {}
+        self._待核对高速截图 = False
 
     @staticmethod
     def _解析原始截图(数据: bytes):
-        """解析 ``screencap``（不带 -p）的原始像素，返回 BGR 图像或 None。
+        """解析 ``screencap``（不带 -p）的原始像素，返回 BGR 图像或 None。"""
+        return 解码原始截图(数据)
 
-        数据格式：头部 宽、高、像素格式（各 4 字节小端），Android 12 起
-        还多一个 4 字节色彩空间，之后是 宽×高×4 字节像素。头部前面可能
-        混有 adb 打印的诊断文本，所以在开头一小段里寻找能让总长度严格
-        对上的位置；找不到就返回 None，由调用方退回 PNG。
-        """
+    def _获取当前ADB截图显示ID(self) -> str | None:
+        if not self._是MuMu连接():
+            return None
+        显示ID = self._获取MuMu截图显示ID()
+        # MuMu 可能同时存在启动器 display 0 和 CoC 游戏 display。
+        # 解析不到游戏 display 时不能退回默认截图：默认层可能是
+        # 模拟器桌面，后续页面识别会把桌面当成未知/过渡页，造成
+        # 任务状态机误判。输入路径本来就会拒绝无 display 的操作，
+        # 截图也必须同样 fail-closed，等待下一次在线复核。
+        if not 显示ID:
+            raise ADB错误(
+                "未确认 CoC 所在的 MuMu 游戏显示层，已拒绝使用默认 display 截图"
+            )
+        return 显示ID
+
+    def _采集ADB原始字节(self, 后端: str) -> bytes:
+        显示ID = self._获取当前ADB截图显示ID()
+        截图参数 = 构造ADB截图命令参数(后端, 显示ID)
+        原始数据 = self.执行(截图参数, timeout=15, binary=True)
+        if len(原始数据) > 20 * 1024 * 1024:
+            raise ADB错误("ADB 截图数据异常过大，已拒绝继续解码以保护内存。")
+        if not 原始数据:
+            raise ADB错误(
+                "ADB 截图返回空数据；设备可能刚刚断开，已停止解码并准备重新验证。"
+            )
+        return 原始数据
+
+    def _解码ADB后端字节(self, 后端: str, 原始数据: bytes, *, 测速模式: bool = False):
+        if 后端 == BACKEND_ADB_PNG:
+            图像 = 解码PNG截图(原始数据)
+            if 图像 is None:
+                raise ADB错误("ADB 截图返回的内容不是有效 PNG，已停止解码并准备重试。")
+            return 图像
+        if 后端 == BACKEND_ADB_RAW:
+            # 某些设备/mock 即使不传 -p 也会直接返回 PNG 签名。
+            if b"\x89PNG\r\n\x1a\n" in 原始数据:
+                图像 = 解码PNG截图(原始数据)
+            else:
+                图像 = self._解析原始截图(原始数据)
+            if 图像 is None:
+                if not 测速模式:
+                    self._截图使用PNG = True
+                raise ADB错误("ADB 原始截图无法解析，已改用 PNG 截图并准备重试。")
+            return 图像
+        if 后端 == BACKEND_ADB_RAW_GZIP:
+            图像 = 解码Gzip原始截图(原始数据)
+            if 图像 is None:
+                raise ADB错误("ADB 压缩原始截图无法解析。")
+            return 图像
+        raise ADB错误(f"未知的截图后端：{后端}")
+
+    def _采集单帧按后端(
+            self,
+            后端: str,
+            *,
+            测速模式: bool = False,
+            允许全黑: bool = False,
+            期望尺寸: tuple[int, int] | None = None,
+    ):
+        if 后端 == BACKEND_MUMU_IPC:
+            截图器 = self._获取高速截图器()
+            if 截图器 is None:
+                raise ADB错误("MuMu 高速截图当前不可用。")
+            if not getattr(self, "_高速截图已核对", False):
+                raise ADB错误("MuMu 高速截图尚未通过跨屏核对。")
+            图像 = 截图器.截图()
+            合法, 原因 = 校验截图帧(图像, 期望尺寸=期望尺寸, 允许全黑=允许全黑)
+            if not 合法:
+                raise ADB错误(f"MuMu 高速截图画面无效：{原因}")
+            return 图像
+
+        原始数据 = self._采集ADB原始字节(后端)
+        图像 = self._解码ADB后端字节(后端, 原始数据, 测速模式=测速模式)
+        合法, 原因 = 校验截图帧(图像, 期望尺寸=期望尺寸, 允许全黑=允许全黑)
+        if not 合法:
+            raise ADB错误(f"截图后端 {后端} 画面无效：{原因}")
+        return 图像
+
+    def _运行截图测速(
+            self,
+            *,
+            采样帧数: int = 2,
+            强制重测: bool = False,
+            返回首发帧: bool = False,
+    ):
+        """对当前可用截图后端进行轻量测速择优，只测速一次并缓存可用顺序。"""
         import cv2
-        import numpy as np
 
-        # 1=RGBA_8888，2=RGBX_8888，5=BGRA_8888；其他格式不是每像素 4 字节。
-        转换方式 = {1: cv2.COLOR_RGBA2BGR, 2: cv2.COLOR_RGBA2BGR, 5: cv2.COLOR_BGRA2BGR}
-        总长 = len(数据)
-        for 起点 in range(0, min(总长 - 12, 4096) if 总长 > 12 else 0):
-            宽, 高, 格式 = (int(v) for v in np.frombuffer(数据, dtype="<u4", count=3, offset=起点))
-            if not (1 <= 宽 <= 8192 and 1 <= 高 <= 8192) or 格式 not in 转换方式:
+        self._确保测速字段()
+        if self._截图测速已完成 and not 强制重测:
+            return self._截图测速报告, None
+
+        self._验证目标()
+        self._重置截图测速状态()
+        总开始 = time.perf_counter()
+        帧数 = max(1, min(3, int(采样帧数)))
+        结果列表: list[后端测速结果] = []
+        参考尺寸: tuple[int, int] | None = None
+        参考ADB画面 = None
+        各后端最后帧: dict[str, object] = {}
+
+        # 若是 MuMu 设备，先确认游戏 display 存在；确认不到时立即 fail-closed，
+        # 绝不在启动测速时退回默认 display 0 截到启动器。
+        if self._是MuMu连接():
+            self._获取当前ADB截图显示ID()
+
+        for 后端 in 默认ADB候选顺序:
+            if (
+                self._MuMu显示服务仍缺失()
+                or time.monotonic() < float(getattr(self, "_ADB熔断截止时间", 0.0) or 0.0)
+            ):
+                结果列表.append(后端测速结果(后端, False, 0.0, 0.0, None, "ADB 处于冷却或显示服务缺失"))
                 continue
-            for 头长 in (16, 12):
-                if 总长 - 起点 - 头长 == 宽 * 高 * 4:
-                    像素 = np.frombuffer(数据, dtype=np.uint8, offset=起点 + 头长).reshape(高, 宽, 4)
-                    return cv2.cvtColor(像素, 转换方式[格式])
-        return None
+            耗时列表: list[float] = []
+            最后有效帧 = None
+            失败原因 = ""
+            for _ in range(帧数):
+                self._检查主机内存预算()
+                开始 = time.perf_counter()
+                try:
+                    画面 = self._采集单帧按后端(
+                        后端,
+                        测速模式=True,
+                        允许全黑=False,
+                        期望尺寸=参考尺寸,
+                    )
+                    耗时ms = (time.perf_counter() - 开始) * 1000.0
+                    耗时列表.append(耗时ms)
+                    最后有效帧 = 画面
+                    if 参考尺寸 is None:
+                        参考尺寸 = (int(画面.shape[1]), int(画面.shape[0]))
+                    if 参考ADB画面 is None:
+                        参考ADB画面 = 画面
+                except (ADB错误, cv2.error, ValueError, TypeError) as 异常:
+                    # 主机内存保护必须立即向上抛出，不能吞掉护栏异常。
+                    if "主机内存保护" in str(异常):
+                        raise
+                    失败原因 = str(异常)
+                    break
+            if 耗时列表 and not 失败原因 and 最后有效帧 is not None:
+                结果列表.append(
+                    后端测速结果(
+                        后端=后端,
+                        可用=True,
+                        最短耗时ms=min(耗时列表),
+                        平均耗时ms=sum(耗时列表) / len(耗时列表),
+                        分辨率=(int(最后有效帧.shape[1]), int(最后有效帧.shape[0])),
+                    )
+                )
+                各后端最后帧[后端] = 最后有效帧
+            else:
+                结果列表.append(
+                    后端测速结果(
+                        后端=后端,
+                        可用=False,
+                        最短耗时ms=0.0,
+                        平均耗时ms=0.0,
+                        分辨率=None,
+                        原因=失败原因 or "采样失败",
+                    )
+                )
+
+        高速截图器 = self._获取高速截图器()
+        if 高速截图器 is not None:
+            if 参考ADB画面 is None and not self._高速截图已核对:
+                结果列表.append(
+                    后端测速结果(
+                        BACKEND_MUMU_IPC,
+                        False,
+                        0.0,
+                        0.0,
+                        None,
+                        "缺少基准 ADB 画面，无法交叉核对实例与显示层",
+                    )
+                )
+            else:
+                耗时列表 = []
+                最后有效帧 = None
+                失败原因 = ""
+                可稍后复核 = False
+                for _ in range(帧数):
+                    self._检查主机内存预算()
+                    开始 = time.perf_counter()
+                    画面 = 高速截图器.截图()
+                    耗时ms = (time.perf_counter() - 开始) * 1000.0
+                    if 画面 is None:
+                        失败原因 = "MuMu IPC 暂未返回有效画面"
+                        可稍后复核 = not getattr(高速截图器, "已停用", True)
+                        break
+                    合法, 原因 = 校验截图帧(画面, 期望尺寸=参考尺寸, 允许全黑=False)
+                    if not 合法:
+                        失败原因 = 原因
+                        break
+                    if not self._高速截图已核对:
+                        if 画面像素一致(画面, 参考ADB画面, 最大平均差异=12.0):
+                            self._高速截图已核对 = True
+                        else:
+                            self._高速截图核对失败次数 = getattr(self, "_高速截图核对失败次数", 0) + 1
+                            if self._高速截图核对失败次数 >= 3:
+                                高速截图器.关闭()
+                            失败原因 = "与 ADB 画面交叉核对不一致"
+                            break
+                    耗时列表.append(耗时ms)
+                    最后有效帧 = 画面
+                if 耗时列表 and not 失败原因 and 最后有效帧 is not None:
+                    结果列表.append(
+                        后端测速结果(
+                            后端=BACKEND_MUMU_IPC,
+                            可用=True,
+                            最短耗时ms=min(耗时列表),
+                            平均耗时ms=sum(耗时列表) / len(耗时列表),
+                            分辨率=参考尺寸 or (int(最后有效帧.shape[1]), int(最后有效帧.shape[0])),
+                        )
+                    )
+                    各后端最后帧[BACKEND_MUMU_IPC] = 最后有效帧
+                else:
+                    if 可稍后复核:
+                        self._待核对高速截图 = True
+                    结果列表.append(
+                        后端测速结果(
+                            BACKEND_MUMU_IPC,
+                            False,
+                            0.0,
+                            0.0,
+                            None,
+                            失败原因 or "MuMu IPC 不可用",
+                        )
+                    )
+
+        可用项 = [项 for 项 in 结果列表 if 项.可用]
+        可用项.sort(
+            key=lambda 项: (
+                项.平均耗时ms,
+                项.最短耗时ms,
+                默认后端优先级.get(项.后端, 99),
+            )
+        )
+        可用顺序 = [项.后端 for 项 in 可用项]
+        首选 = 可用顺序[0] if 可用顺序 else None
+        总耗时ms = (time.perf_counter() - 总开始) * 1000.0
+        报告 = 截图测速报告(
+            首选后端=首选,
+            可用后端顺序=tuple(可用顺序),
+            结果列表=tuple(结果列表),
+            总耗时ms=总耗时ms,
+        )
+        self._可用截图后端顺序 = 可用顺序
+        self._已选截图后端 = 首选
+        self._截图测速报告 = 报告
+        self._截图测速已完成 = bool(可用顺序)
+        self._记录截图日志(报告.摘要文本(), 警告=(首选 is None))
+        首发帧 = 各后端最后帧.get(首选) if (返回首发帧 and 首选) else None
+        return 报告, 首发帧
+
+    def 测速选择截图后端(self, *, 采样帧数: int = 2, 强制重测: bool = False) -> 截图测速报告:
+        """公开测速入口：对可用截图后端测速择优并缓存结果。"""
+        报告, _ = self._运行截图测速(
+            采样帧数=采样帧数,
+            强制重测=强制重测,
+            返回首发帧=False,
+        )
+        self.启用截图测速 = True
+        return 报告
+
+    def _生成本帧后端尝试顺序(self) -> list[str]:
+        self._确保测速字段()
+        现在 = time.monotonic()
+        有效列表 = [
+            后端
+            for 后端 in self._可用截图后端顺序
+            if 后端 not in self._永久禁用截图后端
+        ]
+        非冷却 = [
+            后端
+            for 后端 in 有效列表
+            if 现在 >= float(self._截图后端冷却截止.get(后端, 0.0) or 0.0)
+        ]
+        冷却中 = [
+            后端
+            for 后端 in 有效列表
+            if 现在 < float(self._截图后端冷却截止.get(后端, 0.0) or 0.0)
+        ]
+        尝试顺序 = 非冷却 + 冷却中
+        if BACKEND_ADB_PNG not in 尝试顺序 and BACKEND_ADB_PNG not in self._永久禁用截图后端:
+            尝试顺序.append(BACKEND_ADB_PNG)
+        return 尝试顺序
+
+    def _按测速通道获取完整画面(self):
+        import cv2
+
+        self._确保测速字段()
+        if not self._截图测速已完成:
+            self._检查主机内存预算()
+            报告, 首发帧 = self._运行截图测速(
+                采样帧数=getattr(self, "_测速采样帧数", 2),
+                返回首发帧=True,
+            )
+            if 首发帧 is not None:
+                return 首发帧
+            if not 报告.可用后端顺序:
+                失败说明 = next(
+                    (项.原因 for 项 in 报告.结果列表 if 项.原因),
+                    "所有截图后端均不可用或返回黑屏/无效画面",
+                )
+                raise ADB错误(f"截图测速未找到可用后端：{失败说明}")
+
+        最后错误 = None
+        for 轮次 in range(self._截图重试上限):
+            本轮后端 = self._生成本帧后端尝试顺序()
+            if not 本轮后端:
+                break
+            for 序号, 后端 in enumerate(本轮后端):
+                if 轮次 > 0 and not self._目标已验证:
+                    self.确认在线()
+                if time.monotonic() < float(getattr(self, "_ADB熔断截止时间", 0.0) or 0.0):
+                    剩余 = max(1, int(self._ADB熔断截止时间 - time.monotonic()))
+                    raise ADB错误(
+                        f"ADB 传输连续失败，已进入{剩余}秒安全冷却；"
+                        "不会继续创建 adb 进程，避免电脑和模拟器被拖垮。"
+                    )
+                if self._MuMu显示服务仍缺失():
+                    break
+                self._检查主机内存预算()
+                是最后后端 = 序号 == len(本轮后端) - 1
+                try:
+                    图像 = self._采集单帧按后端(
+                        后端,
+                        测速模式=False,
+                        允许全黑=是最后后端,
+                    )
+                    self._截图后端连续失败[后端] = 0
+                    self._截图后端冷却截止.pop(后端, None)
+                    if self._已选截图后端 != 后端:
+                        self._记录截图日志(f"[截图通道] 当前截图后端切换为：{后端}")
+                        self._已选截图后端 = 后端
+                    if (
+                        后端 != BACKEND_MUMU_IPC
+                        and getattr(self, "_待核对高速截图", False)
+                        and not self._高速截图已核对
+                    ):
+                        self._核对高速截图(图像)
+                        if self._高速截图已核对:
+                            self._待核对高速截图 = False
+                            if BACKEND_MUMU_IPC not in self._可用截图后端顺序:
+                                self._可用截图后端顺序.insert(0, BACKEND_MUMU_IPC)
+                            self._已选截图后端 = BACKEND_MUMU_IPC
+                            self._记录截图日志("[截图通道] MuMu 高速截图核对通过，已自动切换为首选通道")
+                    return 图像
+                except (ADB错误, cv2.error, ValueError, TypeError) as 异常:
+                    if "主机内存保护" in str(异常) or "安全冷却" in str(异常):
+                        raise
+                    最后错误 = 异常 if isinstance(异常, ADB错误) else ADB错误(f"ADB 截图解码失败：{异常}")
+                    if self._MuMu显示服务仍缺失():
+                        break
+                    失败次数 = int(self._截图后端连续失败.get(后端, 0)) + 1
+                    self._截图后端连续失败[后端] = 失败次数
+                    错误文本 = str(异常)
+                    if 后端 == BACKEND_MUMU_IPC:
+                        高速器 = self._获取高速截图器()
+                        if 高速器 is None or getattr(高速器, "已停用", False):
+                            self._永久禁用截图后端.add(后端)
+                        elif "画面全黑" in 错误文本 and 失败次数 >= 3:
+                            高速器.关闭()
+                            self._永久禁用截图后端.add(后端)
+                        else:
+                            self._截图后端冷却截止[后端] = time.monotonic() + float(self._截图后端冷却秒数)
+                    elif 后端 in (BACKEND_ADB_RAW, BACKEND_ADB_RAW_GZIP) and (
+                        "无法解析" in 错误文本
+                    ):
+                        self._永久禁用截图后端.add(后端)
+                        if 后端 == BACKEND_ADB_RAW:
+                            self._截图使用PNG = True
+                    else:
+                        self._截图后端冷却截止[后端] = time.monotonic() + float(self._截图后端冷却秒数)
+
+                    if 序号 + 1 < len(本轮后端):
+                        下一后端 = 本轮后端[序号 + 1]
+                        self._记录截图日志(
+                            f"[截图回退] 后端 {后端} 失败（{错误文本}），自动回退到 {下一后端}",
+                            警告=True,
+                        )
+                        if self._已选截图后端 == 后端:
+                            self._已选截图后端 = 下一后端
+
+            if self._MuMu显示服务仍缺失():
+                break
+            if time.monotonic() < float(getattr(self, "_ADB熔断截止时间", 0.0) or 0.0):
+                break
+            if 轮次 + 1 < self._截图重试上限:
+                self._标记目标未验证()
+                self._尝试恢复ADB连接()
+                time.sleep(0.35 * (轮次 + 1))
+
+        raise 最后错误 or ADB错误("ADB 截图失败。")
 
     def 获取屏幕图像cv(self, 左边: int = 0, 顶边: int = 0, 右边: int = 2000, 底边: int = 2000):
         import cv2
@@ -1718,80 +2186,83 @@ class ADB设备操作类:
         self._验证目标()
         最后错误 = None
         图像 = None
-        # MuMu 渲染器高速截图：只在已和 adb 截图核对过之后使用；拿不到
-        # 画面（CoC 不在任何显示层、IPC 出错等）就照常走下面的 adb 流程。
-        高速截图器 = self._获取高速截图器()
-        if 高速截图器 is not None and self._高速截图已核对:
-            self._检查主机内存预算()
-            图像 = 高速截图器.截图()
-        for 尝试次数 in range(0 if 图像 is not None else self._截图重试上限):
-            if 尝试次数 > 0 and not self._目标已验证:
-                self.确认在线()
-            # 内存保护必须在每一次重试前重新检查；不能为了等待模拟器
-            # 恢复而绕过宿主机保护。
-            self._检查主机内存预算()
-            try:
-                截图参数 = ["exec-out", "screencap"]
-                if self._是MuMu连接():
-                    显示ID = self._获取MuMu截图显示ID()
-                    # MuMu 可能同时存在启动器 display 0 和 CoC 游戏 display。
-                    # 解析不到游戏 display 时不能退回默认截图：默认层可能是
-                    # 模拟器桌面，后续页面识别会把桌面当成未知/过渡页，造成
-                    # 任务状态机误判。输入路径本来就会拒绝无 display 的操作，
-                    # 截图也必须同样 fail-closed，等待下一次在线复核。
-                    if not 显示ID:
+        if getattr(self, "启用截图测速", False):
+            图像 = self._按测速通道获取完整画面()
+        else:
+            # MuMu 渲染器高速截图：只在已和 adb 截图核对过之后使用；拿不到
+            # 画面（CoC 不在任何显示层、IPC 出错等）就照常走下面的 adb 流程。
+            高速截图器 = self._获取高速截图器()
+            if 高速截图器 is not None and self._高速截图已核对:
+                self._检查主机内存预算()
+                图像 = 高速截图器.截图()
+            for 尝试次数 in range(0 if 图像 is not None else self._截图重试上限):
+                if 尝试次数 > 0 and not self._目标已验证:
+                    self.确认在线()
+                # 内存保护必须在每一次重试前重新检查；不能为了等待模拟器
+                # 恢复而绕过宿主机保护。
+                self._检查主机内存预算()
+                try:
+                    截图参数 = ["exec-out", "screencap"]
+                    if self._是MuMu连接():
+                        显示ID = self._获取MuMu截图显示ID()
+                        # MuMu 可能同时存在启动器 display 0 和 CoC 游戏 display。
+                        # 解析不到游戏 display 时不能退回默认截图：默认层可能是
+                        # 模拟器桌面，后续页面识别会把桌面当成未知/过渡页，造成
+                        # 任务状态机误判。输入路径本来就会拒绝无 display 的操作，
+                        # 截图也必须同样 fail-closed，等待下一次在线复核。
+                        if not 显示ID:
+                            raise ADB错误(
+                                "未确认 CoC 所在的 MuMu 游戏显示层，已拒绝使用默认 display 截图"
+                            )
+                        截图参数.extend(["-d", 显示ID])
+                    使用PNG = getattr(self, "_截图使用PNG", False)
+                    if 使用PNG:
+                        截图参数.append("-p")
+                    原始数据 = self.执行(截图参数, timeout=15, binary=True)
+                    if len(原始数据) > 20 * 1024 * 1024:
+                        raise ADB错误("ADB 截图数据异常过大，已拒绝继续解码以保护内存。")
+                    if not 原始数据:
                         raise ADB错误(
-                            "未确认 CoC 所在的 MuMu 游戏显示层，已拒绝使用默认 display 截图"
+                            "ADB 截图返回空数据；设备可能刚刚断开，已停止解码并准备重新验证。"
                         )
-                    截图参数.extend(["-d", 显示ID])
-                使用PNG = getattr(self, "_截图使用PNG", False)
-                if 使用PNG:
-                    截图参数.append("-p")
-                原始数据 = self.执行(截图参数, timeout=15, binary=True)
-                if len(原始数据) > 20 * 1024 * 1024:
-                    raise ADB错误("ADB 截图数据异常过大，已拒绝继续解码以保护内存。")
-                if not 原始数据:
-                    raise ADB错误(
-                        "ADB 截图返回空数据；设备可能刚刚断开，已停止解码并准备重新验证。"
-                    )
-                # MuMu Android 15 的 adb.exe 在 exec-out 输出前会把
-                # “Multiple displays were found...” 警告写到 stdout。PNG 和
-                # 原始像素两种解析都会跳过数据前面的这段诊断文本，
-                # 不放宽大小限制，也不吞掉真正的空响应。
-                PNG签名 = b"\x89PNG\r\n\x1a\n"
-                PNG起点 = 原始数据.find(PNG签名)
-                if PNG起点 >= 0:
-                    图像 = cv2.imdecode(
-                        np.frombuffer(原始数据[PNG起点:], dtype=np.uint8), cv2.IMREAD_COLOR
-                    )
-                elif 使用PNG:
-                    raise ADB错误("ADB 截图返回的内容不是有效 PNG，已停止解码并准备重试。")
-                else:
-                    图像 = self._解析原始截图(原始数据)
-                    if 图像 is None:
-                        # 下一次重试（以及之后所有截图）改回 PNG。
-                        self._截图使用PNG = True
-                        raise ADB错误("ADB 原始截图无法解析，已改用 PNG 截图并准备重试。")
-                if 图像 is None or 图像.size == 0:
-                    raise ADB错误("ADB 截图无法解码；请确认设备已启动并允许 ADB 调试。")
-                if 高速截图器 is not None and not self._高速截图已核对:
-                    self._核对高速截图(图像)
-                break
-            except ADB错误 as 异常:
-                最后错误 = 异常
-            except (cv2.error, ValueError, TypeError) as 异常:
-                最后错误 = ADB错误(f"ADB 截图解码失败：{异常}")
+                    # MuMu Android 15 的 adb.exe 在 exec-out 输出前会把
+                    # “Multiple displays were found...” 警告写到 stdout。PNG 和
+                    # 原始像素两种解析都会跳过数据前面的这段诊断文本，
+                    # 不放宽大小限制，也不吞掉真正的空响应。
+                    PNG签名 = b"\x89PNG\r\n\x1a\n"
+                    PNG起点 = 原始数据.find(PNG签名)
+                    if PNG起点 >= 0:
+                        图像 = cv2.imdecode(
+                            np.frombuffer(原始数据[PNG起点:], dtype=np.uint8), cv2.IMREAD_COLOR
+                        )
+                    elif 使用PNG:
+                        raise ADB错误("ADB 截图返回的内容不是有效 PNG，已停止解码并准备重试。")
+                    else:
+                        图像 = self._解析原始截图(原始数据)
+                        if 图像 is None:
+                            # 下一次重试（以及之后所有截图）改回 PNG。
+                            self._截图使用PNG = True
+                            raise ADB错误("ADB 原始截图无法解析，已改用 PNG 截图并准备重试。")
+                    if 图像 is None or 图像.size == 0:
+                        raise ADB错误("ADB 截图无法解码；请确认设备已启动并允许 ADB 调试。")
+                    if 高速截图器 is not None and not self._高速截图已核对:
+                        self._核对高速截图(图像)
+                    break
+                except ADB错误 as 异常:
+                    最后错误 = 异常
+                except (cv2.error, ValueError, TypeError) as 异常:
+                    最后错误 = ADB错误(f"ADB 截图解码失败：{异常}")
 
-            # MuMu 已明确报告 display/window 服务不存在时，继续 reconnect
-            # 或重复 screencap 没有恢复意义，只会制造更多 adb 进程。
-            if self._MuMu显示服务仍缺失():
-                break
-            if 尝试次数 + 1 < self._截图重试上限:
-                self._标记目标未验证()
-                # 参考 MAA 的“重新连接后重试原命令”语义，但等待和次数
-                # 受控；不会重启模拟器、结束游戏或切换 Android 前台。
-                self._尝试恢复ADB连接()
-                time.sleep(0.35 * (尝试次数 + 1))
+                # MuMu 已明确报告 display/window 服务不存在时，继续 reconnect
+                # 或重复 screencap 没有恢复意义，只会制造更多 adb 进程。
+                if self._MuMu显示服务仍缺失():
+                    break
+                if 尝试次数 + 1 < self._截图重试上限:
+                    self._标记目标未验证()
+                    # 参考 MAA 的“重新连接后重试原命令”语义，但等待和次数
+                    # 受控；不会重启模拟器、结束游戏或切换 Android 前台。
+                    self._尝试恢复ADB连接()
+                    time.sleep(0.35 * (尝试次数 + 1))
 
         if 图像 is None:
             raise 最后错误 or ADB错误("ADB 截图失败。")
