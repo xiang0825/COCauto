@@ -759,6 +759,27 @@ class 进攻任务(基础任务):
             self.计算资源目标价值(目标),
         )
 
+    def _获取集中主力目标上限(self, 上下文: 任务上下文) -> int:
+        默认值 = max(1, min(6, int(getattr(self, "集中主力目标上限", 2))))
+        设置 = getattr(上下文, "设置", None) if 上下文 is not None else None
+        原始值 = getattr(设置, "集中主力目标上限", None) if 设置 is not None else None
+        if not (isinstance(原始值, (int, float, str)) and not isinstance(原始值, bool)):
+            数据库 = getattr(上下文, "数据库", None) if 上下文 is not None else None
+            if 数据库 is not None and callable(getattr(数据库, "获取机器人设置", None)):
+                try:
+                    库设置 = 数据库.获取机器人设置(上下文.机器人标志)
+                    候选 = getattr(库设置, "集中主力目标上限", None)
+                    if isinstance(候选, (int, float, str)) and not isinstance(候选, bool):
+                        原始值 = 候选
+                except Exception:
+                    原始值 = None
+        if 原始值 is None:
+            return 默认值
+        try:
+            return max(1, min(6, int(原始值)))
+        except (TypeError, ValueError, OverflowError):
+            return 默认值
+
     def 选择集中进攻目标(self, 上下文: 任务上下文, 有效目标列表: list) -> list:
         """按历史表现选择集中或探索式进攻目标。"""
         if not 有效目标列表:
@@ -770,6 +791,7 @@ class 进攻任务(基础任务):
         self._当前战利品优先级 = str(
             getattr(设置, "战利品优先级", "均衡") or "均衡"
         )
+        集中目标上限 = self._获取集中主力目标上限(上下文)
 
         # 主世界刷资源仍需覆盖多个方向，但不能把本场可部署兵力平均摊到
         # 所有建筑。先按战利品价值排序，再按可靠兵栏数据计算目标上限；
@@ -796,12 +818,12 @@ class 进攻任务(基础任务):
                 )
             if 学习策略 == "集中主力":
                 # 具体学习诊断已明确要求集中主力时，把所有兵种的循环目标
-                # 收敛到最高价值的单一方向和两个目标点，避免旧的泛化探索
+                # 收敛到最高价值的单一方向和有限目标点，避免旧的泛化探索
                 # 标签把兵力再次摊开。
                 选择结果 = self._按方向交错资源目标(
                     有效目标列表,
                     最多方向数=1,
-                )[:self.集中主力目标上限]
+                )[:集中目标上限]
                 是否聚焦 = len(选择结果) < 原始目标数量
                 上下文.置脚本状态(
                     f"学习建议已落实：资源兵力集中单方向，目标从"
@@ -898,7 +920,7 @@ class 进攻任务(基础任务):
                 最佳方向目标,
                 key=self.资源模式目标排序键,
                 reverse=True,
-            )[:self.集中主力目标上限]
+            )[:集中目标上限]
             上下文.本场进攻策略 = f"稳健三星/集中主力{最佳方向}"
             上下文.本场进攻方向 = [最佳方向]
             上下文.置脚本状态(
