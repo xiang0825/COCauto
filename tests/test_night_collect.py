@@ -188,6 +188,29 @@ class 夜世界圣水车测试(unittest.TestCase):
         self.assertTrue(任务._本轮未发现可收集圣水车)
         self.assertTrue(any("有限扫描" in c.args[0] for c in 任务.上下文.置脚本状态.call_args_list))
 
+    def test_圣水车全部候选未命中时可安全跳过并留待下一周期重试(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        任务 = self._任务(屏幕)
+        任务._夜世界仍在前台 = Mock(return_value=True)
+        任务._查找海岸船锚点 = Mock(return_value=(True, (300, 200), 0.95))
+        任务._生成圣水车候选点 = Mock(return_value=[
+            (180, 240, "候选1"), (196, 258, "候选2"), (168, 234, "候选3"),
+        ])
+        任务.尝试收集圣水 = Mock(return_value=False)
+        任务._关闭候选详情面板 = Mock(return_value=True)
+        任务.上下文.点击 = Mock(return_value=True)
+        任务.上下文.脚本延时 = Mock()
+        任务.上下文.游戏内拉远视距 = Mock()
+
+        self.assertFalse(任务.执行())
+
+        self.assertTrue(任务._本轮未发现可收集圣水车)
+        self.assertEqual(任务.上下文.点击.call_count, 3)
+        self.assertTrue(any(
+            "留待下次重试" in 调用.args[0]
+            for 调用 in 任务.上下文.置脚本状态.call_args_list
+        ))
+
 
 if __name__ == "__main__":
     unittest.main()

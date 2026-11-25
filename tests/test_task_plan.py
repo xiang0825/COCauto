@@ -23,6 +23,7 @@ from 任务流程.夜世界.收集圣水车 import 收集圣水车任务
 from 任务流程.夜世界.夜世界打鱼.下兵 import 下兵
 from 任务流程.夜世界.夜世界打鱼.等待进入战斗 import 等待进入战斗
 from 任务流程.夜世界.夜世界打鱼.等待回营或第二场战斗 import 等待回营或第二次战斗
+from 任务流程.建筑升级.寻找建筑 import 建筑查找模式
 from 任务流程.兵种或法术升级 import 兵种或法术升级任务
 from 任务流程.战宠升级 import 战宠升级任务
 from 任务流程.建筑升级 import 建筑升级任务
@@ -1614,6 +1615,25 @@ class 任务计划测试(unittest.TestCase):
         self.assertFalse(任务.执行())
         上下文.数据库.更新状态.assert_not_called()
 
+    def test_夜世界资源仅单项非零时不算识别成功(self):
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((102, 200, 3), dtype=np.uint8))
+            ),
+            置脚本状态=Mock(),
+        )
+        任务 = 更新夜世界资源状态任务.__new__(更新夜世界资源状态任务)
+        任务.上下文 = 上下文
+        任务.ocr引擎 = object()
+
+        with patch(
+            "任务流程.夜世界.更新夜世界账号资源状态.单行资源识别",
+            side_effect=[0, 1_000_000],
+        ):
+            结果 = 任务.识别当前资源(上下文)
+
+        self.assertFalse(结果["识别成功"])
+
     def test_研究实验室不可用时作为正常跳过不阻断任务计划(self):
         上下文 = SimpleNamespace(
             设置=机器人设置(欲升级的兵种或法术="雷电法术"),
@@ -1673,6 +1693,59 @@ class 任务计划测试(unittest.TestCase):
             any("跳过升级建筑任务" in 调用.args[0]
                 for 调用 in 上下文.置脚本状态.call_args_list)
         )
+
+    def test_固定建筑英雄目标和建议列表同轮执行且第二个别名不重复扫描(self):
+        def 请求等待(秒数, 原因=""):
+            上下文.任务计划等待秒 = max(上下文.任务计划等待秒, 秒数)
+            上下文._任务计划等待原因 = 原因
+
+        上下文 = SimpleNamespace(
+            设置=机器人设置(
+                欲升级的英雄或建筑=["兵营"],
+                是否升级建议升级的建筑=True,
+                建筑升级检查间隔=0,
+            ),
+            页面恢复失败=False,
+            任务计划等待秒=5.0,
+            置脚本状态=Mock(),
+            请求任务计划等待=请求等待,
+            机器人标志="测试机器人",
+        )
+        数据库 = Mock(
+            获取最新完整状态=Mock(return_value=SimpleNamespace(状态数据={})),
+            更新状态=Mock(),
+        )
+        任务 = 建筑升级任务.__new__(建筑升级任务)
+        任务.上下文 = 上下文
+        任务.数据库 = 数据库
+        任务.机器人标志 = 上下文.机器人标志
+        任务._清理残留研究目标页 = Mock(return_value=True)
+        任务._升级提交后确认主世界 = Mock(return_value=True)
+
+        with patch("任务流程.建筑升级.更新工人状态任务") as 工人状态, \
+             patch("任务流程.建筑升级.寻找建筑") as 寻找, \
+             patch("任务流程.建筑升级.升级普通建筑任务") as 升级建筑:
+            工人状态.return_value.执行.return_value = True
+            工人状态.return_value.是否有空闲工人.side_effect = [True, True, False]
+            寻找.side_effect = [
+                SimpleNamespace(执行=Mock(return_value=True), 当前建筑="兵营", 建筑列表=[]),
+                SimpleNamespace(执行=Mock(return_value=True), 当前建筑="箭塔", 建筑列表=["箭塔"]),
+            ]
+            升级建筑.return_value.执行.return_value = True
+
+            self.assertTrue(任务.执行())
+            第二个别名 = 建筑升级任务.__new__(建筑升级任务)
+            第二个别名.上下文 = 上下文
+            第二个别名.数据库 = 数据库
+            第二个别名.机器人标志 = 上下文.机器人标志
+            self.assertTrue(第二个别名.执行())
+
+        self.assertEqual(寻找.call_count, 2)
+        self.assertEqual(
+            [调用.args[2] for 调用 in 寻找.call_args_list],
+            [建筑查找模式.指定建筑, 建筑查找模式.建议升级中的第一个可用建筑],
+        )
+        self.assertGreaterEqual(上下文.任务计划等待秒, 60)
 
     def test_英雄当前不可升级安全跳过且不记录建筑任务失败(self):
         上下文 = SimpleNamespace(
