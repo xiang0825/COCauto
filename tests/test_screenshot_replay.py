@@ -106,6 +106,19 @@ class 实机截图回放测试(unittest.TestCase):
                     实际.摘要(),
                 )
 
+    def test_非结算实机截图不误定位回营按钮(self):
+        根目录 = 测试目录.parent
+        非结算样本 = (
+            读取截图(根目录 / "tests" / "fixtures" / "coc_home_18_647_5.png"),
+            读取截图(根目录 / "tests" / "fixtures" / "coc_idle_disconnect_18_647_5.png"),
+            读取截图(根目录 / "tests" / "fixtures" / "coc_army_config_live_ui.png"),
+            读取样本("clan_games_panel"),
+            读取样本("clan_games_gold_task"),
+        )
+        for 序号, 图像 in enumerate(非结算样本):
+            with self.subTest(序号=序号):
+                self.assertIsNone(self.页面识别器.定位结算回营按钮(图像))
+
     def test_部落竞赛截图主世界识别(self):
         for 样本ID in ("clan_games_panel", "clan_games_gold_task"):
             with self.subTest(样本=样本ID):
@@ -191,7 +204,7 @@ def _添加已知结算世界识别失败用例(样本ID: str) -> None:
         self.assertEqual(实际.当前世界, 预期, 实际.摘要())
 
     检查.__name__ = f"test_结算截图世界识别_{样本ID}"
-    setattr(实机截图回放测试, 检查.__name__, unittest.expectedFailure(检查))
+    setattr(实机截图回放测试, 检查.__name__, 检查)
 
 
 def _添加已知回营按钮定位失败用例(样本ID: str) -> None:
@@ -203,8 +216,6 @@ def _添加已知回营按钮定位失败用例(样本ID: str) -> None:
         self.assertLessEqual(abs(实际[1] - 预期[1]), 8)
 
     检查.__name__ = f"test_回营按钮定位_{样本ID}"
-    if 样本ID != "settle_20261125_061956":
-        检查 = unittest.expectedFailure(检查)
     setattr(实机截图回放测试, 检查.__name__, 检查)
 
 
