@@ -682,6 +682,29 @@ class 任务计划测试(unittest.TestCase):
         未知结果 = 机器人._执行任务计划项("unknown", 上下文, object())
         self.assertEqual(未知结果, (False, False))
 
+    def test_夜世界任务后主世界任务分派会恢复待命世界(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        上下文 = SimpleNamespace(
+            _待命恢复世界="夜世界",
+            _资源计划已打满=False,
+            置脚本状态=Mock(),
+        )
+
+        def 检查主世界(*_args, **_kwargs):
+            self.assertEqual(上下文._待命恢复世界, "主世界")
+            return True
+
+        机器人._执行刷墙计划 = Mock(side_effect=检查主世界)
+        机器人._执行升级计划 = Mock(side_effect=检查主世界)
+        机器人._官方数据显示已满级 = Mock(return_value=False)
+
+        for 任务键 in ("wall", "building", "hero", "pet", "research"):
+            with self.subTest(任务键=任务键):
+                上下文._待命恢复世界 = "夜世界"
+                结果, 资源打满 = 机器人._执行任务计划项(任务键, 上下文, object())
+                self.assertEqual((结果, 资源打满), (True, False))
+                self.assertEqual(上下文._待命恢复世界, "主世界")
+
     def test_注册表每个任务都有可导入的实际执行入口(self):
         入口 = {
             "event": ("任务流程.活动.部落竞赛", "部落竞赛任务"),

@@ -401,7 +401,8 @@ class 寻找建筑(夜世界基础任务):
                 # 国际服会记住上次英雄列表滚动位置，但大多数情况下目标
                 # 已经在首次画面中。先做一次 OCR 再回顶部，避免 MuMu 的
                 # 多次 display 专属滑动和前台护栏把任务卡在“识别中”。
-                self._重置英雄殿堂滚动位置()
+                if self._重置英雄殿堂滚动位置() is False:
+                    return False
                 continue
             self._滑动英雄殿堂()
 
@@ -411,19 +412,53 @@ class 寻找建筑(夜世界基础任务):
         )
         return False
 
-    def _重置英雄殿堂滚动位置(self):
+    def _重置英雄殿堂滚动位置(self) -> bool:
         """把记忆中的英雄列表位置安全拖回顶部。"""
-        鼠标 = self.上下文.鼠标
+        上下文 = getattr(self, "上下文", None)
+        if 上下文 is None:
+            return False
+        鼠标 = getattr(上下文, "鼠标", None)
+        停止事件 = getattr(上下文, "停止事件", None)
+        继续事件 = getattr(上下文, "继续事件", None)
+        脚本延时 = getattr(上下文, "脚本延时", None)
+        if not all(callable(getattr(鼠标, 方法, None)) for 方法 in (
+            "移动到", "左键按下", "移动相对位置", "左键抬起"
+        )) or not all(callable(getattr(事件, "is_set", None)) for 事件 in (
+            停止事件, 继续事件
+        )) or not callable(脚本延时):
+            return False
+
+        def 已停止或暂停() -> bool:
+            try:
+                return 停止事件.is_set() or not 继续事件.is_set()
+            except Exception:
+                return True
+
+        if 已停止或暂停():
+            return False
         # 面板高度约为逻辑画布的 y=80..460；向下拖动只会回到列表
         # 顶部，不会触及主世界地图或任何资源/宝石按钮。
         for _ in range(4):
+            if 已停止或暂停():
+                return False
             鼠标.移动到(700, 150)
+            if 已停止或暂停():
+                return False
             鼠标.左键按下()
-            for _ in range(32):
-                鼠标.移动相对位置(0, 8)
-                self.上下文.脚本延时(5)
-            鼠标.左键抬起()
-            self.上下文.脚本延时(180)
+            try:
+                for _ in range(32):
+                    if 已停止或暂停():
+                        return False
+                    鼠标.移动相对位置(0, 8)
+                    脚本延时(5)
+                if 已停止或暂停():
+                    return False
+            finally:
+                鼠标.左键抬起()
+            if 已停止或暂停():
+                return False
+            脚本延时(180)
+        return True
 
     def _英雄殿堂已打开(self) -> bool:
         """仅用英雄殿堂标题/英雄卡片确认页面，避免主世界误判。"""

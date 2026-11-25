@@ -1124,5 +1124,75 @@ class 英雄升级确认页测试(unittest.TestCase):
         任务.关闭英雄升级页面.assert_called_once_with()
 
 
+    def test_重置英雄殿堂滚动位置遇到停止或暂停立即退出(self):
+        for 停止, 暂停 in ((True, False), (False, True)):
+            with self.subTest(停止=停止, 暂停=暂停):
+                停止事件 = threading.Event()
+                继续事件 = threading.Event()
+                if 停止:
+                    停止事件.set()
+                if not 暂停:
+                    继续事件.set()
+                鼠标 = SimpleNamespace(
+                    移动到=Mock(), 左键按下=Mock(), 移动相对位置=Mock(), 左键抬起=Mock(),
+                )
+                任务 = 寻找建筑.__new__(寻找建筑)
+                任务.上下文 = SimpleNamespace(
+                    停止事件=停止事件,
+                    继续事件=继续事件,
+                    鼠标=鼠标,
+                    脚本延时=Mock(),
+                )
+
+                self.assertFalse(任务._重置英雄殿堂滚动位置())
+                鼠标.移动到.assert_not_called()
+                鼠标.左键按下.assert_not_called()
+                鼠标.移动相对位置.assert_not_called()
+                鼠标.左键抬起.assert_not_called()
+                任务.上下文.脚本延时.assert_not_called()
+
+    def test_重置英雄殿堂滚动位置拒绝无效上下文并保留正常手势(self):
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.上下文 = None
+        self.assertFalse(任务._重置英雄殿堂滚动位置())
+
+        鼠标 = SimpleNamespace(
+            移动到=Mock(), 左键按下=Mock(), 移动相对位置=Mock(), 左键抬起=Mock(),
+        )
+        任务.上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            继续事件=threading.Event(),
+            鼠标=鼠标,
+            脚本延时=Mock(),
+        )
+        任务.上下文.继续事件.set()
+
+        self.assertTrue(任务._重置英雄殿堂滚动位置())
+        self.assertEqual(鼠标.移动到.call_count, 4)
+        self.assertEqual(鼠标.左键按下.call_count, 4)
+        self.assertEqual(鼠标.移动相对位置.call_count, 128)
+        self.assertEqual(鼠标.左键抬起.call_count, 4)
+
+
+    def test_英雄殿堂滚动过程中暂停会退出并抬起鼠标(self):
+        继续事件 = threading.Event()
+        继续事件.set()
+        鼠标 = SimpleNamespace(
+            移动到=Mock(), 左键按下=Mock(), 移动相对位置=Mock(), 左键抬起=Mock(),
+        )
+        任务 = 寻找建筑.__new__(寻找建筑)
+        任务.上下文 = SimpleNamespace(
+            停止事件=threading.Event(),
+            继续事件=继续事件,
+            鼠标=鼠标,
+            脚本延时=Mock(side_effect=lambda _毫秒: 继续事件.clear()),
+        )
+
+        self.assertFalse(任务._重置英雄殿堂滚动位置())
+        鼠标.左键按下.assert_called_once_with()
+        鼠标.移动相对位置.assert_called_once_with(0, 8)
+        鼠标.左键抬起.assert_called_once_with()
+
+
 if __name__ == "__main__":
     unittest.main()
