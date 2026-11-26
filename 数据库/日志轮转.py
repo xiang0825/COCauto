@@ -62,6 +62,15 @@ def 导出并清空任务日志(数据库路径, 备份路径=None) -> int:
             except OSError:
                 pass
             raise
+        # 战报/每日通知要从日志解析今天和昨天的战斗、收益、搜敌、竞赛积分：
+        # 先把这些行归档进 运行时状态（同一事务），归档失败就不清空。
+        from 数据库.日志统计归档 import 归档待清空日志
+
+        try:
+            归档待清空日志(连接, 最大ID)
+        except BaseException:
+            连接.rollback()
+            raise
         # 只删已经导出的部分，导出期间新写入的行留到下次。
         连接.execute("DELETE FROM 任务日志 WHERE 记录ID <= ?", (最大ID,))
         连接.commit()
