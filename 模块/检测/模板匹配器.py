@@ -278,6 +278,106 @@ class 模板匹配引擎:
         )
         return max(0.0, min(1.0, 最佳值)), 中心点, 最佳路径
 
+    def 执行多尺度最佳匹配(
+        self,
+        底图: np.ndarray,
+        模板路径: Union[str, list],
+        尺度列表=None,
+        包含原尺度: bool = True,
+    ) -> Tuple[float, Tuple[int, int], Optional[str], Tuple[float, float]]:
+        """在原尺度和按设备几何推导的 (sx, sy) 尺度上寻找最佳匹配。
+
+        返回 (分数, 中心坐标, 模板路径, (sx, sy))。``尺度列表`` 为 None 时
+        使用 :func:`模块.画面几何.模板尺度候选`；800×600 参考尺寸或未知尺寸
+        的候选为空，此时结果与 ``执行最佳匹配`` 完全一致。只读、不抛异常。
+        """
+        if not isinstance(底图, np.ndarray) or 底图.ndim < 2 or 底图.size == 0:
+            return 0.0, (0, 0), None, (1.0, 1.0)
+        if 尺度列表 is None:
+            from 模块.画面几何 import 模板尺度候选
+            尺度列表 = 模板尺度候选()
+        尺度序列: list = [(1.0, 1.0)] if 包含原尺度 else []
+        for 尺度 in 尺度列表 or ():
+            try:
+                sx, sy = float(尺度[0]), float(尺度[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if sx > 0 and sy > 0 and (sx, sy) not in 尺度序列:
+                尺度序列.append((sx, sy))
+
+        if isinstance(模板路径, str):
+            模板路径列表 = 模板路径.split("|")
+        else:
+            模板路径列表 = list(模板路径)
+
+        最佳 = (float("-inf"), (0, 0), None, (1.0, 1.0))
+        for 相对路径 in 模板路径列表:
+            模板 = self._安全加载模板(相对路径)
+            if 模板 is None:
+                continue
+            原高, 原宽 = 模板.shape[:2]
+            for sx, sy in 尺度序列:
+                宽 = max(3, int(round(原宽 * sx)))
+                高 = max(3, int(round(原高 * sy)))
+                if 高 > 底图.shape[0] or 宽 > 底图.shape[1]:
+                    continue
+                try:
+                    if (宽, 高) == (原宽, 原高):
+                        缩放模板 = 模板
+                    else:
+                        插值 = cv2.INTER_AREA if 宽 * 高 < 原宽 * 原高 else cv2.INTER_CUBIC
+                        缩放模板 = cv2.resize(模板, (宽, 高), interpolation=插值)
+                    匹配度图 = cv2.matchTemplate(底图, 缩放模板, cv2.TM_CCOEFF_NORMED)
+                    _, 当前值, _, 位置 = cv2.minMaxLoc(匹配度图)
+                except Exception:
+                    continue
+                当前值 = float(当前值)
+                if 当前值 > 最佳[0]:
+                    中心 = (int(位置[0]) + 宽 // 2, int(位置[1]) + 高 // 2)
+                    最佳 = (当前值, 中心, 相对路径, (sx, sy))
+        if 最佳[2] is None:
+            return 0.0, (0, 0), None, (1.0, 1.0)
+        return max(0.0, min(1.0, 最佳[0])), 最佳[1], 最佳[2], 最佳[3]
+
+    def 执行原尺度优先匹配(
+        self,
+        底图: np.ndarray,
+        模板路径: Union[str, list],
+        相似度阈值: float,
+        尺度列表=None,
+    ):
+        """先按原尺度匹配；原尺度未达阈值时才尝试几何尺度（阈值不变）。
+
+        返回 (是否命中, 分数, 中心, 模板路径, (sx, sy), 命中框)。命中框为
+        (左, 上, 右, 下)，供调用方检查与 HUD 排除区是否重叠。未命中时
+        分数为两轮中的最高分，中心/命中框为 (0, 0)/None。
+        """
+        原分数, 原中心, 原路径 = self.执行最佳匹配(底图, 模板路径)
+        原分数 = float(原分数)
+        if 原路径 is not None and 原分数 >= float(相似度阈值):
+            模板 = self._安全加载模板(原路径)
+            高, 宽 = (模板.shape[:2] if 模板 is not None else (0, 0))
+            框 = (
+                int(原中心[0]) - 宽 // 2, int(原中心[1]) - 高 // 2,
+                int(原中心[0]) - 宽 // 2 + 宽, int(原中心[1]) - 高 // 2 + 高,
+            )
+            return True, 原分数, 原中心, 原路径, (1.0, 1.0), 框
+        分数, 中心, 路径, 尺度 = self.执行多尺度最佳匹配(
+            底图, 模板路径, 尺度列表=尺度列表, 包含原尺度=False
+        )
+        分数 = float(分数)
+        if 路径 is None or 分数 < float(相似度阈值):
+            return False, max(原分数, 分数), (0, 0), None, (1.0, 1.0), None
+        模板 = self._安全加载模板(路径)
+        高, 宽 = 模板.shape[:2] if 模板 is not None else (0, 0)
+        宽 = max(3, int(round(宽 * 尺度[0])))
+        高 = max(3, int(round(高 * 尺度[1])))
+        框 = (
+            int(中心[0]) - 宽 // 2, int(中心[1]) - 高 // 2,
+            int(中心[0]) - 宽 // 2 + 宽, int(中心[1]) - 高 // 2 + 高,
+        )
+        return True, 分数, 中心, 路径, 尺度, 框
+
 
 # 使用示例
 if __name__ == "__main__":

@@ -29,7 +29,7 @@ import cv2
 import numpy as np
 
 from 任务流程.基础任务框架 import 基础任务, 任务上下文
-from 任务流程.世界跳转.新版界面坐标 import 主世界战斗菜单
+from 任务流程.世界跳转.新版界面坐标 import 主世界战斗菜单, 锚定
 from 任务流程.军队配置 import 兵种资料
 from 任务流程.军队配置 import 阵容预设 as 预设
 
@@ -411,7 +411,7 @@ class 编辑军队任务(基础任务):
 
     def _打开编辑页(self) -> bool:
         上下文 = self.上下文
-        if 上下文.点击(*主世界战斗菜单, 延时=900, 是否精确点击=True) is False:
+        if 上下文.点击(*锚定(主世界战斗菜单), 延时=900, 是否精确点击=True) is False:
             return False
         if not self._等待文字(编辑军队按钮OCR区域, ("編輯", "编辑", "軍隊", "军队")):
             上下文.置脚本状态("自动配兵：战斗菜单里没确认到“编辑军队”按钮")

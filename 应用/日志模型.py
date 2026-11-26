@@ -174,6 +174,19 @@ class 日志聚合器:
         self._历史游标: dict[str, float] = {}
         self._隐藏截止 = 0.0
         self.最新阶段: dict[str, tuple[float, str]] = {}
+        # 机器人ID → (时间戳, 任务键|None, 任务名称|None)：最近一条任务边界日志
+        # （开始任务/完成任务/任务未完成/停止）。名称为 None 表示当前没有任务在执行。
+        # 增量记录，不受日志保留条数限制：几小时的打鱼任务也能显示正确。
+        self._任务边界: dict[str, tuple[float, str | None, str | None]] = {}
+
+    def _记录任务边界(self, 机器人ID: str, 时间戳: float, 内容: str) -> None:
+        边界 = 解析任务边界(内容)
+        if 边界 is None or 机器人ID == "系统":
+            return
+        旧 = self._任务边界.get(机器人ID)
+        if 旧 is not None and float(时间戳) < 旧[0]:
+            return
+        self._任务边界[机器人ID] = (float(时间戳), 边界[0], 边界[1])
 
     # ---- 输入 ----
     def 消费实时队列(self, 上限: int = 200) -> bool:
@@ -196,6 +209,7 @@ class 日志聚合器:
                 except (TypeError, ValueError):
                     记录时间 = 现在
                 self._实时.append(日志条目(记录时间, 机器人ID, 内容, 级别))
+                self._记录任务边界(机器人ID, 记录时间, 内容)
                 if 机器人ID != "系统" and 是否重点(内容, 级别):
                     self.最新阶段[机器人ID] = (记录时间, 去掉实时前缀(内容)[:150])
             else:
@@ -228,6 +242,8 @@ class 日志聚合器:
                 continue
             有变化 = True
             self._历史游标[标志] = max(float(项.记录时间) for 项 in 记录)
+            for 项 in sorted(记录, key=lambda 项: float(项.记录时间)):
+                self._记录任务边界(标志, float(项.记录时间), str(项.日志内容))
             列表 = self._历史.setdefault(标志, [])
             列表.extend(
                 日志条目(float(项.记录时间), 标志, str(项.日志内容), 级别正常)
@@ -247,6 +263,29 @@ class 日志聚合器:
         self._隐藏截止 = time.time()
         self._实时 = [项 for 项 in self._实时 if 项.时间戳 >= self._隐藏截止]
         self._操作.clear()
+
+    def 清空会话(self, 截止: float | None = None) -> None:
+        """脚本停止后数据库日志已导出备份并清空：界面同步清掉 ``截止`` 之前的全部日志。
+
+        截止之后写入的（例如刚重新开始的新会话）保留；历史游标不回退，之后只读
+        新写入的日志。截止前的任务边界一并清掉（已停止，没有任务在执行）。
+        """
+        if 截止 is None:
+            # 不给截止时间：此刻之前（含同一时钟刻度）的全部清掉。
+            截止 = time.time()
+            保留 = lambda 时间: float(时间) > 截止  # noqa: E731
+        else:
+            截止 = float(截止)
+            保留 = lambda 时间: float(时间) >= 截止  # noqa: E731
+        self._隐藏截止 = max(self._隐藏截止, 截止 + (0.0 if 保留(截止) else 1e-6))
+        self._实时 = [项 for 项 in self._实时 if 保留(项.时间戳)]
+        self._操作 = [项 for 项 in self._操作 if 保留(项.时间戳)]
+        self._历史 = {
+            标志: [项 for 项 in 列表 if 保留(项.时间戳)]
+            for 标志, 列表 in self._历史.items()
+        }
+        self.最新阶段 = {键: 值 for 键, 值 in self.最新阶段.items() if 保留(值[0])}
+        self._任务边界 = {键: 值 for 键, 值 in self._任务边界.items() if 保留(值[0])}
 
     # ---- 输出 ----
     def 全部条目(self) -> list[日志条目]:
@@ -307,8 +346,22 @@ class 日志聚合器:
             return 最新[1]
         return None
 
+    def 当前任务名称(self, 机器人ID: str) -> str | None:
+        """引擎“开始任务：X”之后、“完成任务/任务未完成/停止”之前返回 X；否则 None。"""
+        边界 = self._任务边界.get(str(机器人ID))
+        return 边界[2] if 边界 else None
+
     def 当前任务键(self, 机器人ID: str, 最长秒: float = 900, 最多条数: int = 400) -> str | None:
-        """最近一条能看出所属任务的运行日志对应的任务键；过期或无法判断返回 None。"""
+        """正在执行的任务键。
+
+        以引擎的任务边界日志为准：“开始任务：X”到“完成任务：X/任务未完成/停止”
+        之间就是 X，结束后立即返回 None。打鱼期间的“世界识别：当前=夜世界”、
+        打鱼间隙的“部落竞赛：…”都不会再把高亮带偏。没有任何边界日志（旧日志/
+        测试）时才退回按关键词推断。
+        """
+        边界 = self._任务边界.get(str(机器人ID))
+        if 边界 is not None:
+            return 边界[1] if 边界[2] else None
         截止 = time.time() - 最长秒
         for 序号, 项 in enumerate(reversed(self.全部条目())):
             if 序号 >= 最多条数 or 项.时间戳 < 截止:
@@ -319,6 +372,36 @@ class 日志聚合器:
             if 键:
                 return 键
         return None
+
+
+_结束任务片段 = (
+    "完成任务：", "任务未完成：", "收到停止事件", "收到外部停止请求", "安全待命结束",
+    "没有启用任务，结束本次运行", "开始运行任务计划", "任务异常终止", "线程即将死亡",
+)
+
+
+def _任务名称到键() -> dict[str, str]:
+    try:
+        from 数据库.任务数据库 import 任务计划定义列表
+        return {定义.名称: 定义.键 for 定义 in 任务计划定义列表}
+    except Exception:
+        return {}
+
+
+def 解析任务边界(内容: str) -> tuple[str | None, str | None] | None:
+    """引擎任务边界日志 → (任务键, 任务名称)；结束类返回 (None, None)；其它返回 None。
+
+    “开始任务：启动游戏”这类不在任务计划里的固定步骤键为 None、名称照常返回。
+    """
+    文本 = 展示文本(内容)
+    if 文本.startswith("开始任务："):
+        名称 = 文本.split("开始任务：", 1)[1].strip()
+        if not 名称:
+            return None
+        return _任务名称到键().get(名称), 名称
+    if any(片段 in 文本 for 片段 in _结束任务片段):
+        return None, None
+    return None
 
 
 # 从运行日志推断当前任务（主界面高亮任务行用）：先认引擎的“按任务计划执行：键”，
