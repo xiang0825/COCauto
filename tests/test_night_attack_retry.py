@@ -161,13 +161,15 @@ class 夜世界任务链收尾测试(unittest.TestCase):
 
         回营 = Mock()
         回营.执行.return_value = 回营结果
+        回营类 = Mock(return_value=回营)
+        self.回营类 = 回营类
         任务 = 夜世界打鱼任务.__new__(夜世界打鱼任务)
         任务.上下文 = 上下文
         截图 = Mock(return_value=None)
         with patch("任务流程.夜世界.夜世界打鱼.打开进攻页面", 工厂("打开进攻页面")), \
              patch("任务流程.夜世界.夜世界打鱼.等待进入战斗", 假等待进入战斗), \
              patch("任务流程.夜世界.夜世界打鱼.下兵", 工厂("下兵")), \
-             patch("任务流程.夜世界.夜世界打鱼.等待回营或第二次战斗", Mock(return_value=回营)), \
+             patch("任务流程.夜世界.夜世界打鱼.等待回营或第二次战斗", 回营类), \
              patch("任务流程.夜世界.夜世界打鱼.保存夜世界现场截图", 截图), \
              patch("任务流程.夜世界.夜世界打鱼.停止并等待英雄技能线程", return_value=True):
             结果 = 任务.执行()
@@ -191,6 +193,7 @@ class 夜世界任务链收尾测试(unittest.TestCase):
             "下兵": [True],
             "等待回营或第二次战斗": [True],
         })
+        回营类 = self.回营类
 
         self.assertTrue(结果)
         self.assertFalse(上下文.页面恢复失败)
@@ -199,6 +202,9 @@ class 夜世界任务链收尾测试(unittest.TestCase):
         self.assertEqual(回营.执行.call_count, 1)
         截图.assert_called_once_with(上下文, "等待进入战斗")
         self.assertFalse(上下文._夜世界首兵槽未选中)
+        self.assertEqual(
+            回营类.call_args_list[-1].kwargs, {"只等待回营": True}
+        )
         self.assertTrue(any("安全回营，继续下一场" in 行 for 行 in _日志(上下文)))
 
     def test_未下兵本场回营失败时保留画面并停止(self):
@@ -235,6 +241,58 @@ class 夜世界任务链收尾测试(unittest.TestCase):
         self.assertFalse(结果)
         回营.执行.assert_not_called()
         截图.assert_called_once_with(上下文, "Mock")
+
+
+class 只等待回营模式测试(unittest.TestCase):
+    def _运行(self, 只等待回营):
+        回营模块 = "任务流程.夜世界.夜世界打鱼.等待回营或第二场战斗"
+        from 任务流程.夜世界.夜世界打鱼.等待回营或第二场战斗 import 等待回营或第二次战斗
+
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            _战斗中=True,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            点击=Mock(return_value=True),
+            点击已确认安全按钮=Mock(return_value=True),
+            识别点击画面=Mock(return_value=SimpleNamespace(页面="战斗中")),
+        )
+        任务 = 等待回营或第二次战斗.__new__(等待回营或第二次战斗)
+        任务.上下文 = 上下文
+        if 只等待回营 is not None:
+            任务.只等待回营 = 只等待回营
+        # 战斗页 + 换兵种箭头一直可见；第 4 轮才出现可回营的结算页。
+        任务.是否出现图片 = Mock(return_value=(True, (220, 540)))
+        任务.尝试点击回营按钮 = Mock(side_effect=[False, False, False, True])
+        假下兵 = Mock()
+        假下兵.return_value.执行.return_value = True
+        with patch(f"{回营模块}.下兵", 假下兵),              patch(f"{回营模块}.停止并等待英雄技能线程", return_value=True):
+            结果 = 任务.执行()
+        return 结果, 上下文, 任务, 假下兵
+
+    def test_首兵槽多次被拒后战斗页与箭头仍在时零点击零下兵只等回营(self):
+        结果, 上下文, 任务, 假下兵 = self._运行(只等待回营=True)
+
+        self.assertTrue(结果)
+        上下文.点击.assert_not_called()
+        假下兵.assert_not_called()
+        任务.是否出现图片.assert_not_called()
+        self.assertEqual(任务.尝试点击回营按钮.call_count, 4)
+        self.assertFalse(上下文.页面恢复失败)
+
+    def test_对照_默认模式仍会按箭头开始第二场下兵(self):
+        结果, 上下文, _任务, 假下兵 = self._运行(只等待回营=None)
+
+        self.assertTrue(结果)
+        self.assertTrue(上下文.点击.called)
+        self.assertTrue(假下兵.called)
+
+    def test_构造参数默认关闭只等待回营(self):
+        from 任务流程.夜世界.夜世界打鱼.等待回营或第二场战斗 import 等待回营或第二次战斗
+
+        上下文 = SimpleNamespace(数据库=None, 机器人标志="r", 获取模板识别器=Mock())
+        self.assertFalse(等待回营或第二次战斗(上下文).只等待回营)
+        self.assertTrue(等待回营或第二次战斗(上下文, 只等待回营=True).只等待回营)
 
 
 class 夜世界现场截图测试(unittest.TestCase):
