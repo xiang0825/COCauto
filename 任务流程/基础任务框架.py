@@ -57,6 +57,10 @@ np = _延迟模块("numpy")
 模板匹配引擎 = _延迟导入对象("模块.检测.模板匹配器", "模板匹配引擎")
 生成贝塞尔轨迹 = _延迟导入对象("工具包.工具函数", "生成贝塞尔轨迹")
 
+# 后台预热线程和任务线程可能同时第一次取 OCR 引擎：创建过程加锁，只建一套 ONNX 会话。
+_OCR创建锁 = threading.Lock()
+
+
 @dataclass
 class 任务上下文:
     机器人标志: str
@@ -191,14 +195,52 @@ class 任务上下文:
             raise MemoryError("内存保护已触发，禁止重新加载 OCR 模型")
         引擎 = getattr(self, "_共享OCR引擎", None)
         if 引擎 is None:
-            # OCR 依赖 ONNX Runtime，只有资源/升级任务真正需要文字识别时
-            # 才导入，避免打开 GUI 或只配置任务就占用一大块常驻内存。
-            from 模块.检测.OCR识别器 import 安全OCR引擎
+            with _OCR创建锁:
+                引擎 = getattr(self, "_共享OCR引擎", None)
+                if 引擎 is None:
+                    # OCR 依赖 ONNX Runtime，只有资源/升级任务真正需要文字识别时
+                    # 才导入，避免打开 GUI 或只配置任务就占用一大块常驻内存。
+                    from 模块.检测.OCR识别器 import 安全OCR引擎
 
-            引擎 = 安全OCR引擎()
-            self._共享OCR引擎 = 引擎
+                    引擎 = 安全OCR引擎()
+                    self._共享OCR引擎 = 引擎
         self.标记模型使用("OCR")
         return 引擎
+
+    def 后台预热OCR(self) -> threading.Thread | None:
+        """启动阶段在后台加载 OCR 模型并空跑一次，不阻塞主流程。
+
+        2026-11-26 18:14 实机：竞赛排第一项时，首次 OCR（含加载 ONNX 模型）卡了
+        2 分钟以上。登录检测/稳定性复核期间先把模型载好，第一次真正识别就不用等。
+        已加载、内存保护已触发或预热正在进行时不重复启动；失败只写日志。
+        """
+        if getattr(self, "_内存保护已触发", False) or getattr(self, "_共享OCR引擎", None) is not None:
+            return None
+        已有 = getattr(self, "_OCR预热线程", None)
+        if 已有 is not None and 已有.is_alive():
+            return 已有
+
+        def 写日志(文本: str) -> None:
+            try:
+                self.置脚本状态(文本)
+            except Exception:
+                pass
+
+        def 预热() -> None:
+            开始 = time.monotonic()
+            try:
+                引擎 = self.获取OCR引擎()
+                import numpy as np
+
+                引擎(np.full((48, 160, 3), 255, dtype=np.uint8))
+                写日志(f"OCR 模型已在后台预热完成（{time.monotonic() - 开始:.1f}秒）")
+            except Exception as 异常:
+                写日志(f"[警告] OCR 后台预热失败，首次识别时再加载：{异常}")
+
+        线程 = threading.Thread(target=预热, name="OCR预热", daemon=True)
+        self._OCR预热线程 = 线程
+        线程.start()
+        return 线程
 
     def 获取YOLO检测器(self):
         """延迟创建并复用默认 YOLO 检测器。"""

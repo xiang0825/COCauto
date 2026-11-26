@@ -103,6 +103,8 @@ class 应用控制器:
         self._设置缓存: tuple[float, 机器人设置] | None = None
         self._开始时间: float | None = None
         self._概况缓存: tuple[float, 今日概况] | None = None
+        self._上次状态 = 状态已停止
+        self._日志清理中 = False
 
     # ---------------------------------------------------------- 初始化
     def 准备(self) -> str:
@@ -196,6 +198,56 @@ class 应用控制器:
         )
         线程.start()
         return 线程
+
+    # ---------------------------------------------------------- 停止后清空日志
+    停止后清空等待秒 = 2.0
+    等待线程退出秒 = 60.0
+
+    def 检测到停止(self) -> bool:
+        """界面每秒调用：从运行/暂停变为已停止的那一次返回 True（之后不重复）。
+
+        停止按钮、任务计划正常结束、异常/无心跳停止都会走到这里；清理正在
+        进行时不再触发第二次。
+        """
+        状态 = self.状态
+        上次, self._上次状态 = self._上次状态, 状态
+        if 上次 in (状态运行中, 状态暂停中) and 状态 == 状态已停止 and not self._日志清理中:
+            self._日志清理中 = True
+            return True
+        return False
+
+    def _有机器人在运行(self) -> bool:
+        for 机器人 in list(getattr(self.监控中心, "机器人池", {}).values()):
+            if str(getattr(机器人, "当前状态", 状态已停止)) != 状态已停止:
+                return True
+        return False
+
+    def 停止后清空日志(self, 睡眠=time.sleep) -> tuple[int, float] | None:
+        """后台线程执行：等任务线程退出后导出备份（只留上一份）并清空任务日志。
+
+        返回 ``(导出条数, 清空截止时间戳)``；有机器人仍在运行或刚被重新启动时
+        返回 None，什么都不删。只动 任务日志 表，运行时状态等其它表不碰。
+        """
+        try:
+            实例 = self._实例
+            主线程 = getattr(实例, "主线程", None)
+            if 主线程 is not None and 主线程 is not threading.current_thread():
+                try:
+                    主线程.join(timeout=self.等待线程退出秒)
+                except RuntimeError:
+                    pass
+            # 留一点时间给停止前最后几条日志落库、异常留证读取日志摘要。
+            睡眠(self.停止后清空等待秒)
+            if self._有机器人在运行():
+                print("[控制器] 有任务仍在运行，本次不清空日志")
+                return None
+            from 数据库.日志轮转 import 停止后导出并清空
+
+            截止 = time.time()
+            条数 = 停止后导出并清空(getattr(self.数据库, "文件路径", 任务数据库.默认数据库路径()))
+            return 条数, 截止
+        finally:
+            self._日志清理中 = False
 
     def 开始或继续(self) -> bool:
         """F1：只启动已停止的任务，或恢复已暂停的任务。"""
