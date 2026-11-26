@@ -27,6 +27,25 @@ from 任务流程.活动.部落竞赛 import 部落竞赛任务, 加载配置, �
     "settle_20261125_071950",
     "settle_20261125_081054",
 )
+竞赛页面样本ID = (
+    "clan_walkthrough_home",
+    "clan_walkthrough_activity_list",
+    "clan_games_panel",
+    "clan_games_gold_task",
+    "clan_walkthrough_black_oil",
+    "clan_walkthrough_builder_base",
+    "clan_walkthrough_start_pending",
+    "clan_walkthrough_active_task",
+    "clan_walkthrough_gray_cards",
+    "clan_walkthrough_reopened_detail",
+    "clan_walkthrough_closed_reflow",
+    "clan_walkthrough_page_two",
+    "standby_20261125_clan_panel",
+)
+近期待命样本ID = (
+    "standby_20261125_reward_chest",
+    "standby_20261126_battle",
+)
 
 
 def 读取截图(文件: Path) -> np.ndarray:
@@ -286,44 +305,106 @@ class 实机截图回放测试(unittest.TestCase):
 
 
     def test_活动列表与部落竞赛全套实机截图不误判为升级详情弹窗(self):
-        根目录 = 测试目录.parent
-        竞赛目录 = 根目录 / "docs" / "实测" / "部落竞赛-2026-11-24"
-        期望映射 = {
-            "01_主页_活动按钮.jpg": "主世界主页",
-            "02_活动列表_部落竞赛开启.jpg": "活动弹窗",
-            "03_竞赛面板_个人积分.jpg": "部落竞赛面板",
-            "04_详情_掠夺金币.jpg": "部落竞赛任务详情",
-            "05_详情_掠夺黑油.jpg": "部落竞赛任务详情",
-            "06_详情_夜世界_不接.jpg": "部落竞赛任务详情",
-            "07_点开始后.jpg": "部落竞赛任务详情",
-            "08_已接任务_放弃按钮_不点.jpg": "部落竞赛任务详情",
-            "09_再次打开_其余卡变灰_判定已有任务.jpg": "部落竞赛面板",
-            "10_空白点复核_弹窗打开.jpg": "部落竞赛任务详情",
-            "11_空白点160x500_弹窗已关闭_卡片已重排.jpg": "部落竞赛面板",
-            "12_第二页_13张卡_固定坐标会点空.jpg": "部落竞赛面板",
-        }
-        for 文件名, 预期页面 in 期望映射.items():
-            路径 = 竞赛目录 / 文件名
-            if not 路径.exists():
-                continue
-            with self.subTest(截图=文件名):
-                图像 = 读取截图(路径)
+        for 样本ID in 竞赛页面样本ID:
+            样本 = 样本表[样本ID]
+            预期 = 样本["expected"]
+            图像 = 读取样本(样本ID)
+            with self.subTest(样本=样本ID):
                 实际 = self.页面识别器.识别(图像, 战斗中=False)
-                self.assertEqual(实际.页面, 预期页面, 实际.摘要())
+                self.assertEqual(实际.页面, 预期["page"], 实际.摘要())
+                if 预期.get("world") is not None:
+                    self.assertEqual(实际.世界, 预期["world"], 实际.摘要())
                 self.assertNotEqual(实际.页面, "升级详情弹窗", 实际.摘要())
-                if 预期页面 == "活动弹窗":
+                if 实际.页面 == "活动弹窗":
                     self.assertIsNotNone(
                         self.页面识别器.定位活动弹窗关闭按钮(图像)
                     )
                     self.assertIsNone(
                         self.页面识别器._升级详情弹窗关闭点(图像)
                     )
-                elif 预期页面 in {"部落竞赛面板", "部落竞赛任务详情"}:
+                elif 实际.页面 in {"部落竞赛面板", "部落竞赛任务详情"}:
                     self.assertIsNotNone(
                         self.页面识别器.定位部落竞赛关闭按钮(图像)
                     )
                     self.assertIsNone(
                         self.页面识别器._升级详情弹窗关闭点(图像)
+                    )
+
+    @unittest.expectedFailure
+    def test_部落竞赛实机详情OCR保留可见目标文本(self):
+        for 样本ID in ("clan_games_gold_task", "clan_walkthrough_black_oil"):
+            样本 = 样本表[样本ID]
+            预期 = 样本["expected"]
+            图像 = 读取样本(样本ID)
+            任务 = self._部落竞赛任务(图像)
+            详情 = 任务._识别详情()
+            with self.subTest(样本=样本ID):
+                self.assertIsNotNone(详情)
+                self.assertEqual(
+                    识别任务类型(详情["文本"], 任务.配置, ""),
+                    预期["clan_task_type"],
+                    详情["文本"],
+                )
+                for 片段 in 预期["visible_text_fragments"]:
+                    self.assertIn(片段, 详情["文本"], 详情["文本"])
+
+    def test_实机灰卡识别区分当前任务和锁定卡(self):
+        样本 = 样本表["clan_walkthrough_gray_cards"]
+        预期 = 样本["expected"]
+        图像 = 读取样本("clan_walkthrough_gray_cards")
+        任务 = self._部落竞赛任务(图像)
+
+        self.assertTrue(任务._卡片已变灰(图像))
+        self.assertFalse(任务._单卡已变灰(图像, tuple(预期["active_card"])))
+        for 位置 in 预期["gray_cards"]:
+            with self.subTest(灰卡=位置):
+                self.assertTrue(任务._单卡已变灰(图像, tuple(位置)))
+
+    def test_实机详情关闭和翻页后的页面状态(self):
+        详情图 = 读取样本("clan_walkthrough_reopened_detail")
+        已接任务图 = 读取样本("clan_walkthrough_active_task")
+        面板图 = 读取样本("clan_walkthrough_closed_reflow")
+        第二页图 = 读取样本("clan_walkthrough_page_two")
+
+        详情页 = self.页面识别器.识别(详情图, 战斗中=False)
+        已接任务页 = self.页面识别器.识别(已接任务图, 战斗中=False)
+        面板页 = self.页面识别器.识别(面板图, 战斗中=False)
+        第二页 = self.页面识别器.识别(第二页图, 战斗中=False)
+        self.assertEqual(详情页.页面, "部落竞赛任务详情", 详情页.摘要())
+        self.assertEqual(已接任务页.页面, "部落竞赛任务详情", 已接任务页.摘要())
+        self.assertEqual(面板页.页面, "部落竞赛面板", 面板页.摘要())
+        self.assertEqual(第二页.页面, "部落竞赛面板", 第二页.摘要())
+
+        详情 = self._部落竞赛任务(详情图)._识别详情()
+        已接任务详情 = self._部落竞赛任务(已接任务图)._识别详情()
+        关闭后详情 = self._部落竞赛任务(面板图)._识别详情()
+        self.assertIsNotNone(详情)
+        self.assertIsNone(详情["开始点"], 详情)
+        self.assertIsNone(已接任务详情)
+        self.assertIsNone(关闭后详情)
+
+        面板任务 = self._部落竞赛任务(面板图)
+        第二页任务 = self._部落竞赛任务(第二页图)
+        面板指纹 = 面板任务._卡片区指纹(面板图)
+        第二页指纹 = 第二页任务._卡片区指纹(第二页图)
+        self.assertIsNotNone(面板指纹)
+        self.assertIsNotNone(第二页指纹)
+        self.assertFalse(
+            面板任务._卡片区无变化(面板指纹, 第二页指纹),
+            "第二页任务卡布局应与弹窗关闭后的第一页不同",
+        )
+
+    def test_近期待命实机截图不误判为结算或回营(self):
+        for 样本ID in 近期待命样本ID:
+            样本 = 样本表[样本ID]
+            预期 = 样本["expected"]
+            图像 = 读取样本(样本ID)
+            with self.subTest(样本=样本ID):
+                实际 = self.页面识别器.识别(图像, 战斗中=False)
+                self.assertEqual(实际.页面, 预期["page"], 实际.摘要())
+                if "return_button" in 预期:
+                    self.assertIsNone(
+                        self.页面识别器.定位结算回营按钮(图像)
                     )
 
 
