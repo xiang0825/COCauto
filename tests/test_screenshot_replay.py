@@ -427,6 +427,26 @@ class 实机截图回放测试(unittest.TestCase):
                         self.页面识别器.定位结算回营按钮(图像)
                     )
 
+    def test_rc158前序与待命实机帧回放为战斗而非奖励选择(self):
+        """复放 21:17 现场连续帧，确认战斗 HUD 不再被误判为奖励页。"""
+        回放目录 = 样本目录 / "进攻误判安全待命_20261126"
+        截图列表 = sorted(回放目录.glob("前序_*.jpg"))
+        截图列表.extend(
+            (
+                回放目录 / "当前_211737.png",
+                回放目录 / "待命截图_211737.png",
+            )
+        )
+        self.assertEqual(len(截图列表), 7)
+        识别器 = 页面识别器(
+            模板匹配引擎(图片库路径=测试目录.parent / "img")
+        )
+        for 图片路径 in 截图列表:
+            with self.subTest(截图=图片路径.name):
+                结果 = 识别器.识别(读取截图(图片路径), 战斗中=False)
+                self.assertEqual(结果.页面, "战斗中", 结果.摘要())
+                self.assertNotEqual(结果.页面, "战斗奖励选择", 结果.摘要())
+
 
 def _添加页面识别回归用例(样本ID: str) -> None:
     def 检查(self):

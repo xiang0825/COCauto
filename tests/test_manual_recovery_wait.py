@@ -19,6 +19,22 @@ class 人工安全恢复等待测试(unittest.TestCase):
         机器人.记录日志 = Mock()
         return 机器人
 
+    def _启用虚拟待命时钟(self, 机器人):
+        时间 = [0.0]
+
+        def 等待(timeout=None):
+            时间[0] += float(timeout or 0.0)
+            return False
+
+        机器人.停止事件.wait.side_effect = 等待
+        计时器 = patch(
+            "线程.自动化机器人._安全待命单调时间",
+            side_effect=lambda: 时间[0],
+        )
+        计时器.start()
+        self.addCleanup(计时器.stop)
+        return 时间
+
     @staticmethod
     def _创建内存恢复上下文(预算结果):
         上下文 = 任务上下文.__new__(任务上下文)
@@ -38,13 +54,15 @@ class 人工安全恢复等待测试(unittest.TestCase):
     def _页面(名称, 世界=None, 可信度=0.0):
         return SimpleNamespace(页面=名称, 世界=世界, 可信度=可信度)
 
-    def test_要求连续两帧主世界确认且不处理中间未知页(self):
+    def test_要求连续三帧跨至少五秒主世界确认且不处理中间未知页(self):
         机器人 = self._创建机器人()
+        self._启用虚拟待命时钟(机器人)
         上下文 = SimpleNamespace(
             识别点击画面=Mock(side_effect=[
                 self._页面("未知"),
                 self._页面("主世界主页", "主世界", 0.78),
                 self._页面("未知"),
+                self._页面("主世界主页", "主世界", 0.78),
                 self._页面("主世界主页", "主世界", 0.78),
                 self._页面("主世界主页", "主世界", 0.78),
             ]),
@@ -54,21 +72,22 @@ class 人工安全恢复等待测试(unittest.TestCase):
 
         self.assertTrue(机器人._等待人工恢复主世界(上下文, Mock()))
 
-        self.assertEqual(上下文.识别点击画面.call_count, 5)
+        self.assertEqual(上下文.识别点击画面.call_count, 6)
         self.assertTrue(all(
             调用.kwargs == {"强制": True}
             for 调用 in 上下文.识别点击画面.call_args_list
         ))
         self.assertTrue(any(
-            "连续2帧确认主世界主页" in 调用.args[0]
+            "连续3帧" in 调用.args[0] and "主世界主页" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
-    def test_BuilderBase人工恢复要求连续两帧夜世界主页(self):
+    def test_人工恢复要求连续稳定的夜世界主页(self):
         机器人 = self._创建机器人()
+        self._启用虚拟待命时钟(机器人)
         主页 = self._页面("主世界主页", "主世界", 0.78)
         夜页 = self._页面("夜世界主页", "夜世界", 0.78)
-        页面序列 = [主页, 主页, 夜页, 夜页]
+        页面序列 = [主页, 夜页, 夜页, 夜页]
         调用次数 = 0
 
         def 读取页面(**_参数):
@@ -89,19 +108,20 @@ class 人工安全恢复等待测试(unittest.TestCase):
         self.assertEqual(上下文.识别点击画面.call_count, 4)
         self.assertFalse(上下文._主世界战斗模式选择页)
         self.assertTrue(any(
-            "连续2帧确认夜世界主页" in 调用.args[0]
+            "连续3帧" in 调用.args[0] and "夜世界主页" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
     def test_连续确认新版主世界战斗模式页后交回任务流程(self):
         机器人 = self._创建机器人()
+        self._启用虚拟待命时钟(机器人)
         模式页 = self._页面("主世界战斗模式选择", "主世界", 0.96)
         调用次数 = 0
 
         def 读取页面(**_参数):
             nonlocal 调用次数
             调用次数 += 1
-            if 调用次数 > 2:
+            if 调用次数 > 3:
                 机器人.停止事件.set()
             return 模式页
 
@@ -113,18 +133,109 @@ class 人工安全恢复等待测试(unittest.TestCase):
 
         self.assertTrue(机器人._等待人工恢复主世界(上下文, Mock()))
 
-        self.assertEqual(上下文.识别点击画面.call_count, 2)
+        self.assertEqual(上下文.识别点击画面.call_count, 3)
         self.assertTrue(上下文._主世界战斗模式选择页)
         self.assertTrue(any(
-            "连续2帧确认主世界战斗模式选择页" in 调用.args[0]
+            "连续3帧" in 调用.args[0] and "主世界战斗模式选择页" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
-    def test_安全待命在已确认战斗后处理战后宝箱并等待主页复核(self):
+    def test_稳定战斗页面可只读自动恢复并交还战斗流程(self):
         机器人 = self._创建机器人()
+        self._启用虚拟待命时钟(机器人)
+        战斗页 = self._页面("战斗中", 可信度=0.93)
+        上下文 = SimpleNamespace(
+            识别点击画面=Mock(side_effect=[战斗页, 战斗页, 战斗页]),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+
+        self.assertTrue(机器人._等待人工恢复主世界(上下文, Mock()))
+
+        self.assertTrue(上下文._战斗中)
+        self.assertFalse(上下文._战斗结束已确认)
+        self.assertFalse(上下文._战斗奖励弹窗已确认)
+        self.assertEqual(上下文._安全待命自动恢复次数, 1)
+        self.assertTrue(any(
+            "连续3帧" in 调用.args[0] and "战斗中" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_宝石商店购买和升级页面继续只读待命(self):
+        机器人 = self._创建机器人()
+        self._启用虚拟待命时钟(机器人)
+        待命页 = [
+            self._页面("宝石购买页", 可信度=0.99),
+            self._页面("商店弹窗", 可信度=0.99),
+            self._页面("升级详情弹窗", 可信度=0.99),
+        ]
+        调用次数 = 0
+
+        def 读取页面(**_参数):
+            nonlocal 调用次数
+            调用次数 += 1
+            return 待命页[min(调用次数 - 1, len(待命页) - 1)]
+
+        def 等待并停止(timeout=None):
+            机器人.虚拟时钟[0] += float(timeout or 0.0)
+            if 调用次数 >= 3:
+                机器人.停止事件.set()
+            return 机器人.停止事件.is_set()
+
+        # 接管虚拟等待以便在三次只读页面检查后结束测试循环。
+        机器人.虚拟时钟 = self._启用虚拟待命时钟(机器人)
+        机器人.停止事件.wait.side_effect = 等待并停止
+        上下文 = SimpleNamespace(
+            识别点击画面=Mock(side_effect=读取页面),
+            点击已确认安全按钮=Mock(),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+
+        self.assertFalse(机器人._等待人工恢复主世界(上下文, Mock()))
+
+        self.assertEqual(上下文.识别点击画面.call_count, 3)
+        上下文.点击已确认安全按钮.assert_not_called()
+        self.assertFalse(hasattr(上下文, "_安全待命自动恢复次数"))
+
+    def test_每次机器人运行最多自动恢复一次(self):
+        机器人 = self._创建机器人()
+        虚拟时钟 = self._启用虚拟待命时钟(机器人)
+        安全主页 = self._页面("主世界主页", "主世界", 0.95)
+        上下文 = SimpleNamespace(
+            识别点击画面=Mock(side_effect=[安全主页] * 6),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+        等待次数 = 0
+
+        def 等待并在第二次待命时停止(timeout=None):
+            nonlocal 等待次数
+            等待次数 += 1
+            虚拟时钟[0] += float(timeout or 0.0)
+            if 等待次数 >= 5:
+                机器人.停止事件.set()
+            return 机器人.停止事件.is_set()
+
+        机器人.停止事件.wait.side_effect = 等待并在第二次待命时停止
+        self.assertTrue(机器人._等待人工恢复主世界(上下文, Mock()))
+        self.assertEqual(上下文._安全待命自动恢复次数, 1)
+        self.assertFalse(机器人._等待人工恢复主世界(上下文, Mock()))
+
+        self.assertEqual(上下文.识别点击画面.call_count, 6)
+        self.assertEqual(上下文._安全待命自动恢复次数, 1)
+        self.assertTrue(any(
+            "自动恢复上限" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_安全待命只读观察战后奖励并连续确认主页(self):
+        机器人 = self._创建机器人()
+        self._启用虚拟待命时钟(机器人)
         页面序列 = iter([
             self._页面("未知"),
             self._页面("战斗星级奖励", 可信度=0.99),
+            self._页面("主世界主页", "主世界", 0.78),
             self._页面("主世界主页", "主世界", 0.78),
             self._页面("主世界主页", "主世界", 0.78),
         ])
@@ -138,9 +249,13 @@ class 人工安全恢复等待测试(unittest.TestCase):
 
         self.assertTrue(机器人._等待人工恢复主世界(上下文, Mock()))
 
-        上下文.处理战斗星级奖励弹窗.assert_called_once_with()
+        上下文.处理战斗星级奖励弹窗.assert_not_called()
         self.assertGreater(上下文._战后星级奖励检查截止时间, 0)
-        self.assertEqual(上下文.识别点击画面.call_count, 4)
+        self.assertEqual(上下文.识别点击画面.call_count, 5)
+        self.assertTrue(any(
+            "只读检测到战后奖励页" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
 
     def test_低置信度战斗模式页不解除安全待命(self):
         机器人 = self._创建机器人()
@@ -164,11 +279,13 @@ class 人工安全恢复等待测试(unittest.TestCase):
 
         self.assertFalse(getattr(上下文, "_主世界战斗模式选择页", False))
 
-    def test_明确断线页走既有登录恢复后仍需确认主页(self):
+    def test_安全待命遇到断线只读等待不自动重连(self):
         机器人 = self._创建机器人()
+        self._启用虚拟待命时钟(机器人)
         上下文 = SimpleNamespace(
             识别点击画面=Mock(side_effect=[
                 self._页面("断线弹窗"),
+                self._页面("主世界主页", "主世界", 0.78),
                 self._页面("主世界主页", "主世界", 0.78),
                 self._页面("主世界主页", "主世界", 0.78),
             ]),
@@ -180,17 +297,19 @@ class 人工安全恢复等待测试(unittest.TestCase):
 
         self.assertTrue(机器人._等待人工恢复主世界(上下文, 检测登录))
 
-        检测登录.执行.assert_called_once_with(首次登录=False)
+        检测登录.执行.assert_not_called()
         self.assertTrue(any(
-            "断线" in 调用.args[0]
+            "不自动点击重连" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
-    def test_满仓待机期间断线会受控重连并继续待机(self):
+    def test_满仓待机期间断线只读观察到主页后继续待机(self):
         机器人 = self._创建机器人()
+        self._启用虚拟待命时钟(机器人)
         主页面 = self._页面("主世界主页", "主世界", 0.78)
         断线页 = self._页面("断线弹窗")
-        页面序列 = iter([主页面, 断线页, 断线页, 主页面, 主页面])
+        页面序列 = iter([主页面, 断线页, 断线页, 主页面, 主页面, 主页面])
+        页面调用次数 = 0
         延时次数 = 0
         上下文 = None
 
@@ -201,11 +320,19 @@ class 人工安全恢复等待测试(unittest.TestCase):
             if 延时次数 >= 3:
                 机器人.停止事件.set()
 
+        def 读取页面(**_参数):
+            nonlocal 页面调用次数
+            页面调用次数 += 1
+            页面 = next(页面序列)
+            if 页面调用次数 >= 6:
+                机器人.停止事件.set()
+            return 页面
+
         上下文 = SimpleNamespace(
             停止事件=机器人.停止事件,
             页面恢复失败=False,
             机器人标志="robot_1",
-            识别点击画面=Mock(side_effect=lambda **_参数: next(页面序列)),
+            识别点击画面=Mock(side_effect=读取页面),
             数据库=SimpleNamespace(
                 获取最新完整状态=Mock(return_value=SimpleNamespace(状态数据={
                     "家乡资源": {
@@ -231,10 +358,10 @@ class 人工安全恢复等待测试(unittest.TestCase):
             更新资源.return_value.执行.return_value = True
             self.assertFalse(机器人._满仓待机并监测断线(上下文, 检测登录))
 
-        检测登录.执行.assert_called_once_with(首次登录=False)
-        self.assertEqual(上下文.识别点击画面.call_count, 5)
+        检测登录.执行.assert_not_called()
+        self.assertEqual(上下文.识别点击画面.call_count, 6)
         self.assertTrue(any(
-            "满仓待机检测到断线" in 调用.args[0]
+            "满仓待机只读检测到断线" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
         self.assertFalse(上下文._任务计划长时间等待)
@@ -391,29 +518,23 @@ class 人工安全恢复等待测试(unittest.TestCase):
         更新夜资源.return_value.执行.assert_called_once_with()
         更新家乡资源.return_value.执行.assert_not_called()
 
-    def test_自动重连失败后仍只读待命并在人工回主页后接续(self):
+    def test_重复断线帧仍只读等待主页复核(self):
         机器人 = self._创建机器人()
+        self._启用虚拟待命时钟(机器人)
         断线页 = self._页面("断线弹窗")
         主页 = self._页面("主世界主页", "主世界", 0.78)
         上下文 = SimpleNamespace(
-            识别点击画面=Mock(side_effect=[断线页, 断线页, 主页, 主页]),
+            识别点击画面=Mock(side_effect=[断线页, 断线页, 断线页, 主页, 主页, 主页]),
             页面恢复失败=False,
             置脚本状态=Mock(),
             脚本延时=Mock(),
         )
         检测登录 = Mock()
 
-        def 重连失败(**_参数):
-            上下文.页面恢复失败 = True
-            机器人.停止事件.set()
-            return False
-
-        检测登录.执行.side_effect = 重连失败
-
         self.assertTrue(机器人._等待人工恢复主世界(上下文, 检测登录))
 
-        self.assertEqual(上下文.识别点击画面.call_count, 4)
-        检测登录.执行.assert_called_once_with(首次登录=False)
+        self.assertEqual(上下文.识别点击画面.call_count, 6)
+        检测登录.执行.assert_not_called()
         self.assertFalse(机器人.停止事件.is_set())
         self.assertTrue(上下文._主世界战斗模式选择页 is False)
 
@@ -436,9 +557,11 @@ class 人工安全恢复等待测试(unittest.TestCase):
 
     def test_可恢复页面保护事件不会阻止人工恢复等待(self):
         机器人 = self._创建机器人()
+        self._启用虚拟待命时钟(机器人)
         机器人.停止事件.set()
         上下文 = SimpleNamespace(
             识别点击画面=Mock(side_effect=[
+                self._页面("主世界主页", "主世界", 0.78),
                 self._页面("主世界主页", "主世界", 0.78),
                 self._页面("主世界主页", "主世界", 0.78),
             ]),
@@ -448,7 +571,7 @@ class 人工安全恢复等待测试(unittest.TestCase):
 
         self.assertTrue(机器人._等待人工恢复主世界(上下文, Mock()))
 
-        self.assertEqual(上下文.识别点击画面.call_count, 2)
+        self.assertEqual(上下文.识别点击画面.call_count, 3)
         self.assertFalse(机器人.停止事件.is_set())
 
     def test_保护事件期间收到明确停止请求仍会终止恢复等待(self):
@@ -497,8 +620,9 @@ class 人工安全恢复等待测试(unittest.TestCase):
             机器人.停止事件.wait.call_args.kwargs.get("timeout"), 10.0
         )
 
-    def test_连续三次内存预算健康后仍需连续两帧主世界确认(self):
+    def test_连续三次内存预算健康后仍需三帧五秒安全页面确认(self):
         机器人 = self._创建机器人()
+        self._启用虚拟待命时钟(机器人)
         机器人.停止事件.set()
         内存上下文 = self._创建内存恢复上下文([
             (True, "健康样本1"),
@@ -508,13 +632,13 @@ class 人工安全恢复等待测试(unittest.TestCase):
         内存上下文.识别点击画面 = Mock(side_effect=[
             self._页面("主世界主页", "主世界", 0.78),
             self._页面("主世界主页", "主世界", 0.78),
+            self._页面("主世界主页", "主世界", 0.78),
         ])
-        机器人.停止事件.wait = Mock(return_value=False)
 
         self.assertTrue(机器人._等待人工恢复主世界(内存上下文, Mock()))
 
         self.assertEqual(内存上下文.op.检查主机内存预算.call_count, 3)
-        self.assertEqual(内存上下文.识别点击画面.call_count, 2)
+        self.assertEqual(内存上下文.识别点击画面.call_count, 3)
         self.assertEqual(
             [调用.kwargs.get("timeout") for 调用 in 机器人.停止事件.wait.call_args_list[:2]],
             [10.0, 10.0],
@@ -524,6 +648,7 @@ class 人工安全恢复等待测试(unittest.TestCase):
 
     def test_待命截图时触发宿主机内存保护后转入预算恢复等待(self):
         机器人 = self._创建机器人()
+        self._启用虚拟待命时钟(机器人)
         内存上下文 = self._创建内存恢复上下文([
             (False, "提交额度828MB"),
             (True, "健康样本1"),
@@ -554,10 +679,10 @@ class 人工安全恢复等待测试(unittest.TestCase):
         self.assertTrue(机器人._等待人工恢复主世界(内存上下文, Mock()))
 
         self.assertEqual(内存上下文.op.检查主机内存预算.call_count, 4)
-        self.assertEqual(内存上下文.识别点击画面.call_count, 3)
+        self.assertEqual(内存上下文.识别点击画面.call_count, 4)
         self.assertEqual(
             [调用.kwargs.get("timeout") for 调用 in 机器人.停止事件.wait.call_args_list],
-            [10.0, 10.0, 10.0, 5.0],
+            [10.0, 10.0, 10.0, 5.0, 5.0],
         )
         self.assertFalse(机器人.停止事件.is_set())
         self.assertFalse(内存上下文._内存保护已触发)
