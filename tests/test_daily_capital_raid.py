@@ -273,5 +273,137 @@ class 出击流程测试(unittest.TestCase):
         self.assertEqual(点(ctx), [(760, 40)])
         self.assertEqual(游戏.页面, "都城")
 
+class 下兵逐点护栏测试(unittest.TestCase):
+    """屁股审查：选槽和每个下兵点前都要新帧 + 战斗页确认 + 宝石图标 + 危险词 + 停止。"""
+
+    def test_每次下兵点击前都重新截图(self):
+        任务, ctx, 游戏 = 构造(剩余=1)
+        截图次数 = {"n": 0}
+        原截图 = ctx.op.获取屏幕图像cv
+        ctx.op = SimpleNamespace(获取屏幕图像cv=lambda *a, **k: (截图次数.__setitem__("n", 截图次数["n"] + 1), 原截图())[1])
+        下兵前截图 = []
+        原点击 = ctx.点击.side_effect
+
+        def 点击(x, y, **k):
+            if 游戏.页面 == "战斗":
+                下兵前截图.append(截图次数["n"])
+            return 原点击(x, y, **k)
+
+        ctx.点击 = Mock(side_effect=点击)
+        self.assertTrue(任务.执行())
+        # 战斗中 2 次选槽 + 4 次下兵，每次点击前截图计数都严格增加
+        self.assertEqual(len(下兵前截图), 6)
+        self.assertEqual(len(set(下兵前截图)), 6)
+
+    def test_下兵中途战斗页消失立即停止(self):
+        任务, ctx, 游戏 = 构造(会结算=False, 游戏参数=参数(战斗最长秒=0.05))
+        原点击 = ctx.点击.side_effect
+
+        def 点击(x, y, **k):
+            结果 = 原点击(x, y, **k)
+            if (int(x), int(y)) == (50, 300):
+                游戏.页面 = "未知"
+            return 结果
+
+        ctx.点击 = Mock(side_effect=点击)
+        self.assertFalse(任务.执行())
+        下兵 = [c for c in 点(ctx) if c in ((50, 300), (750, 300))]
+        self.assertEqual(下兵, [(50, 300)])
+
+    def test_下兵点附近出现危险词则跳过该点(self):
+        任务, ctx, 游戏 = 构造(剩余=1)
+        原OCR = 任务.OCR
+
+        def OCR(图, 区域):
+            x1, y1, x2, y2 = 区域
+            if x1 <= 50 <= x2 and y1 <= 300 <= y2 and x2 - x1 <= 40:
+                return [("宝石", (50, 300))]
+            return 原OCR(图, 区域)
+
+        任务.OCR = OCR
+        游戏.会结算 = False
+        游戏参数 = 任务.参数
+        任务.参数 = dict(游戏参数, 战斗最长秒=0.05)
+        任务.执行()
+        self.assertNotIn((50, 300), 点(ctx))
+        self.assertIn((750, 300), 点(ctx))
+
+    def test_下兵途中出现宝石图标后不再点该点(self):
+        任务, ctx, 游戏 = 构造(剩余=1)
+        宝石 = 日常公共.读取图片(日常公共.宝石图标路径)
+        原点击 = ctx.点击.side_effect
+
+        def 点击(x, y, **k):
+            结果 = 原点击(x, y, **k)
+            if (int(x), int(y)) == (750, 300):
+                游戏.图[284:284 + 宝石.shape[0], 737:737 + 宝石.shape[1]] = 宝石
+            return 结果
+
+        ctx.点击 = Mock(side_effect=点击)
+        游戏.会结算 = False
+        任务.参数 = dict(任务.参数, 战斗最长秒=0.05)
+        任务.执行()
+        self.assertEqual(点(ctx).count((750, 300)), 1)
+        self.assertEqual(点(ctx).count((50, 300)), 2)
+
+    def test_兵种栏格子有危险词则跳过该格(self):
+        任务, ctx, 游戏 = 构造(剩余=1)
+        原OCR = 任务.OCR
+
+        def OCR(图, 区域):
+            x1, y1, x2, y2 = 区域
+            if x1 <= 100 <= x2 and y1 <= 560 <= y2 and x2 - x1 <= 60:
+                return [("购买", (100, 560))]
+            return 原OCR(图, 区域)
+
+        任务.OCR = OCR
+        游戏.会结算 = False
+        任务.参数 = dict(任务.参数, 战斗最长秒=0.05)
+        任务.执行()
+        self.assertNotIn((100, 560), 点(ctx))
+        self.assertIn((160, 560), 点(ctx))
+
+
+class 剩余次数读不出测试(unittest.TestCase):
+    def _读不出任务(self):
+        任务, ctx, 游戏 = 构造()
+        原OCR = 任务.OCR
+        任务.OCR = lambda 图, 区域: [] if tuple(区域) == tuple(任务.参数["剩余次数区域"]) else 原OCR(图, 区域)
+        return 任务, ctx, 游戏
+
+    def test_连续读不出达到上限放弃本周末(self):
+        数据库 = None
+        for 第几次 in range(1, 4):
+            任务, ctx, 游戏 = self._读不出任务()
+            if 数据库 is not None:
+                ctx.数据库 = 数据库
+                任务.数据库 = 数据库
+            数据库 = ctx.数据库
+            # 冷却已过：清掉下次检查时间
+            记录 = 日常公共.读取任务记录(数据库, "t", "capital_raid")
+            if 记录:
+                记录["下次检查时间"] = 0
+                日常公共.写入任务记录(数据库, "t", "capital_raid", 记录)
+            self.assertTrue(任务.执行())
+            记录 = 日常公共.读取任务记录(数据库, "t", "capital_raid")
+            self.assertEqual(记录["读不出次数"], 第几次)
+            self.assertEqual(记录["次数用完"], 第几次 >= 3)
+        self.assertTrue(any("放弃本周末" in str(c.args[0]) for c in ctx.置脚本状态.call_args_list))
+        # 放弃后不再进入
+        任务2, ctx2, _ = 构造()
+        ctx2.数据库 = 任务2.数据库 = 数据库
+        记录["下次检查时间"] = 0
+        日常公共.写入任务记录(数据库, "t", "capital_raid", 记录)
+        self.assertTrue(任务2.执行())
+        ctx2.点击.assert_not_called()
+
+    def test_读到次数后清零计数(self):
+        任务, ctx, _ = 构造(剩余=1)
+        日常公共.写入任务记录(ctx.数据库, "t", "capital_raid",
+                       {"周末": "2026-11-27", "读不出次数": 2, "出击次数": 0, "次数用完": False})
+        self.assertTrue(任务.执行())
+        self.assertEqual(日常公共.读取任务记录(ctx.数据库, "t", "capital_raid")["读不出次数"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

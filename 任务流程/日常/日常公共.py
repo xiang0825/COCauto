@@ -342,7 +342,7 @@ class 日常面板任务基类:
             return False
         return self.点击(x, y, 说明)
 
-    def 点击(self, x, y, 说明: str) -> bool:
+    def 点击(self, x, y, 说明: str, 等待毫秒: int | None = None) -> bool:
         if self.已停止():
             self.日志(f"{说明}：已收到停止信号，不再点击")
             return False
@@ -350,8 +350,9 @@ class 日常面板任务基类:
             self.日志(f"{说明}：点击被安全输入层拒绝")
             return False
         延时 = getattr(self.上下文, "脚本延时", None)
-        if callable(延时):
-            延时(int(self.参数.get("点击后等待毫秒", 700)))
+        等待 = int(self.参数.get("点击后等待毫秒", 700)) if 等待毫秒 is None else int(等待毫秒)
+        if callable(延时) and 等待 > 0:
+            延时(等待)
         return True
 
     def 日志(self, 文本: str) -> None:
