@@ -670,6 +670,8 @@ class 任务计划测试(unittest.TestCase):
         机器人._执行刷墙计划 = Mock(return_value=True)
         机器人._执行升级计划 = Mock(return_value=True)
         机器人._执行部落竞赛计划 = Mock(return_value=True)
+        机器人._执行保持不闲计划 = Mock(return_value=True)
+        机器人._执行夜世界星星计划 = Mock(return_value=True)
         上下文 = SimpleNamespace(
             _资源计划已打满=False,
             置脚本状态=Mock(),
@@ -730,6 +732,8 @@ class 任务计划测试(unittest.TestCase):
             "hero": ("任务流程.建筑升级", "建筑升级任务"),
             "pet": ("任务流程.战宠升级", "战宠升级任务"),
             "research": ("任务流程.兵种或法术升级", "兵种或法术升级任务"),
+            "keep_busy": ("任务流程.日常.保持不闲", "保持不闲任务"),
+            "night_star_bonus": ("任务流程.日常.夜世界星星", "夜世界星星任务"),
         }
         for 定义 in 任务计划定义列表:
             模块名, 对象名 = 入口[定义.键]

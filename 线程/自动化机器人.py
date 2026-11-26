@@ -1669,7 +1669,7 @@ class 自动化机器人:
         任务循环只负责顺序、停止和失败策略；具体任务分派集中在这里，
         防止以后新增任务时把条件分支继续堆进主循环。
         """
-        if 任务键 in {"event", "main_resource", "wall", "building", "hero", "pet", "research"}:
+        if 任务键 in {"event", "main_resource", "wall", "building", "hero", "pet", "research", "keep_busy"}:
             上下文._待命恢复世界 = "主世界"
 
         if 任务键 == "event":
@@ -1694,6 +1694,12 @@ class 自动化机器人:
             if self._官方数据显示已满级(任务键, 上下文):
                 return True, False
             结果 = self._执行升级计划(任务键, 上下文, 检测登录)
+        elif 任务键 == "night_star_bonus":
+            上下文.置脚本状态("按任务计划执行：night_star_bonus")
+            结果 = self._执行夜世界星星计划(上下文, 检测登录)
+        elif 任务键 == "keep_busy":
+            上下文.置脚本状态("按任务计划执行：keep_busy")
+            结果 = self._执行保持不闲计划(上下文, 检测登录)
         else:
             上下文.置脚本状态(f"任务计划包含未知任务键：{任务键}")
             return False, False
@@ -1703,6 +1709,70 @@ class 自动化机器人:
             and bool(getattr(上下文, "_资源计划已打满", False))
         )
         return bool(结果), 资源已打满
+
+    def _日常任务前确认主世界(self, 上下文, 检测登录, 阶段: str) -> bool:
+        if not self._进入并确认主世界(上下文, 阶段):
+            上下文.页面恢复失败 = True
+            上下文.置脚本状态(f"{阶段}未确认主世界，禁止继续点击")
+            return False
+        if 检测登录 is not None and not self._断线时恢复游戏连接(上下文, 检测登录):
+            上下文.页面恢复失败 = True
+            上下文.置脚本状态(f"{阶段}断线恢复失败，禁止继续点击")
+            return False
+        return True
+
+    def _执行保持不闲计划(self, 上下文, 检测登录) -> bool:
+        """D. 实验室和工人不闲：研究段 → 重新确认主世界 → 工人段。"""
+        from 任务流程.日常.保持不闲 import 保持不闲任务
+
+        任务 = 保持不闲任务(上下文)
+        if 任务.冷却中():
+            return True
+        if not self._日常任务前确认主世界(上下文, 检测登录, "实验室不闲研究段前"):
+            return False
+        if not 任务.执行研究段():
+            return False
+        if self.停止事件.is_set():
+            return True
+        if not self._日常任务前确认主世界(上下文, 检测登录, "工人不闲升级段前"):
+            return False
+        if not 任务.执行工人段():
+            return False
+        任务.记录完成()
+        return True
+
+    def _执行夜世界星星计划(self, 上下文, 检测登录) -> bool:
+        """A. 夜世界打满星星奖励：进夜世界后逐场打，今日领满或到上限即停。"""
+        from 任务流程.日常.夜世界星星 import 夜世界星星任务
+
+        任务 = 夜世界星星任务(上下文)
+        上下文._待命恢复世界 = "主世界"
+        if 任务.今日已完成():
+            return True
+        if not 到夜世界任务(上下文).执行():
+            if getattr(上下文, "_夜世界入口暂不可用", False):
+                上下文.页面恢复失败 = False
+                请求等待 = getattr(上下文, "请求任务计划等待", None)
+                if callable(请求等待):
+                    请求等待(60, "夜世界入口暂不可用")
+                上下文.置脚本状态("夜世界星星：入口本轮未确认，安全跳过，稍后重试")
+                return True
+            上下文.页面恢复失败 = True
+            上下文.置脚本状态("夜世界星星：进入夜世界失败，禁止继续点击")
+            return False
+        上下文._待命恢复世界 = "夜世界"
+        while not self.停止事件.is_set():
+            if not self._断线时恢复游戏连接(上下文, 检测登录):
+                return False
+            结果 = 任务.打一场()
+            if 结果 == "完成":
+                任务.今日已完成()
+                return True
+            if 结果 == "失败":
+                上下文.页面恢复失败 = True
+                上下文.置脚本状态("夜世界星星：本场未确认完成，保留当前画面")
+                return False
+        return True
 
     def _满仓继续打鱼(self, 上下文, 世界: str) -> bool:
         """资源打满后动作为“继续打鱼”时返回 True，调用方照常发起下一场进攻。"""
