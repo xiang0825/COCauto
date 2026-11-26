@@ -2781,7 +2781,14 @@ class 任务上下文:
             return False
         if (
             结果 is not None
-            and getattr(self, "_部落竞赛面板已确认", False)
+            and (
+                getattr(self, "_部落竞赛面板已确认", False)
+                # 部落竞赛流程中、活动列表尚未确认时（例如点开的不是活动列表、
+                # 要点 X 关回主页），也不能走下面的通用活动/升级详情关闭器：
+                # 它们会对文字最多的活动页做同步整屏 OCR（实机几分钟、无日志）。
+                # 部落竞赛自己的关闭只点模板确认的红 X，并复核附近禁点字样。
+                or getattr(self, "_部落竞赛流程中", False)
+            )
             and 结果.页面 not in {
                 "断线弹窗", "系统维护", "登录页", "模拟器桌面",
                 "战斗中", "战斗过渡", "战斗结算", "战斗奖励选择",
@@ -2908,6 +2915,8 @@ class 任务上下文:
             and not getattr(self, "_城墙升级资源点击中", False)
             and 结果 is not None
             and 结果.页面 in {"主世界主页", "夜世界主页"}
+            # 部落竞赛流程只在确认主页后才点活动按钮，期间不做这项 OCR 预检。
+            and not getattr(self, "_部落竞赛流程中", False)
         ):
             # 活动/奖励面板会保留底层资源栏，轻量识别因此可能仍返回
             # “主页”。先做纯几何的红色 X + 中央面板预检；只有命中候选
@@ -3938,9 +3947,15 @@ class 任务上下文:
                 if bool(getattr(self, "_任务计划长时间等待", False))
                 else 0.75
             )
+            最近页面 = getattr(
+                getattr(self, "_最近点击页面结果", None), "页面", ""
+            )
             if (
                 not getattr(self, "_战斗中", False)
                 and not self._部落竞赛占用画面()
+                # 和升级完成弹窗检查一样：已识别为活动列表/竞赛面板时
+                # 肯定不是主页中央提示，不做整屏复核/OCR。
+                and 最近页面 not in self._非升级弹窗文字页
                 and 当前单调时间
                 - float(getattr(self, "_中央提示调度时间", 0.0))
                 >= 中央提示检查间隔

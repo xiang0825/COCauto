@@ -1100,6 +1100,25 @@ class 页面识别测试(unittest.TestCase):
         self.assertTrue(上下文.输入前安全检查())
         上下文.关闭升级详情弹窗.assert_called_once_with(上下文._点击识别截图)
 
+    def test_竞赛流程中列表未确认时允许专用关闭X且不走通用全屏OCR(self):
+        for 页面 in ("活动弹窗", "升级详情弹窗"):
+            with self.subTest(页面=页面):
+                上下文 = 任务上下文.__new__(任务上下文)
+                上下文._战斗中 = False
+                上下文._部落竞赛流程中 = True
+                上下文._部落竞赛面板已确认 = False
+                上下文.检查宝石商店危险页面 = Mock(return_value=False)
+                上下文._最近点击页面结果 = SimpleNamespace(页面=页面)
+                上下文._点击识别截图 = np.zeros((600, 800, 3), dtype=np.uint8)
+                上下文.清理主世界活动弹窗 = Mock()
+                上下文.关闭升级详情弹窗 = Mock()
+
+                # False 表示放行部落竞赛自己已确认的 X 点击；通用关闭器
+                # 若被调用就会对活动列表执行同步全屏 OCR。
+                self.assertFalse(上下文.输入前安全检查())
+                上下文.清理主世界活动弹窗.assert_not_called()
+                上下文.关闭升级详情弹窗.assert_not_called()
+
     def test_活动OCR与升级OCR互斥(self):
         活动OCR = [
             ([], "活動"),
