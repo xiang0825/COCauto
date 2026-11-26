@@ -1839,6 +1839,12 @@ class 自动化机器人:
         )
         self.设备.设置目标包名(设置.部落冲突包名)
         self.op = ADB屏幕(self.设备, 日志回调=self.记录日志)
+        try:
+            from 应用.异常留证 import 安装帧缓存
+
+            安装帧缓存(self.op, self.机器人标志)
+        except Exception:
+            pass
         企业微信通知器实例 = None
         if 设置.企业微信webhook:
             try:
@@ -2279,8 +2285,56 @@ class 自动化机器人:
 
         return False
 
+    def 保存异常现场(self, 类别: str, 原因: str, 当前图像=None):
+        """把当前画面、前几帧和最近日志存到 EXE 同级 异常现场/；绝不抛异常。
+
+        只读缓存帧和数据库，不调用 ADB：触发时线程可能已卡住或截图已失败。
+        只在使用正式数据库时留证；测试/临时数据库不往程序目录写现场。
+        """
+        try:
+            from 应用 import 异常留证
+
+            文件路径 = getattr(getattr(self, "数据库", None), "文件路径", None)
+            if not isinstance(文件路径, str) or os.path.normcase(
+                os.path.abspath(文件路径)
+            ) != os.path.normcase(os.path.abspath(任务数据库.默认数据库路径())):
+                return None
+
+            try:
+                保留份数 = int(getattr(self.设置, "异常现场保留份数", 异常留证.默认保留份数))
+            except Exception:
+                保留份数 = 异常留证.默认保留份数
+            if 保留份数 <= 0:
+                return None
+            if 当前图像 is None:
+                # 截图提供器里最后一张真实帧（不触发新的 screencap）。
+                当前图像 = getattr(getattr(self, "op", None), "_原始截图缓存", None)
+            try:
+                日志摘要 = 异常留证.格式化日志摘要(
+                    self.数据库.查询日志历史(self.机器人标志, 最大条数=40), 40
+                )
+            except Exception:
+                日志摘要 = []
+            路径 = 异常留证.保存异常现场(
+                类别,
+                原因,
+                机器人标志=self.机器人标志,
+                当前图像=当前图像,
+                日志摘要=日志摘要,
+                保留份数=保留份数,
+            )
+            if 路径 is not None:
+                try:
+                    self.记录日志(f"[异常留证] 已保存{类别}现场：{路径}", 300, "警告")
+                except Exception:
+                    pass
+            return 路径
+        except Exception:
+            return None
+
     def _处理待命超时通知(self, 上下文, 原因: str) -> None:
         """待命超阈值后触发一次现场留图与多渠道通知，绝不抛出异常。"""
+        self.保存异常现场("未知页面待命", 原因)
         try:
             保存并通知 = getattr(上下文, "保存待命现场截图并通知", None)
             if callable(保存并通知):
@@ -2791,6 +2845,7 @@ class 自动化机器人:
             if not self.停止原因:
                 self.停止原因 = "任务流程提前结束，请查看最后日志"
             self.停止事件.set()
+            self._异常退出留证(上下文)
             self._桌面通知线程停止()
             # 在清理 op 之前发送停止通知（此时 op 还活着，可以截图）
             try:
@@ -2882,6 +2937,18 @@ class 自动化机器人:
                 pass
 
     人工停止原因 = frozenset({"控制台关闭", "手动终止", "界面停止按钮", "未启动"})
+
+    # 心跳超时由监控中心在停止前留证；人工停止和任务自然完成不留证。
+    _不留证停止原因 = frozenset({"任务自然完成", "无心跳"})
+
+    def _异常退出留证(self, 上下文) -> None:
+        try:
+            原因 = str(self.停止原因 or "")
+            if 原因 in self.人工停止原因 or 原因 in self._不留证停止原因:
+                return
+            self.保存异常现场("异常退出", 原因)
+        except Exception:
+            pass
 
     def _桌面通知线程停止(self) -> None:
         """线程结束时弹桌面通知；人工停止（界面按钮/关窗）不弹。"""

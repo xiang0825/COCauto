@@ -83,6 +83,17 @@ def 规范化任务计划顺序(任务顺序) -> list[str]:
     return 当前顺序
 
 
+def 规范化每日通知时间(值, 默认值: str = "23:30") -> str:
+    """把 ``H:MM`` / ``HH：MM`` 规范成 ``HH:MM``；不合法时回退默认值。"""
+    文本 = str(值 or "").strip().replace("：", ":")
+    部分 = 文本.split(":")
+    if len(部分) == 2 and all(片.strip().isdigit() for 片 in 部分):
+        时, 分 = int(部分[0]), int(部分[1])
+        if 0 <= 时 <= 23 and 0 <= 分 <= 59:
+            return f"{时:02d}:{分:02d}"
+    return 默认值
+
+
 def 任务计划是否启用(设置, 任务键: str) -> bool:
     """按集中定义判断任务是否具备执行条件。"""
     定义 = 任务计划定义映射.get(任务键)
@@ -642,6 +653,36 @@ class 机器人设置:
         }
     )
 
+    异常现场保留份数: int = field(
+        default=30,
+        metadata={
+            "显示名称": "异常现场保留份数",
+            "描述": "卡住、心跳超时、未知页面、任务异常退出时把当前截图+前几帧+日志摘要存到 EXE 同级 异常现场/；只保留最近这么多份，超出自动删除最旧的（0 表示关闭留证）",
+            "UI类型": "spinbox",
+            "最小值": 0,
+            "最大值": 500,
+            "步进": 5,
+        }
+    )
+
+    每日完成通知: bool = field(
+        default=True,
+        metadata={
+            "显示名称": "每日完成通知",
+            "描述": "每天到点用桌面弹窗汇总今天的场次、胜率、金/圣水/黑油收益和部落竞赛进度；竞赛奖励不会自动领，只提示可领奖",
+            "UI类型": "bool",
+        }
+    )
+
+    每日通知时间: str = field(
+        default="23:30",
+        metadata={
+            "显示名称": "每日通知时间",
+            "描述": "24 小时制 HH:MM，默认 23:30",
+            "UI类型": "entry",
+        }
+    )
+
     资源易窃取最低评分: float = field(
         default=5.0,
         metadata={
@@ -875,6 +916,8 @@ class 机器人设置:
         self.部落竞赛检查间隔分钟 = max(10, min(240, self._安全整型(self.部落竞赛检查间隔分钟, 30)))
         self.部落竞赛个人积分上限 = max(0, self._安全整型(self.部落竞赛个人积分上限, 0))
         self.满仓自动顺手刷墙 = bool(self.满仓自动顺手刷墙)
+        self.每日完成通知 = bool(self.每日完成通知)
+        self.每日通知时间 = 规范化每日通知时间(self.每日通知时间)
         # 兼容旧配置，同时丢弃未知任务键并补齐新增任务。
         self.任务计划顺序 = 规范化任务计划顺序(self.任务计划顺序)
         # 只保留已登记的兵种并去重，旧配置或手改数据库不会带入未知名字。
@@ -905,6 +948,7 @@ class 机器人设置:
             ("刷墙资源阈值比例", 90, 50, 100),
             ("单次顺手刷墙上限", 2, 1, 2),
             ("模型空闲释放秒数", 600, 0, 86400),
+            ("异常现场保留份数", 30, 0, 500),
         ):
             数值 = self._安全整型(getattr(self, 字段名), 默认值)
             setattr(self, 字段名, max(最小值, min(最大值, 数值)))
@@ -1338,6 +1382,22 @@ class 任务数据库:
             conn.execute(
                 "DELETE FROM 系统配置 WHERE 配置键 = ?",
                 ("协议已同意",)
+            )
+            conn.commit()
+
+    def 读取系统配置(self, 配置键: str, 默认值: Optional[str] = None) -> Optional[str]:
+        """读取一条全局配置（字符串）；不存在时返回默认值。"""
+        with self._获取连接() as conn:
+            结果 = conn.execute(
+                "SELECT 配置值 FROM 系统配置 WHERE 配置键 = ?", (str(配置键),)
+            ).fetchone()
+        return 结果[0] if 结果 is not None else 默认值
+
+    def 保存系统配置(self, 配置键: str, 配置值: str) -> None:
+        with self._获取连接() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO 系统配置 VALUES (?, ?, ?)",
+                (str(配置键), str(配置值), time.time()),
             )
             conn.commit()
 
