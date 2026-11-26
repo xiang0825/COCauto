@@ -346,9 +346,38 @@ class 日常面板任务基类:
         if self.已停止():
             self.日志(f"{说明}：已收到停止信号，不再点击")
             return False
-        if self.上下文.点击(int(x), int(y), 是否精确点击=True) is False:
+        # 上下文.点击 在真正触控前还会截图识别危险页（可能耗时），停止信号可能
+        # 恰好落在这段空档里：临时给鼠标安全回调串上停止检查，在设备触控前
+        # 最后一刻再判一次，停止即阻断。点完立即还原原回调。
+        鼠标 = getattr(self.上下文, "鼠标", None)
+        可挂钩 = 鼠标 is not None and hasattr(鼠标, "_安全点击检查回调")
+        原回调 = getattr(鼠标, "_安全点击检查回调", None) if 可挂钩 else None
+        最后一刻停止 = []
+
+        def 停止或原回调() -> bool:
+            if self.已停止():
+                最后一刻停止.append(True)
+                return True
+            return bool(原回调()) if callable(原回调) else False
+
+        if 可挂钩:
+            鼠标._安全点击检查回调 = 停止或原回调
+        try:
+            if self.已停止():
+                self.日志(f"{说明}：已收到停止信号，不再点击")
+                return False
+            结果 = self.上下文.点击(int(x), int(y), 是否精确点击=True)
+        finally:
+            if 可挂钩:
+                鼠标._安全点击检查回调 = 原回调
+        if 最后一刻停止 or (结果 is False and self.已停止()):
+            self.日志(f"{说明}：发送触控前收到停止信号，已阻断")
+            return False
+        if 结果 is False:
             self.日志(f"{说明}：点击被安全输入层拒绝")
             return False
+        if self.已停止():
+            return True  # 这一下已经发出；停止后不再等待，后续由调用方停止
         延时 = getattr(self.上下文, "脚本延时", None)
         等待 = int(self.参数.get("点击后等待毫秒", 700)) if 等待毫秒 is None else int(等待毫秒)
         if callable(延时) and 等待 > 0:

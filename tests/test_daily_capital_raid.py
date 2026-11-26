@@ -404,6 +404,119 @@ class 剩余次数读不出测试(unittest.TestCase):
         self.assertTrue(任务.执行())
         self.assertEqual(日常公共.读取任务记录(ctx.数据库, "t", "capital_raid")["读不出次数"], 0)
 
+    @staticmethod
+    def _一轮(数据库, 读法):
+        """跑一轮；读法(第几次读) 返回 True 表示这次能读到剩余次数。"""
+        任务, ctx, 游戏 = 构造(剩余=6)
+        if 数据库 is not None:
+            ctx.数据库 = 任务.数据库 = 数据库
+        记录 = 日常公共.读取任务记录(ctx.数据库, "t", "capital_raid")
+        if 记录:
+            记录["下次检查时间"] = 0
+            日常公共.写入任务记录(ctx.数据库, "t", "capital_raid", 记录)
+        原OCR = 任务.OCR
+        计数 = [0]
+
+        def OCR(图, 区域):
+            if tuple(区域) == tuple(任务.参数["剩余次数区域"]):
+                计数[0] += 1
+                if not 读法(计数[0]):
+                    return []
+            return 原OCR(图, 区域)
+
+        任务.OCR = OCR
+        任务.执行()
+        return ctx.数据库, 日常公共.读取任务记录(ctx.数据库, "t", "capital_raid"), ctx
+
+    def test_同一轮先读到后读不出不写成0(self):
+        # 屁股复现：本轮第一次读到并出击，第二次读不出 → 不能被粘性“已读到”清成 0。
+        数据库, 记录, _ = self._一轮(None, lambda 第: 第 == 1)
+        self.assertEqual(记录["出击次数"], 1)
+        self.assertEqual(记录["读不出次数"], 1)
+
+    def test_成功后连续三次读失败放弃且失败从不写0(self):
+        数据库, 记录, _ = self._一轮(None, lambda 第: True)
+        self.assertEqual(记录["读不出次数"], 0)
+        期望 = 1
+        for _ in range(3):
+            数据库, 记录, ctx = self._一轮(数据库, lambda 第: False)
+            self.assertEqual(记录["读不出次数"], 期望)
+            self.assertNotEqual(记录["读不出次数"], 0)
+            self.assertEqual(记录["次数用完"], 期望 >= 3)
+            期望 += 1
+        self.assertTrue(any("放弃本周末" in str(c.args[0]) for c in ctx.置脚本状态.call_args_list))
+
+    def test_读到又读不出再跨轮累计到上限(self):
+        数据库, 记录, _ = self._一轮(None, lambda 第: 第 == 1)
+        self.assertEqual(记录["读不出次数"], 1)
+        数据库, 记录, _ = self._一轮(数据库, lambda 第: False)
+        self.assertEqual(记录["读不出次数"], 2)
+        数据库, 记录, _ = self._一轮(数据库, lambda 第: False)
+        self.assertEqual(记录["读不出次数"], 3)
+        self.assertTrue(记录["次数用完"])
+
+
+class 点击前最后一刻停止测试(unittest.TestCase):
+    def test_护栏通过后点击前置位停止零点击(self):
+        任务, ctx, 游戏 = 构造()
+        原护栏 = 任务.点击前护栏
+
+        def 护栏后停止(图, 区域, 说明):
+            结果 = 原护栏(图, 区域, 说明)
+            ctx.停止事件 = SimpleNamespace(is_set=lambda: True)
+            return 结果
+
+        任务.点击前护栏 = 护栏后停止
+        游戏.页面 = "战斗"
+        self.assertEqual(任务._战斗中安全点击((100, 560), 30, 30, "选中兵种", None), "停止")
+        ctx.点击.assert_not_called()
+
+    def test_上下文点击识别期间停止_设备零触控且回调还原(self):
+        from 核心.鼠标操作 import 鼠标控制器
+
+        设备 = SimpleNamespace(触控=Mock(return_value=True), 滑动=Mock())
+        鼠标 = 鼠标控制器(设备)
+        原回调 = Mock(return_value=False)
+        鼠标._安全点击检查回调 = 原回调
+        任务, ctx, _ = 构造()
+        ctx.鼠标 = 鼠标
+
+        def 框架点击(x, y, **k):
+            # 模拟 上下文.点击 先截图识别危险页（耗时），期间停止信号到达，再下发触控。
+            ctx.停止事件 = SimpleNamespace(is_set=lambda: True)
+            鼠标.移动到(x, y)
+            return 鼠标.左键点击()
+
+        ctx.点击 = Mock(side_effect=框架点击)
+        self.assertFalse(任务.点击(100, 560, "选中兵种"))
+        设备.触控.assert_not_called()
+        self.assertIs(鼠标._安全点击检查回调, 原回调)
+        self.assertTrue(any("停止信号" in str(c.args[0]) for c in ctx.置脚本状态.call_args_list))
+
+    def test_未停止时原安全回调仍生效且正常触控(self):
+        from 核心.鼠标操作 import 鼠标控制器
+
+        设备 = SimpleNamespace(触控=Mock(return_value=True), 滑动=Mock())
+        鼠标 = 鼠标控制器(设备)
+        原回调 = Mock(return_value=False)
+        鼠标._安全点击检查回调 = 原回调
+        任务, ctx, _ = 构造()
+        ctx.鼠标 = 鼠标
+
+        def 框架点击(x, y, **k):
+            鼠标.移动到(x, y)
+            return 鼠标.左键点击()
+
+        ctx.点击 = Mock(side_effect=框架点击)
+        self.assertTrue(任务.点击(100, 560, "选中兵种"))
+        设备.触控.assert_called_once_with(100, 560)
+        原回调.assert_called_once()
+        self.assertIs(鼠标._安全点击检查回调, 原回调)
+        # 原回调要求阻断时照样阻断
+        原回调.return_value = True
+        self.assertFalse(任务.点击(100, 560, "选中兵种"))
+        self.assertEqual(设备.触控.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
