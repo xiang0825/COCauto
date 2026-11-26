@@ -285,7 +285,49 @@ class 实机截图回放测试(unittest.TestCase):
 
 
 
-def _添加已知页面识别失败用例(样本ID: str) -> None:
+    def test_活动列表与部落竞赛全套实机截图不误判为升级详情弹窗(self):
+        根目录 = 测试目录.parent
+        竞赛目录 = 根目录 / "docs" / "实测" / "部落竞赛-2026-11-24"
+        期望映射 = {
+            "01_主页_活动按钮.jpg": "主世界主页",
+            "02_活动列表_部落竞赛开启.jpg": "活动弹窗",
+            "03_竞赛面板_个人积分.jpg": "部落竞赛面板",
+            "04_详情_掠夺金币.jpg": "部落竞赛任务详情",
+            "05_详情_掠夺黑油.jpg": "部落竞赛任务详情",
+            "06_详情_夜世界_不接.jpg": "部落竞赛任务详情",
+            "07_点开始后.jpg": "部落竞赛任务详情",
+            "08_已接任务_放弃按钮_不点.jpg": "部落竞赛任务详情",
+            "09_再次打开_其余卡变灰_判定已有任务.jpg": "部落竞赛面板",
+            "10_空白点复核_弹窗打开.jpg": "部落竞赛任务详情",
+            "11_空白点160x500_弹窗已关闭_卡片已重排.jpg": "部落竞赛面板",
+            "12_第二页_13张卡_固定坐标会点空.jpg": "部落竞赛面板",
+        }
+        for 文件名, 预期页面 in 期望映射.items():
+            路径 = 竞赛目录 / 文件名
+            if not 路径.exists():
+                continue
+            with self.subTest(截图=文件名):
+                图像 = 读取截图(路径)
+                实际 = self.页面识别器.识别(图像, 战斗中=False)
+                self.assertEqual(实际.页面, 预期页面, 实际.摘要())
+                self.assertNotEqual(实际.页面, "升级详情弹窗", 实际.摘要())
+                if 预期页面 == "活动弹窗":
+                    self.assertIsNotNone(
+                        self.页面识别器.定位活动弹窗关闭按钮(图像)
+                    )
+                    self.assertIsNone(
+                        self.页面识别器._升级详情弹窗关闭点(图像)
+                    )
+                elif 预期页面 in {"部落竞赛面板", "部落竞赛任务详情"}:
+                    self.assertIsNotNone(
+                        self.页面识别器.定位部落竞赛关闭按钮(图像)
+                    )
+                    self.assertIsNone(
+                        self.页面识别器._升级详情弹窗关闭点(图像)
+                    )
+
+
+def _添加页面识别回归用例(样本ID: str) -> None:
     def 检查(self):
         标注 = 样本表[样本ID]["expected"]
         实际 = self.页面识别器.识别(读取样本(样本ID))
@@ -294,9 +336,10 @@ def _添加已知页面识别失败用例(样本ID: str) -> None:
             (标注["page"], 标注["world"]),
             实际.摘要(),
         )
+        self.assertNotEqual(实际.页面, "升级详情弹窗", 实际.摘要())
 
     检查.__name__ = f"test_页面识别_{样本ID}"
-    setattr(实机截图回放测试, 检查.__name__, unittest.expectedFailure(检查))
+    setattr(实机截图回放测试, 检查.__name__, 检查)
 
 
 def _添加已知结算世界识别失败用例(样本ID: str) -> None:
@@ -332,7 +375,7 @@ def _添加星数回归用例(样本ID: str) -> None:
 
 
 for _样本ID in ("clan_games_panel", "clan_games_gold_task"):
-    _添加已知页面识别失败用例(_样本ID)
+    _添加页面识别回归用例(_样本ID)
 
 for _样本ID in 结算样本ID:
     _添加已知结算世界识别失败用例(_样本ID)

@@ -513,6 +513,229 @@ class 页面识别器:
         """仅在已确认卡片弹窗时返回右上角关闭点。"""
         return self._选择卡片弹窗关闭点(图像)
 
+    @staticmethod
+    def _查找顶部红色关闭X(
+        图像: np.ndarray,
+        hsv: np.ndarray,
+        *,
+        x最小比例: float = 0.80,
+        x最大比例: float = 0.95,
+        y最小比例: float = 0.02,
+        y最大比例: float = 0.16,
+    ) -> tuple[int, int] | None:
+        """定位弹窗右上角带白色 X 的红色关闭按钮。"""
+        高, 宽 = 图像.shape[:2]
+        色相 = hsv[:, :, 0]
+        红色 = (
+            ((色相 <= 15) | (色相 >= 165))
+            & (hsv[:, :, 1] >= 100)
+            & (hsv[:, :, 2] >= 100)
+        ).astype(np.uint8)
+        x起点 = max(0, int(宽 * (x最小比例 - 0.03)))
+        x终点 = min(宽, int(宽 * (x最大比例 + 0.03)))
+        y终点 = min(高, int(高 * (y最大比例 + 0.05)))
+        区域 = cv2.morphologyEx(
+            红色[:y终点, x起点:x终点],
+            cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
+        )
+        if 区域.size == 0:
+            return None
+        _, _, 统计, 重心 = cv2.connectedComponentsWithStats(区域, 8)
+        灰度 = cv2.cvtColor(图像, cv2.COLOR_BGR2GRAY)
+        候选 = []
+        for 序号 in range(1, len(统计)):
+            x, y, 方宽, 方高, 面积 = [int(值) for 值 in 统计[序号]]
+            中心x, 中心y = [float(值) for 值 in 重心[序号]]
+            全局中心x = 中心x + x起点
+            全局中心y = 中心y
+            if not (
+                宽 * x最小比例 <= 全局中心x <= 宽 * x最大比例
+                and 高 * y最小比例 <= 全局中心y <= 高 * y最大比例
+                and 宽 * 0.025 <= 方宽 <= 宽 * 0.10
+                and 高 * 0.035 <= 方高 <= 高 * 0.16
+                and 面积 >= max(12, int(方宽 * 方高 * 0.20))
+            ):
+                continue
+            左x = max(0, x起点 + x)
+            上y = max(0, y)
+            右x = min(宽, 左x + 方宽)
+            下y = min(高, 上y + 方高)
+            白色X = (
+                (hsv[上y:下y, 左x:右x, 1] < 110)
+                & (灰度[上y:下y, 左x:右x] > 175)
+            )
+            if int(np.count_nonzero(白色X)) < max(10, int(方宽 * 方高 * 0.02)):
+                continue
+            候选.append((面积, 全局中心x, 全局中心y))
+        if not 候选:
+            return None
+        _, 中心x, 中心y = max(候选, key=lambda 项: 项[0])
+        return int(round(中心x)), int(round(中心y))
+
+    @staticmethod
+    def _存在部落竞赛详情框(hsv: np.ndarray, 宽: int, 高: int) -> bool:
+        """检测部落竞赛面板中展开的任务详情金色外框 + 浅色内底。"""
+        左 = int(宽 * 0.15)
+        上 = int(高 * 0.15)
+        右 = int(宽 * 0.875)
+        下 = int(高 * 0.80)
+        区域 = hsv[上:下, 左:右]
+        if 区域.size == 0:
+            return False
+        金色框 = (
+            (区域[:, :, 0] >= 14)
+            & (区域[:, :, 0] <= 34)
+            & (区域[:, :, 1] >= 75)
+            & (区域[:, :, 2] >= 120)
+        ).astype(np.uint8)
+        金色框 = cv2.morphologyEx(
+            金色框,
+            cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)),
+        )
+        _, _, 统计, _ = cv2.connectedComponentsWithStats(金色框, 8)
+        最小面积 = max(2000, int(宽 * 高 * 0.012))
+        for 序号 in range(1, len(统计)):
+            x, y, 方宽, 方高, 面积 = [int(值) for 值 in 统计[序号]]
+            if not (
+                宽 * 0.23 <= 方宽 <= 宽 * 0.45
+                and 高 * 0.28 <= 方高 <= 高 * 0.65
+                and 面积 >= 最小面积
+            ):
+                continue
+            内区 = 区域[
+                y + int(方高 * 0.15):y + int(方高 * 0.85),
+                x + int(方宽 * 0.10):x + int(方宽 * 0.90),
+            ]
+            if 内区.size == 0:
+                continue
+            浅色比例 = float(np.mean((内区[:, :, 1] <= 35) & (内区[:, :, 2] >= 205)))
+            if 浅色比例 >= 0.35:
+                return True
+        return False
+
+    def _检测部落竞赛面板状态(
+        self, 图像: np.ndarray
+    ) -> tuple[str, tuple[int, int]] | None:
+        """识别部落竞赛主面板与任务详情弹窗，防止误判为升级详情弹窗。"""
+        if not isinstance(图像, np.ndarray) or 图像.ndim != 3 or 图像.size == 0:
+            return None
+        try:
+            高, 宽 = 图像.shape[:2]
+            if 高 < 120 or 宽 < 240:
+                return None
+            hsv = cv2.cvtColor(图像, cv2.COLOR_BGR2HSV)
+            旗帜区 = hsv[
+                int(高 * 0.025):int(高 * 0.292),
+                int(宽 * 0.106):int(宽 * 0.275),
+            ]
+            进度条区 = hsv[
+                int(高 * 0.742):int(高 * 0.900),
+                int(宽 * 0.275):int(宽 * 0.900),
+            ]
+            卡片白底区 = hsv[
+                int(高 * 0.158):int(高 * 0.733),
+                int(宽 * 0.275):int(宽 * 0.888),
+            ]
+            if 旗帜区.size == 0 or 进度条区.size == 0 or 卡片白底区.size == 0:
+                return None
+            蓝旗比例 = float(np.mean(
+                (旗帜区[:, :, 0] >= 95)
+                & (旗帜区[:, :, 0] <= 130)
+                & (旗帜区[:, :, 1] >= 120)
+                & (旗帜区[:, :, 2] >= 110)
+            ))
+            蓝条比例 = float(np.mean(
+                (进度条区[:, :, 0] >= 95)
+                & (进度条区[:, :, 0] <= 130)
+                & (进度条区[:, :, 1] >= 100)
+                & (进度条区[:, :, 2] >= 100)
+            ))
+            白卡比例 = float(np.mean(
+                (卡片白底区[:, :, 1] <= 35) & (卡片白底区[:, :, 2] >= 205)
+            ))
+            if 蓝旗比例 < 0.35 or 蓝条比例 < 0.22 or 白卡比例 < 0.25:
+                return None
+            关闭点 = self._查找顶部红色关闭X(
+                图像, hsv, x最小比例=0.82, x最大比例=0.95, y最小比例=0.02, y最大比例=0.16
+            )
+            if 关闭点 is None:
+                return None
+            页面 = (
+                "部落竞赛任务详情"
+                if self._存在部落竞赛详情框(hsv, 宽, 高)
+                else "部落竞赛面板"
+            )
+            return 页面, 关闭点
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return None
+
+    def 定位部落竞赛关闭按钮(self, 图像: np.ndarray) -> tuple[int, int] | None:
+        """仅在已确认部落竞赛面板或任务详情时返回右上角关闭点。"""
+        结果 = self._检测部落竞赛面板状态(图像)
+        return 结果[1] if 结果 is not None else None
+
+    def _检测活动弹窗关闭点(self, 图像: np.ndarray) -> tuple[int, int] | None:
+        """识别主世界活动列表/活动弹窗，避免白亮活动内容+红X误触发升级详情。"""
+        if not isinstance(图像, np.ndarray) or 图像.ndim != 3 or 图像.size == 0:
+            return None
+        if self._检测部落竞赛面板状态(图像) is not None:
+            return None
+        try:
+            高, 宽 = 图像.shape[:2]
+            if 高 < 120 or 宽 < 240:
+                return None
+            hsv = cv2.cvtColor(图像, cv2.COLOR_BGR2HSV)
+            关闭点 = self._查找顶部红色关闭X(
+                图像, hsv, x最小比例=0.78, x最大比例=0.87, y最小比例=0.02, y最大比例=0.16
+            )
+            if 关闭点 is None:
+                return None
+            左暗区 = hsv[int(高 * 0.18):int(高 * 0.85), :int(宽 * 0.14), 2]
+            右暗区 = hsv[int(高 * 0.18):int(高 * 0.85), int(宽 * 0.86):, 2]
+            中间面板 = hsv[int(高 * 0.15):int(高 * 0.88), int(宽 * 0.17):int(宽 * 0.83), 2]
+            if 左暗区.size == 0 or 右暗区.size == 0 or 中间面板.size == 0:
+                return None
+            左暗均亮 = float(np.mean(左暗区))
+            右暗均亮 = float(np.mean(右暗区))
+            面板均亮 = float(np.mean(中间面板))
+            if (
+                左暗均亮 > 95.0
+                or 右暗均亮 > 95.0
+                or 面板均亮 < 145.0
+                or 面板均亮 - max(左暗均亮, 右暗均亮) < 50.0
+            ):
+                return None
+            动作区 = hsv[
+                int(高 * 0.20):int(高 * 0.90),
+                int(宽 * 0.63):int(宽 * 0.83),
+            ]
+            if 动作区.size == 0:
+                return None
+            绿色 = (
+                (动作区[:, :, 0] >= 35)
+                & (动作区[:, :, 0] <= 80)
+                & (动作区[:, :, 1] >= 100)
+                & (动作区[:, :, 2] >= 100)
+            ).astype(np.uint8)
+            绿色 = cv2.morphologyEx(
+                绿色,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)),
+            )
+            _, _, 绿统计, _ = cv2.connectedComponentsWithStats(绿色, 8)
+            最小绿面积 = max(800, int(宽 * 高 * 0.004))
+            if not any(int(项[4]) >= 最小绿面积 for 项 in 绿统计[1:]):
+                return None
+            return 关闭点
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return None
+
+    def 定位活动弹窗关闭按钮(self, 图像: np.ndarray) -> tuple[int, int] | None:
+        """仅在已确认活动弹窗时返回右上角关闭点。"""
+        return self._检测活动弹窗关闭点(图像)
+
     def _升级详情弹窗关闭点(self, 图像: np.ndarray) -> tuple[int, int] | None:
         """识别升级详情面板的安全右上角关闭 X。
 
@@ -523,6 +746,11 @@ class 页面识别器:
         是否属于英雄详情，交给任务上下文的 OCR 安全护栏复核。
         """
         if not isinstance(图像, np.ndarray) or 图像.ndim != 3 or 图像.size == 0:
+            return None
+        if (
+            self._检测部落竞赛面板状态(图像) is not None
+            or self._检测活动弹窗关闭点(图像) is not None
+        ):
             return None
         try:
             高, 宽 = 图像.shape[:2]
@@ -544,51 +772,9 @@ class 页面识别器:
             if 支持度 < 0.60:
                 return None
 
-            色相 = hsv[:, :, 0]
-            红色 = (
-                ((色相 <= 15) | (色相 >= 165))
-                & (hsv[:, :, 1] >= 100)
-                & (hsv[:, :, 2] >= 100)
-            ).astype(np.uint8)
-            x起点, x终点 = int(宽 * 0.80), int(宽 * 0.95)
-            y终点 = int(高 * 0.20)
-            区域 = cv2.morphologyEx(
-                红色[:y终点, x起点:x终点],
-                cv2.MORPH_CLOSE,
-                cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
+            return self._查找顶部红色关闭X(
+                图像, hsv, x最小比例=0.83, x最大比例=0.95, y最小比例=0.02, y最大比例=0.16
             )
-            _, _, 统计, 重心 = cv2.connectedComponentsWithStats(区域, 8)
-            候选 = []
-            for 序号 in range(1, len(统计)):
-                x, y, 方宽, 方高, 面积 = [int(值) for 值 in 统计[序号]]
-                中心x, 中心y = [float(值) for 值 in 重心[序号]]
-                全局x = x + x起点
-                全局中心x = 中心x + x起点
-                全局中心y = 中心y
-                if not (
-                    宽 * 0.82 <= 全局中心x <= 宽 * 0.95
-                    and 高 * 0.02 <= 全局中心y <= 高 * 0.16
-                    and 宽 * 0.025 <= 方宽 <= 宽 * 0.10
-                    and 高 * 0.035 <= 方高 <= 高 * 0.16
-                    and 面积 >= max(12, int(方宽 * 方高 * 0.20))
-                ):
-                    continue
-                左x = max(0, x起点 + x)
-                上y = max(0, y)
-                右x = min(宽, 左x + 方宽)
-                下y = min(高, 上y + 方高)
-                灰度 = cv2.cvtColor(图像, cv2.COLOR_BGR2GRAY)
-                白色X = (
-                    (hsv[上y:下y, 左x:右x, 1] < 110)
-                    & (灰度[上y:下y, 左x:右x] > 175)
-                )
-                if int(np.count_nonzero(白色X)) < max(10, int(方宽 * 方高 * 0.02)):
-                    continue
-                候选.append((面积, 全局x, 全局中心x, 全局中心y))
-            if not 候选:
-                return None
-            _, _, 中心x, 中心y = max(候选, key=lambda 项: 项[0])
-            return int(round(中心x)), int(round(中心y))
         except (AttributeError, TypeError, ValueError, cv2.error):
             return None
 
@@ -1488,6 +1674,36 @@ class 页面识别器:
                     世界=None,
                     可信度=选择卡片分数,
                     依据=(f"中央红色卡片+右上角关闭X{选择卡片分数:.2f}",),
+                )
+        竞赛识别 = self._检测部落竞赛面板状态(屏幕图像)
+        if 竞赛识别 is not None:
+            竞赛页面, _ = 竞赛识别
+            try:
+                世界结果 = self.世界识别.识别(屏幕图像)
+                当前世界 = getattr(世界结果, "当前世界", None) or "主世界"
+            except Exception:
+                当前世界 = "主世界"
+            依据 = (
+                "部落竞赛蓝色旗帜与底部进度条",
+                "金色任务详情框" if 竞赛页面 == "部落竞赛任务详情" else "右上角红色关闭X",
+            )
+            return 页面识别结果(
+                页面=竞赛页面,
+                世界=当前世界,
+                可信度=0.97,
+                依据=依据,
+            )
+        if self._检测活动弹窗关闭点(屏幕图像) is not None:
+            强战斗证据 = (
+                self._红色放弃按钮分数(屏幕图像) >= 0.90
+                and self._战斗倒计时分数(屏幕图像) >= 0.90
+            )
+            if not 强战斗证据:
+                return 页面识别结果(
+                    页面="活动弹窗",
+                    世界=None,
+                    可信度=0.95,
+                    依据=("居中高亮度活动列表", "右侧绿色入口", "右上角红色关闭X"),
                 )
         升级详情分数 = self._升级详情弹窗分数(屏幕图像)
         if 升级详情分数 >= 0.90:

@@ -106,6 +106,7 @@ class 升级普通建筑任务(基础任务):
                     self._安全关闭当前建筑面板()
                     return False
 
+                self.上下文._最近存在合法消耗 = True
                 return True
             else:
                 # 新版国际服的升级卡片图标会随分辨率/主题缩放，旧锤子
@@ -147,6 +148,7 @@ class 升级普通建筑任务(基础任务):
                     self.安全跳过 = True
                     self._安全关闭当前建筑面板()
                     return False
+                self.上下文._最近存在合法消耗 = True
                 return True
 
         except 升级按钮定位失败错误 as e:

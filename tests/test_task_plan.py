@@ -1954,5 +1954,232 @@ class 任务计划测试(unittest.TestCase):
         上下文.请求任务计划等待.assert_called_once()
 
 
+class 满仓内层调度与净变化防护测试(unittest.TestCase):
+    def _构造记忆数据库(self, 初始家乡资源):
+        状态数据 = {"家乡资源": dict(初始家乡资源)}
+        记录历史 = []
+
+        def 更新状态(_标志, 键, 值):
+            if 值 is None:
+                状态数据.pop(键, None)
+            else:
+                状态数据[键] = dict(值) if isinstance(值, dict) else 值
+            记录历史.append((键, 值))
+
+        return (
+            SimpleNamespace(
+                获取最新完整状态=Mock(side_effect=lambda _标志: SimpleNamespace(状态数据=dict(状态数据))),
+                获取近期家乡资源峰值=Mock(return_value={}),
+                更新状态=Mock(side_effect=更新状态),
+            ),
+            状态数据,
+            记录历史,
+        )
+
+    def test_无消耗战后大幅负跳变恢复战前快照且禁止写入净变化(self):
+        战前 = {"金币": 20_000_000, "圣水": 20_000_000, "黑油": 200_000, "识别成功": True}
+        战后错读 = {"金币": 15_000_000, "圣水": 20_100_000, "黑油": 201_000, "识别成功": True}
+        数据库, 状态数据, 记录历史 = self._构造记忆数据库(战前)
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.机器人标志 = "测试机器人"
+        机器人.停止事件 = threading.Event()
+        机器人.数据库 = SimpleNamespace(
+            获取机器人设置=Mock(return_value=机器人设置(资源打满后动作="继续打鱼"))
+        )
+        机器人._进入并确认主世界 = Mock(return_value=True)
+        机器人._断线时恢复游戏连接 = Mock(return_value=True)
+        机器人._清理残留英雄升级详情 = Mock(return_value=True)
+        机器人._记录进程资源趋势 = Mock(return_value=False)
+        机器人._记录阵容收益 = Mock()
+
+        上下文 = SimpleNamespace(
+            机器人标志="测试机器人",
+            数据库=数据库,
+            设置=机器人设置(资源打满后动作="继续打鱼"),
+            停止事件=机器人.停止事件,
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            本场阵容签名="test_army",
+        )
+
+        # 第1次(战前)返回战前，第2次(战后)写入战后错读，并在第2次资源读取后停止下一轮。
+        def 模拟更新资源(_ctx):
+            次数 = getattr(模拟更新资源, "n", 0) + 1
+            模拟更新资源.n = 次数
+            if 次数 == 1:
+                数据库.更新状态("测试机器人", "家乡资源", 战前)
+                return SimpleNamespace(执行=Mock(return_value=True))
+            def 战后错读执行():
+                数据库.更新状态("测试机器人", "家乡资源", 战后错读)
+                机器人.停止事件.set()
+                return True
+            return SimpleNamespace(执行=Mock(side_effect=战后错读执行))
+
+        with patch("线程.自动化机器人.收集资源任务", return_value=SimpleNamespace(执行=Mock(return_value=True))), \
+             patch("线程.自动化机器人.更新家乡资源状态任务", side_effect=模拟更新资源), \
+             patch("线程.自动化机器人.主世界打鱼任务", return_value=SimpleNamespace(执行=Mock(return_value=True))):
+            机器人._执行主世界刷资源计划(上下文, SimpleNamespace(执行=Mock(return_value=True)))
+
+        self.assertFalse(any(键 == "战斗资源分析" for 键, _ in 记录历史))
+        机器人._记录阵容收益.assert_not_called()
+        self.assertTrue(上下文._资源待校准)
+        self.assertEqual(状态数据["家乡资源"]["金币"], 战前["金币"])
+
+    def test_正常正收益战斗照常写入净变化并记录阵容收益(self):
+        战前 = {"金币": 20_000_000, "圣水": 20_000_000, "黑油": 200_000, "识别成功": True}
+        战后 = {"金币": 20_800_000, "圣水": 20_500_000, "黑油": 205_000, "识别成功": True}
+        数据库, 状态数据, 记录历史 = self._构造记忆数据库(战前)
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.机器人标志 = "测试机器人"
+        机器人.停止事件 = threading.Event()
+        机器人.数据库 = SimpleNamespace(
+            获取机器人设置=Mock(return_value=机器人设置(资源打满后动作="继续打鱼"))
+        )
+        机器人._进入并确认主世界 = Mock(return_value=True)
+        机器人._断线时恢复游戏连接 = Mock(return_value=True)
+        机器人._清理残留英雄升级详情 = Mock(return_value=True)
+        机器人._记录进程资源趋势 = Mock(return_value=False)
+        机器人._记录阵容收益 = Mock()
+
+        上下文 = SimpleNamespace(
+            机器人标志="测试机器人",
+            数据库=数据库,
+            设置=机器人设置(资源打满后动作="继续打鱼"),
+            停止事件=机器人.停止事件,
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            本场阵容签名="test_army",
+        )
+
+        def 模拟更新资源(_ctx):
+            次数 = getattr(模拟更新资源, "n", 0) + 1
+            模拟更新资源.n = 次数
+            if 次数 == 1:
+                return SimpleNamespace(执行=Mock(return_value=True))
+            def 战后执行():
+                数据库.更新状态("测试机器人", "家乡资源", 战后)
+                机器人.停止事件.set()
+                return True
+            return SimpleNamespace(执行=Mock(side_effect=战后执行))
+
+        with patch("线程.自动化机器人.收集资源任务", return_value=SimpleNamespace(执行=Mock(return_value=True))), \
+             patch("线程.自动化机器人.更新家乡资源状态任务", side_effect=模拟更新资源), \
+             patch("线程.自动化机器人.主世界打鱼任务", return_value=SimpleNamespace(执行=Mock(return_value=True))):
+            机器人._执行主世界刷资源计划(上下文, SimpleNamespace(执行=Mock(return_value=True)))
+
+        分析列表 = [值 for 键, 值 in 记录历史 if 键 == "战斗资源分析"]
+        self.assertEqual(len(分析列表), 1)
+        self.assertEqual(分析列表[0]["本场净变化"], {"金币": 800_000, "圣水": 500_000, "黑油": 5_000})
+        机器人._记录阵容收益.assert_called_once()
+
+    def test_内层循环周期调用进程观测并在仅主资源或未到期时流畅连打到期后安全让出(self):
+        战前 = {"金币": 31_000_000, "圣水": 31_000_000, "黑油": 500_000, "识别成功": True}
+        数据库, _, _ = self._构造记忆数据库(战前)
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.机器人标志 = "测试机器人"
+        机器人.停止事件 = threading.Event()
+        机器人.数据库 = SimpleNamespace(
+            获取机器人设置=Mock(return_value=机器人设置(资源打满后动作="继续打鱼"))
+        )
+        机器人._进入并确认主世界 = Mock(return_value=True)
+        机器人._断线时恢复游戏连接 = Mock(return_value=True)
+        机器人._清理残留英雄升级详情 = Mock(return_value=True)
+        机器人._记录进程资源趋势 = Mock(return_value=True)
+
+        import time as _time
+        上下文 = SimpleNamespace(
+            机器人标志="测试机器人",
+            数据库=数据库,
+            设置=机器人设置(资源打满后动作="继续打鱼"),
+            停止事件=机器人.停止事件,
+            页面恢复失败=False,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            _启用任务键集合=frozenset({"building", "main_resource"}),
+            _任务计划当前顺序=("building", "main_resource"),
+            _本轮已完成任务键={"building"},
+            _外层任务下次检查时间={"building": _time.monotonic() + 600.0},
+        )
+
+        # 第1场完成时 building 仍未到期 -> 不让出继续第2场；第2场开始后让 building 到期 -> 安全让出并跳过后续循环。
+        战斗场次 = 0
+
+        def 模拟战斗():
+            nonlocal 战斗场次
+            战斗场次 += 1
+            if 战斗场次 == 2:
+                上下文._外层任务下次检查时间["building"] = _time.monotonic() - 1.0
+            return True
+
+        with patch("线程.自动化机器人.收集资源任务", return_value=SimpleNamespace(执行=Mock(return_value=True))), \
+             patch("线程.自动化机器人.更新家乡资源状态任务", return_value=SimpleNamespace(执行=Mock(return_value=True))), \
+             patch("线程.自动化机器人.主世界打鱼任务", return_value=SimpleNamespace(执行=Mock(side_effect=模拟战斗))):
+            结果 = 机器人._执行主世界刷资源计划(上下文, SimpleNamespace(执行=Mock(return_value=True)))
+
+        self.assertTrue(结果)
+        self.assertEqual(战斗场次, 2)
+        self.assertTrue(上下文._内层让出外层调度)
+        self.assertFalse(上下文._资源计划已打满)
+        self.assertGreaterEqual(机器人._记录进程资源趋势.call_count, 2)
+
+        # 仅开 main_resource 时永不因其他任务让出（可连续打到停止）。
+        上下文2 = SimpleNamespace(
+            _启用任务键集合=frozenset({"main_resource"}),
+            _任务计划当前顺序=("main_resource",),
+        )
+        self.assertIsNone(机器人._存在已到检查点的外层任务(上下文2))
+
+    def test_外层任务循环在主世界让出后立即调度到期任务并记录冷却(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.机器人标志 = "测试机器人"
+        机器人.停止事件 = threading.Event()
+        机器人.停止原因 = ""
+        设置 = 机器人设置(资源打满后动作="继续打鱼")
+        机器人.数据库 = SimpleNamespace(获取机器人设置=Mock(return_value=设置))
+        上下文 = SimpleNamespace(
+            页面恢复失败=False,
+            发送企业微信通知=Mock(),
+            置脚本状态=Mock(),
+            释放识别模型=Mock(),
+            op=SimpleNamespace(安全清理=Mock()),
+            脚本延时=Mock(),
+        )
+        机器人._初始化任务上下文 = Mock(return_value=(设置, 上下文, None))
+        机器人._同步官方账号数据 = Mock(return_value=None)
+        机器人._任务计划顺序 = Mock(return_value=["main_resource", "building"])
+        机器人._接管启动时战斗 = Mock(return_value=True)
+        执行序列 = []
+
+        def 模拟执行项(任务键, ctx, _检测):
+            执行序列.append(任务键)
+            if 任务键 == "main_resource" and 执行序列.count("main_resource") == 1:
+                ctx._内层让出外层调度 = True
+                return True, False
+            if 任务键 == "building":
+                ctx._本项请求等待秒 = 600.0
+                return True, False
+            if 任务键 == "main_resource" and 执行序列.count("main_resource") == 2:
+                机器人.停止事件.set()
+                return True, False
+            return True, False
+
+        机器人._执行任务计划项 = Mock(side_effect=模拟执行项)
+
+        with patch("线程.自动化机器人.检测游戏登录状态任务") as 检测登录, \
+             patch("线程.自动化机器人.启动模拟器任务") as 启动模拟器, \
+             patch("线程.自动化机器人.检查图像任务") as 检查图像:
+            检测登录.return_value.执行.return_value = True
+            启动模拟器.return_value.执行.return_value = True
+            检查图像.return_value.执行.return_value = True
+            机器人._任务流程()
+
+        self.assertEqual(执行序列, ["main_resource", "building", "main_resource"])
+        self.assertIn("building", 上下文._外层任务下次检查时间)
+        # main_resource 第1轮让出后，第2轮应立即开始，不得因 building 的 600s 退避睡眠。
+        上下文.脚本延时.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

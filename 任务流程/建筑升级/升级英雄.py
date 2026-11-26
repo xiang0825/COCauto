@@ -329,6 +329,7 @@ class 升级英雄任务(夜世界基础任务):
                     self.安全跳过 = True
                     self.关闭英雄升级页面()
                     return False
+                self.上下文._最近存在合法消耗 = True
                 self.关闭英雄升级页面()
                 return True
             else:

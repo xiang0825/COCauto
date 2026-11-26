@@ -878,5 +878,74 @@ class 主资源读数上限测试(unittest.TestCase):
         self.assertEqual(偏移(旧, {"金币": 17_636_793, "圣水": 22_726_518, "黑油": 208_966}), ())
 
 
+class 无消耗负跳变防护测试(unittest.TestCase):
+    def _构造上下文与任务(self, 原资源, 读数序列, 存在合法消耗=False):
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=Mock(return_value=np.zeros((160, 210, 3), dtype=np.uint8)),
+            ),
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+            数据库=SimpleNamespace(
+                获取最新完整状态=Mock(return_value=SimpleNamespace(
+                    状态数据={"家乡资源": 原资源}
+                )),
+                更新状态=Mock(),
+            ),
+            机器人标志="测试机器人",
+            _最近存在合法消耗=存在合法消耗,
+        )
+        任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
+        任务.上下文 = 上下文
+        任务.ocr引擎 = Mock()
+        任务.识别当前资源 = Mock(side_effect=读数序列)
+        第二帧 = 读数序列[-1]
+        任务._完整资源栏复核 = Mock(return_value=(
+            第二帧["金币"], 第二帧["圣水"], 第二帧["黑油"]
+        ))
+        return 上下文, 任务
+
+    def test_无消耗记录大幅负跳变触发复读并标记待校准且不写库(self):
+        原资源 = {"金币": 20_000_000, "圣水": 20_000_000, "黑油": 200_000, "识别成功": True}
+        无消耗负跳 = {"金币": 15_000_000, "圣水": 20_100_000, "黑油": 201_000, "识别成功": True}
+        上下文, 任务 = self._构造上下文与任务(
+            原资源, [无消耗负跳, 无消耗负跳], 存在合法消耗=False
+        )
+
+        self.assertFalse(任务.执行())
+        self.assertEqual(任务.识别当前资源.call_count, 2)
+        任务._完整资源栏复核.assert_called_once()
+        上下文.数据库.更新状态.assert_not_called()
+        self.assertTrue(上下文._资源待校准)
+        self.assertFalse(上下文._最近资源识别成功)
+        self.assertTrue(上下文._最近资源识别结果.get("待校准"))
+        self.assertIn("待校准", 上下文._最近资源识别结果.get("识别错误", ""))
+
+    def test_存在合法消耗标记时同幅度负跳变正常写入并清除消耗标记(self):
+        原资源 = {"金币": 20_000_000, "圣水": 20_000_000, "黑油": 200_000, "识别成功": True}
+        消耗后 = {"金币": 15_000_000, "圣水": 20_050_000, "黑油": 200_000, "识别成功": True}
+        上下文, 任务 = self._构造上下文与任务(
+            原资源, [消耗后], 存在合法消耗=True
+        )
+
+        self.assertTrue(任务.执行())
+        上下文.数据库.更新状态.assert_called_once()
+        写入资源 = 上下文.数据库.更新状态.call_args.args[2]
+        self.assertEqual(写入资源["金币"], 15_000_000)
+        self.assertFalse(上下文._最近存在合法消耗)
+        self.assertFalse(上下文._资源待校准)
+
+    def test_黑油无消耗大幅负跳变同样标记待校准(self):
+        原资源 = {"金币": 20_000_000, "圣水": 20_000_000, "黑油": 180_000, "识别成功": True}
+        黑油负跳 = {"金币": 20_050_000, "圣水": 20_020_000, "黑油": 120_000, "识别成功": True}
+        上下文, 任务 = self._构造上下文与任务(
+            原资源, [黑油负跳, 黑油负跳], 存在合法消耗=False
+        )
+
+        self.assertFalse(任务.执行())
+        上下文.数据库.更新状态.assert_not_called()
+        self.assertTrue(上下文._资源待校准)
+
+
 if __name__ == "__main__":
     unittest.main()

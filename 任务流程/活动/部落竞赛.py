@@ -60,6 +60,7 @@ _繁简表 = str.maketrans({
     "選": "选", "擇": "择", "邊": "边", "臺": "台", "檯": "台", "風": "风", "雲": "云",
     "陣": "阵", "簡": "简", "體": "体", "繼": "继", "續": "续", "確": "确", "認": "认",
     "灣": "湾", "專": "专", "區": "区", "價": "价", "頭": "头", "點": "点", "數": "数",
+    "牆": "墙", "墻": "墙",
 })
 
 
@@ -178,6 +179,12 @@ def 纠正OCR文本(文本: str, 配置: dict) -> str:
     for 错, 对 in (配置.get("OCR纠错") or {}).items():
         if 错:
             文本 = 文本.replace(规范文本(错), 规范文本(对))
+    if any(词 in 文本 for 词 in ("暴力", "摧毁", "拆毁", "破坏", "推毁")):
+        文本 = re.sub(
+            r"([0-9一二三四五六七八九十百千万]+\s*[块境]|块)城(?!墙|市|堡)",
+            r"\1城墙",
+            文本,
+        )
     return 文本
 
 
@@ -786,12 +793,36 @@ class 部落竞赛任务(基础任务):
         for 候选 in 候选列表:
             状态 = "冷却" if 候选.冷却 else (f"禁点({候选.禁点原因})" if 候选.禁点原因 else (候选.类型 or "不在白名单"))
             self._日志(f"任务卡 页{候选.页 + 1}{候选.位置}：{状态}，{候选.积分 or '?'}分；{候选.文本[:40]}")
-        最佳 = 选择任务(候选列表, 启用, 配置)
-        if 最佳 is None:
-            self._日志("没有符合白名单的可接任务")
-            return "无可接任务"
-        self._日志(f"选择 {最佳.类型}（{最佳.积分 or '?'}分）")
-        return self._开始任务(最佳)
+        跳过位置: set[tuple[int, tuple[int, int]]] = set()
+        失败原因: list[str] = []
+        while True:
+            self._检查总超时()
+            可选候选 = [
+                候选 for 候选 in 候选列表
+                if (候选.页, tuple(候选.位置)) not in 跳过位置
+            ]
+            最佳 = 选择任务(可选候选, 启用, 配置)
+            if 最佳 is None:
+                if not 失败原因:
+                    self._日志("没有符合白名单的可接任务")
+                    return "无可接任务"
+                if "复核不一致" in 失败原因 and "护栏阻止" not in 失败原因:
+                    return "复核不一致"
+                if "护栏阻止" in 失败原因:
+                    return "护栏阻止"
+                if "详情超时" in 失败原因 and "超时" not in 失败原因:
+                    return "详情超时"
+                return "超时"
+            self._日志(f"选择 {最佳.类型}（{最佳.积分 or '?'}分）")
+            结果 = self._开始任务(最佳)
+            if 结果 == "已接任务":
+                return "已接任务"
+            if 结果 == "超时":
+                # 已点击『开始』但确认超时：禁止再盲点其他卡片，直接停手
+                return "超时"
+            跳过位置.add((最佳.页, tuple(最佳.位置)))
+            失败原因.append(结果)
+            self._日志(f"候选 {最佳.类型}（{最佳.积分 or '?'}分）尝试结果={结果}，跳过并顺延次优候选")
 
     def _阵容签名(self) -> str:
         """最近一场进攻识别到的兵栏签名；还没打过仗时为空，指定兵种任务一律不接。"""
@@ -844,6 +875,64 @@ class 部落竞赛任务(基础任务):
             灰卡 += float(块.mean()) < 阈值
         return 总数 > 0 and 灰卡 >= int(规则.get("最少灰卡数", 5))
 
+    def _单卡已变灰(self, 图像, 位置: tuple[int, int]) -> bool:
+        """点开卡片前检测该卡片中心是否呈低饱和灰态（冷却/进行中锁定），避免白等 8 秒超时。"""
+        规则 = self.配置.get("面板", {}).get("进行中灰卡") or {}
+        if not 规则 or 图像 is None or not hasattr(图像, "shape"):
+            return False
+        try:
+            import cv2
+            import numpy as np
+
+            高, 宽 = 图像.shape[:2]
+            dx1, dy1, dx2, dy2 = 规则.get("采样相对卡心", [-30, -45, 30, 5])
+            x, y = int(位置[0]), int(位置[1])
+            y1 = max(0, y + int(dy1))
+            y2 = min(高, y + int(dy2))
+            x1 = max(0, x + int(dx1))
+            x2 = min(宽, x + int(dx2))
+            块 = 图像[y1:y2, x1:x2]
+            if 块.size == 0 or getattr(块, "ndim", 0) != 3:
+                return False
+            hsv = cv2.cvtColor(块, cv2.COLOR_BGR2HSV)
+            平均饱和度 = float(np.mean(hsv[:, :, 1]))
+            平均亮度 = float(np.mean(hsv[:, :, 2]))
+            阈值 = float(规则.get("饱和度阈值", 35))
+            # 排除全黑测试占位图，仅对可见灰色卡片跳过
+            return 平均饱和度 < 阈值 and 平均亮度 >= 40.0
+        except Exception:
+            return False
+
+    def _卡片区指纹(self, 图像):
+        """提取卡片区灰度缩略图，用于翻页后画面是否实际滚动的去重比较。"""
+        if 图像 is None or not hasattr(图像, "shape") or getattr(图像, "ndim", 0) < 2:
+            return None
+        try:
+            import cv2
+            import numpy as np
+
+            x1, y1, x2, y2 = self.配置.get("面板", {}).get("卡片区ROI", (250, 90, 720, 470))
+            高, 宽 = 图像.shape[:2]
+            区域 = 图像[max(0, int(y1)):min(高, int(y2)), max(0, int(x1)):min(宽, int(x2))]
+            if 区域.size == 0:
+                return None
+            灰度 = cv2.cvtColor(区域, cv2.COLOR_BGR2GRAY) if getattr(区域, "ndim", 0) == 3 else 区域
+            if float(np.std(灰度)) < 1.0:
+                return None
+            return cv2.resize(灰度, (96, 72), interpolation=cv2.INTER_AREA)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _卡片区无变化(上页指纹, 本页指纹) -> bool:
+        if 上页指纹 is None or 本页指纹 is None:
+            return False
+        try:
+            import cv2
+            return float(cv2.absdiff(上页指纹, 本页指纹).mean()) < 3.0
+        except Exception:
+            return False
+
     def _切换到页(self, 当前页: int, 目标页: int) -> int:
         页列表 = self.配置.get("面板", {}).get("页", [])
         if 目标页 == 当前页:
@@ -851,14 +940,16 @@ class 部落竞赛任务(基础任务):
         if 目标页 < 当前页:
             回滑 = self.配置.get("面板", {}).get("回到第一页滑动")
             if 回滑:
-                self._滑动(回滑)
-                self._延时(600)
+                for _ in range(max(1, 当前页 - 目标页)):
+                    self._滑动(回滑)
+                    self._延时(600)
             当前页 = 0
         for 页号 in range(当前页 + 1, 目标页 + 1):
             滑动 = 页列表[页号].get("滑动")
             if 滑动:
                 self._滑动(滑动)
                 self._延时(600)
+        self._当前页 = 目标页
         return 目标页
 
     def _读取详情(self, 页: int, 位置: tuple[int, int]) -> 任务候选:
@@ -893,7 +984,7 @@ class 部落竞赛任务(基础任务):
         开始 = 查找关键词(项列表, self.配置.get("OCR", {}).get("开始关键词", ["开始"]), 卡片区)
         if 开始 is None:
             return None
-        dx1, dy1, dx2, dy2 = self.配置.get("面板", {}).get("详情相对开始文字", [-165, -180, 60, 50])
+        dx1, dy1, dx2, dy2 = self.配置.get("面板", {}).get("详情相对开始文字", [-165, -180, 85, 50])
         区域 = (开始.框[0] + dx1, 开始.框[1] + dy1, 开始.框[2] + dx2, 开始.框[3] + dy2)
         区域项 = [项 for 项 in 区域文字(项列表, 区域) if 项 is not 开始]
         文本 = 拼接文本(区域项)
@@ -925,19 +1016,35 @@ class 部落竞赛任务(基础任务):
         任务卡的数量和顺序每次都会变（接任务后进行中的卡会挪到左上角，
         卡数也可能是 13 张），所以卡片位置按卡下方的积分数字现找；
         找不到积分数字时才退回资源里写死的位置。同一任务在相邻两页都
-        露出来时只读一次。
+        露出来时只读一次；灰卡直接跳过，翻页无位移则提前结束。
         """
         页列表 = self.配置.get("面板", {}).get("页", [])
         候选列表: list[任务候选] = []
         已读: set[tuple[str, int | None]] = set()
         当前页 = 0
+        上页指纹 = None
         for 页号, 页 in enumerate(页列表):
+            self._检查总超时()
             当前页 = self._切换到页(当前页, 页号)
-            位置列表 = 识别卡片位置(self._OCR(self._截图()), self.配置) or [
+            页面图像 = self._截图()
+            本页指纹 = self._卡片区指纹(页面图像)
+            if 页号 > 0 and self._卡片区无变化(上页指纹, 本页指纹):
+                self._日志(f"翻页到第{页号 + 1}页后卡片区无明显变化，已滑到底提前结束")
+                break
+            if 本页指纹 is not None:
+                上页指纹 = 本页指纹
+            位置列表 = 识别卡片位置(self._OCR(页面图像), self.配置) or [
                 tuple(位置) for 位置 in 页.get("卡片", [])
             ]
             for 位置 in 位置列表:
-                候选 = self._读取详情(页号, tuple(位置))
+                卡片坐标 = tuple(位置)
+                if self._单卡已变灰(页面图像, 卡片坐标):
+                    self._日志(f"跳过灰卡/冷却卡 页{页号 + 1}{卡片坐标}")
+                    候选列表.append(
+                        任务候选(页=页号, 位置=卡片坐标, 类型=None, 积分=None, 冷却=True)
+                    )
+                    continue
+                候选 = self._读取详情(页号, 卡片坐标)
                 self._关闭详情()
                 键 = (候选.文本, 候选.积分)
                 if 候选.文本 and 键 in 已读:
@@ -954,16 +1061,23 @@ class 部落竞赛任务(基础任务):
             return "护栏阻止"
         详情 = self._等待(lambda: self._识别详情(), "选中任务详情")
         if not 详情:
-            return "超时"
+            self._关闭详情()
+            return "详情超时"
         类型 = 识别任务类型(详情["文本"], self.配置, self._阵容签名())
         if 类型 != 目标.类型:
-            self._日志(f"复核任务类型不一致（{类型} ≠ {目标.类型}），不点开始")
-            return "护栏阻止"
+            原文摘要 = str(详情.get("文本", "") or "")[:40]
+            self._日志(
+                f"复核任务类型不一致（{类型} ≠ {目标.类型}），复核原文：{原文摘要}；不点开始"
+            )
+            self._关闭详情()
+            return "复核不一致"
         if 详情["禁点"]:
             self._日志(f"复核发现『{详情['禁点']}』，不点开始")
+            self._关闭详情()
             return "护栏阻止"
         if 详情["冷却"] or 详情["开始点"] is None:
             self._日志("开始按钮未通过模板+文字双重确认，不点击")
+            self._关闭详情()
             return "护栏阻止"
         if not self._点击(详情["开始点"], "开始"):
             return "护栏阻止"
