@@ -851,6 +851,11 @@ class 任务上下文:
             or bool(getattr(self, "_战斗中", False))
         ):
             return False
+        # 2026-11-26 19:44 实机：部落竞赛点开活动列表后，这里的近整屏 OCR
+        # 在文字最多的活动列表上同步跑了约 3 分钟，主循环无日志、步骤超时
+        # 也轮不到判断。部落竞赛流程自己会关回主页，期间不做这项维护检查。
+        if self._部落竞赛占用画面():
+            return False
 
         当前时间 = time.monotonic()
         上次检查 = float(getattr(self, "_升级完成弹窗检查时间", 0.0))
@@ -881,6 +886,10 @@ class 任务上下文:
                 return False
             页面结果 = getattr(self, "_最近点击页面结果", None)
             if 页面结果 is not None and 页面结果.页面 in {"战斗中", "战斗结算", "战斗过渡"}:
+                return False
+            # 已高置信识别为活动列表/竞赛面板时肯定不是升级完成弹窗，
+            # 不对这些文字最多的页面做整屏 OCR。
+            if 页面结果 is not None and getattr(页面结果, "页面", "") in self._非升级弹窗文字页:
                 return False
 
             # 宝石护栏刚刚已经拿过一张画面；这里复用短缓存，避免一次
@@ -922,6 +931,15 @@ class 任务上下文:
             return False
         finally:
             self._升级完成弹窗检查中 = False
+
+    _非升级弹窗文字页 = frozenset({"活动弹窗", "部落竞赛面板", "部落竞赛任务详情"})
+
+    def _部落竞赛占用画面(self) -> bool:
+        """部落竞赛流程进行中（含已打开活动列表/竞赛面板）时返回 True。"""
+        return bool(
+            getattr(self, "_部落竞赛流程中", False)
+            or getattr(self, "_部落竞赛面板已确认", False)
+        )
 
     def _升级完成弹窗检查间隔(self) -> float:
         """返回升级完成弹窗的维护检查间隔（秒）。"""
@@ -3922,6 +3940,7 @@ class 任务上下文:
             )
             if (
                 not getattr(self, "_战斗中", False)
+                and not self._部落竞赛占用画面()
                 and 当前单调时间
                 - float(getattr(self, "_中央提示调度时间", 0.0))
                 >= 中央提示检查间隔

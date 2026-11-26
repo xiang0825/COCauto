@@ -417,7 +417,18 @@ class 部落竞赛任务(基础任务):
             raise 部落竞赛超时("收到停止请求")
 
     def _延时(self, 毫秒: int) -> None:
+        """可中断延时；顺带检测延时期间被后台维护检查占住的时间并写日志。
+
+        2026-11-26 19:44 实机：``脚本延时`` 的后台维护（升级完成弹窗整屏 OCR）
+        在活动列表上同步跑了约 3 分钟，本流程一条日志都写不出来。流程期间已
+        通过 ``_部落竞赛流程中`` 关掉这些后台检查；这里再兜底记录真实耗时，
+        以后任何类似阻塞都能从日志看到，并由步骤超时立即收尾。
+        """
+        开始 = time.monotonic()
         self.上下文.脚本延时(int(毫秒))
+        多出 = time.monotonic() - 开始 - int(毫秒) / 1000.0
+        if 多出 >= self._超时设置("慢调用日志秒", 3):
+            self._日志(f"延时{int(毫秒)}毫秒实际多用了{多出:.1f}秒（后台检查占用），按步骤超时继续判断")
 
     def _截图(self):
         try:
@@ -428,6 +439,9 @@ class 部落竞赛任务(基础任务):
     # 同一进程里只允许一次未返回的 OCR：超时后被放弃的识别线程还在跑时，
     # 不再并发调用同一个 native 引擎。
     _OCR进行中: threading.Thread | None = None
+
+    # 某一步要求更短的 OCR 限时（例如确认活动列表）时临时设置，用完复位。
+    _OCR临时上限秒: float | None = None
 
     def _OCR(self, 图像, 区域=None) -> list[文字项]:
         """限时 OCR。
@@ -466,7 +480,9 @@ class 部落竞赛任务(基础任务):
         部落竞赛任务._OCR进行中 = 线程
         线程.start()
         上限 = self._超时设置("OCR秒", 60)
-        间隔 = max(1.0, self._超时设置("OCR进度日志秒", 10))
+        if self._OCR临时上限秒 is not None:
+            上限 = min(上限, float(self._OCR临时上限秒))
+        间隔 = max(1.0, min(self._超时设置("OCR进度日志秒", 10), 上限))
         开始 = time.monotonic()
         while True:
             线程.join(timeout=min(间隔, max(0.05, 上限 - (time.monotonic() - 开始))))
@@ -536,15 +552,24 @@ class 部落竞赛任务(基础任务):
                 最佳 = (分数, (max(0, x1) + 位置[0] + tw // 2, max(0, y1) + 位置[1] + th // 2))
         return 最佳[1] if 最佳 else None
 
-    def _等待(self, 条件: Callable[[], Any], 说明: str):
-        """轮询直到条件返回真值；超过步骤超时返回 None。"""
+    def _等待(self, 条件: Callable[[], Any], 说明: str, 步骤秒: float | None = None):
+        """轮询直到条件返回真值；超过步骤超时返回 None。
+
+        单次条件判断（截图/识别）本身超过 ``慢调用日志秒`` 也写一条日志，
+        不再出现几分钟没有任何日志的情况。
+        """
         开始 = self._时钟()
-        步骤截止 = 开始 + self._超时设置("步骤秒", 8)
+        步骤截止 = 开始 + (self._超时设置("步骤秒", 8) if 步骤秒 is None else float(步骤秒))
         间隔 = int(self._超时设置("轮询毫秒", 500))
+        慢调用秒 = self._超时设置("慢调用日志秒", 3)
         上次心跳 = 开始
         while True:
             self._检查总超时()
+            单次开始 = time.monotonic()
             结果 = 条件()
+            单次耗时 = time.monotonic() - 单次开始
+            if 单次耗时 >= 慢调用秒:
+                self._日志(f"确认{说明}单次识别耗时{单次耗时:.1f}秒")
             if 结果:
                 return 结果
             现在 = self._时钟()
@@ -575,6 +600,12 @@ class 部落竞赛任务(基础任务):
 
     def _设置面板标记(self, 开启: bool) -> None:
         self.上下文._部落竞赛面板已确认 = bool(开启)
+
+    def _设置流程标记(self, 开启: bool) -> None:
+        try:
+            self.上下文._部落竞赛流程中 = bool(开启)
+        except AttributeError:
+            pass
 
     def _是主世界主页(self) -> bool:
         识别 = getattr(self.上下文, "识别点击画面", None)
@@ -679,6 +710,9 @@ class 部落竞赛任务(基础任务):
                 return not bool(getattr(self.上下文, "页面恢复失败", False))
 
         self._记录 = 记录
+        # 流程期间关掉 脚本延时 里的后台维护检查（升级完成弹窗整屏 OCR 等）：
+        # 活动列表/竞赛面板文字最多，那些同步 OCR 实机一次要几分钟且不写日志。
+        self._设置流程标记(True)
         try:
             self._截止 = self._时钟() + self._超时设置("总流程秒", 180)
             try:
@@ -700,6 +734,7 @@ class 部落竞赛任务(基础任务):
                     return False
         finally:
             self._设置面板标记(False)
+            self._设置流程标记(False)
         if 结果 == "已满分":
             self._提醒一次(记录, "满分", "部落竞赛个人积分已满，请手动去领奖励。")
         if 结果 == "可领奖":
@@ -944,7 +979,10 @@ class 部落竞赛任务(基础任务):
         if not self._点击(活动按钮, "活动按钮"):
             return "护栏阻止"
         self._日志("活动按钮已点击，确认活动列表")
-        if not self._等待(self._活动列表已打开, "活动列表"):
+        列表开始 = time.monotonic()
+        列表秒 = self._超时设置("活动列表秒", 6)
+        if not self._等待(self._活动列表已打开, "活动列表", 步骤秒=列表秒):
+            self._日志(f"活动列表{列表秒:g}秒内未确认（实际{time.monotonic() - 列表开始:.1f}秒），关闭后按冷却稍后重试")
             self._保存入口现场("活动列表未确认")
             if self._是主世界主页():
                 self._日志("点击活动按钮后仍在主页，活动列表没有打开")
@@ -1076,7 +1114,12 @@ class 部落竞赛任务(基础任务):
             return True
         列表 = self.配置.get("活动列表", {})
         标题区 = 列表.get("标题ROI") or (300, 25, 500, 65)
-        项列表 = self._OCR(图像, 标题区)
+        # 标题小区域 OCR 也只给几秒：确认活动列表整体要在几秒内结束。
+        self._OCR临时上限秒 = self._超时设置("活动列表OCR秒", 5)
+        try:
+            项列表 = self._OCR(图像, 标题区)
+        finally:
+            self._OCR临时上限秒 = None
         if 查找关键词(项列表, 列表.get("标题关键词", ["活动"]), 标题区) is None:
             return None
         return True
