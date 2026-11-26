@@ -462,7 +462,7 @@ class 主窗口测试(unittest.TestCase):
         时间戳, 日志 = next(iter(self.运行页.视图._链接.values()))
         弹窗 = self.运行页.打开现场图(时间戳, 日志)
         self.assertIsNotNone(弹窗)
-        self.assertTrue(弹窗.是否加载成功)
+        self.assertTrue(弹窗.等待加载())
         弹窗.close()
 
     def test_战报窗口显示今日与昨日(self):
@@ -478,25 +478,74 @@ class 主窗口测试(unittest.TestCase):
 
     def test_配置方案预览应用并撤销(self):
         方案窗 = self.窗口.打开方案()
+        self.assertTrue(方案窗.等待空闲())
         名称 = [方案窗.列表.item(行).data(Qt.UserRole) for 行 in range(方案窗.列表.count())]
         self.assertTrue({"隐哥冲黑油", "冲部落竞赛", "日常均衡刷墙"} <= set(名称))
         方案窗.列表.setCurrentRow(名称.index("隐哥冲黑油"))
+        self.assertTrue(方案窗.等待空闲())
         self.assertGreater(方案窗.差异表.rowCount(), 0)
         原值 = self.数据库.获取机器人设置("robot_1").战利品优先级
         方案窗._应用()
+        self.assertTrue(方案窗.等待空闲())
         self.assertEqual(self.数据库.获取机器人设置("robot_1").战利品优先级, "黑水")
         self.assertEqual(self.运行页.计划.设置.战利品优先级, "黑水")
         self.assertTrue(方案窗.撤销按钮.isEnabled())
         方案窗._撤销()
+        self.assertTrue(方案窗.等待空闲())
         self.assertEqual(self.数据库.获取机器人设置("robot_1").战利品优先级, 原值)
         self.assertEqual(self.运行页.计划.设置.战利品优先级, 原值)
         路径 = os.path.join(tempfile.mkdtemp(), "方案.json")
-        self.assertTrue(方案窗.导出文件("隐哥冲黑油", 路径))
-        self.assertTrue(方案窗.导入文件(路径))
+        方案窗.导出文件("隐哥冲黑油", 路径)
+        self.assertTrue(方案窗.等待空闲())
+        self.assertTrue(os.path.exists(路径))
+        方案窗.导入文件(路径)
+        self.assertTrue(方案窗.等待空闲())
         # 内置方案不会被导入覆盖，而是另存为「…（导入）」并选中等待确认。
         self.assertEqual(方案窗.当前方案名, "隐哥冲黑油（导入）")
         self.assertTrue(方案窗.服务.获取预设("隐哥冲黑油").内置)
         方案窗.close()
+
+    def test_配置方案读取不在界面线程执行(self):
+        """预设列表、差异预览和导入都交给后台线程；界面线程只渲染结果。"""
+        with mock.patch("界面.方案A部件.后台执行") as 后台:
+            方案窗 = self.窗口.打开方案()
+            self.assertEqual(方案窗.列表.count(), 0)
+            self.assertTrue(方案窗.忙)
+            后台.assert_called()
+            路径 = os.path.join(tempfile.mkdtemp(), "x.json")
+            with open(路径, "w", encoding="utf-8") as 文件:
+                文件.write("{}")
+            with mock.patch("builtins.open", side_effect=AssertionError("界面线程读文件")):
+                方案窗.导入文件(路径)
+            self.assertEqual(方案窗.状态.text(), "正在导入…")
+        方案窗.close()
+
+    def test_配置方案关闭后迟到的结果被丢弃(self):
+        方案窗 = self.窗口.打开方案()
+        方案窗.close()
+        self.assertTrue(方案窗.等待空闲())
+        self.assertEqual(方案窗.列表.count(), 0)
+        # 再次打开会重新载入
+        self.窗口.打开方案()
+        self.assertTrue(方案窗.等待空闲())
+        self.assertGreater(方案窗.列表.count(), 0)
+        方案窗.close()
+
+    def test_常规页可设置内存保护阈值(self):
+        设置窗 = self._打开高级页("adv_general")
+        页 = 设置窗.页面["adv_general"]
+        编辑器 = 页.表单.编辑器["内存保护提交额度阈值MB"]
+        self.assertEqual(编辑器.text(), "1536")
+        编辑器.setText("2048")
+        self.assertTrue(页.保存())
+        self.assertEqual(self.数据库.获取机器人设置("robot_1").内存保护提交额度阈值MB, 2048)
+        编辑器.setText("100")
+        self.assertFalse(页.保存())
+        self.assertEqual(self.数据库.获取机器人设置("robot_1").内存保护提交额度阈值MB, 2048)
+        设置窗.close()
+        self.窗口._高级设置 = None
+        设置窗 = self._打开高级页("adv_general")
+        self.assertEqual(设置窗.页面["adv_general"].表单.编辑器["内存保护提交额度阈值MB"].text(), "2048")
 
     def _假托盘(self):
         托盘 = mock.Mock()

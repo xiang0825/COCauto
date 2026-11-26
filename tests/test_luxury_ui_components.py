@@ -259,7 +259,7 @@ class 高级UI组件测试(unittest.TestCase):
             try:
                 弹窗.show()
                 self.应用.processEvents()
-                self.assertTrue(弹窗.是否加载成功)
+                self.assertTrue(弹窗.等待加载())
                 self.assertEqual(弹窗.错误提示, "")
                 self.assertIn("320×180", 弹窗.元数据标签.text())
                 self.assertIn("识图超时", 弹窗.元数据标签.text())
@@ -290,11 +290,37 @@ class 高级UI组件测试(unittest.TestCase):
             损坏路径.write_bytes(b"not-a-valid-png")
             损坏弹窗 = 现场截图预览弹窗(损坏路径, 标题="损坏图")
             try:
-                self.assertFalse(损坏弹窗.是否加载成功)
+                self.assertFalse(损坏弹窗.等待加载())
                 self.assertTrue(bool(损坏弹窗.错误提示))
                 self.assertFalse(损坏弹窗.原寸按钮.isEnabled())
             finally:
                 损坏弹窗.close()
+
+    def test_现场截图在后台解码不阻塞界面(self):
+        from unittest import mock
+
+        from 界面.高级主题 import 现场截图预览弹窗
+
+        with tempfile.TemporaryDirectory() as 临时目录:
+            路径 = Path(临时目录) / "scene.png"
+            图像 = QImage(64, 36, QImage.Format_RGB32)
+            图像.fill(QColor("#334155"))
+            self.assertTrue(图像.save(str(路径), "PNG"))
+            with mock.patch("界面.高级主题.QImageReader", side_effect=AssertionError("界面线程解码")),                     mock.patch("界面.组件.后台执行") as 后台:
+                弹窗 = 现场截图预览弹窗(路径)
+            try:
+                后台.assert_called_once()
+                self.assertTrue(弹窗.加载中)
+                self.assertFalse(弹窗.是否加载成功)
+                self.assertIn("正在加载", 弹窗.画布标签.text())
+                self.assertFalse(弹窗.放大按钮.isEnabled())
+            finally:
+                弹窗.close()
+            # 关闭后才到的解码结果直接丢弃
+            弹窗2 = 现场截图预览弹窗(路径)
+            弹窗2.close()
+            self.assertFalse(弹窗2.等待加载())
+            self.assertFalse(弹窗2.加载中)
 
     # ---------------------------------------------------------------- 窗口几何记忆
     def test_窗口几何保存与恢复并校验屏幕边界(self):

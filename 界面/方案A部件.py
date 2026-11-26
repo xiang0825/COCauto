@@ -316,23 +316,88 @@ class 预设窗口(QDialog):
         self.应用按钮.clicked.connect(self._应用)
         右.addLayout(横排(self.状态, None, self.撤销按钮, self.应用按钮))
         横.addLayout(右, 1)
+        self._进行中 = 0
+        self._预览序号 = 0
+        self._可应用 = False
+        self._可撤销 = False
+        self._已关闭 = False
         self.载入()
+
+    # ------------------------------------------------------------ 后台
+    @property
+    def 忙(self) -> bool:
+        return self._进行中 > 0
+
+    def _后台(self, 函数, 成功, 失败=None):
+        """数据库/文件读写放到线程池，结果排队回到界面线程；窗口关掉后结果丢弃。"""
+        self._进行中 += 1
+        self._刷新按钮()
+
+        def 包装(回调):
+            def 执行(值):
+                self._进行中 = max(0, self._进行中 - 1)
+                if self._已关闭:
+                    return
+                try:
+                    if 回调 is not None:
+                        回调(值)
+                    self._刷新按钮()
+                except RuntimeError:
+                    pass  # 控件已销毁
+            return 执行
+
+        默认失败 = lambda 信息: self.状态.setText(f"操作失败：{信息}")
+        后台执行(函数, 包装(成功), 包装(失败 or 默认失败))
+
+    def 等待空闲(self, 超时毫秒: int = 5000) -> bool:
+        """处理事件直到后台读写全部完成（测试用）。"""
+        import time
+
+        from PySide6.QtCore import QCoreApplication
+
+        截止 = time.monotonic() + 超时毫秒 / 1000
+        while self.忙 and time.monotonic() < 截止:
+            QCoreApplication.processEvents()
+            time.sleep(0.005)
+        QCoreApplication.processEvents()
+        return not self.忙
+
+    def _刷新按钮(self):
+        空闲 = not self.忙
+        self.应用按钮.setEnabled(空闲 and self._可应用)
+        self.撤销按钮.setEnabled(空闲 and self._可撤销)
+
+    def done(self, 结果: int) -> None:
+        self._已关闭 = True
+        super().done(结果)
+
+    def closeEvent(self, 事件) -> None:
+        self._已关闭 = True
+        super().closeEvent(事件)
+
+    def showEvent(self, 事件) -> None:
+        self._已关闭 = False
+        super().showEvent(事件)
 
     # ------------------------------------------------------------ 列表
     def 载入(self, 选中: str | None = None):
-        当前 = 选中 or (self.列表.currentItem().data(Qt.UserRole) if self.列表.currentItem() else None)
+        self._已关闭 = False
+        当前 = 选中 or self.当前方案名
+        self._后台(self.服务.获取预设列表, lambda 列表: self._填充列表(列表, 当前))
+
+    def _填充列表(self, 列表, 当前: str | None):
         self.列表.blockSignals(True)
         self.列表.clear()
-        for 方案 in self.服务.获取预设列表():
+        for 方案 in 列表:
             项 = QListWidgetItem(("★ " if 方案.内置 else "") + 方案.名称)
             项.setData(Qt.UserRole, 方案.名称)
             项.setToolTip(方案.说明)
             self.列表.addItem(项)
             if 方案.名称 == 当前:
                 self.列表.setCurrentItem(项)
-        self.列表.blockSignals(False)
         if self.列表.currentItem() is None and self.列表.count():
             self.列表.setCurrentRow(0)
+        self.列表.blockSignals(False)
         self._预览()
 
     @property
@@ -342,55 +407,82 @@ class 预设窗口(QDialog):
 
     def _预览(self):
         名称 = self.当前方案名
-        self.撤销按钮.setEnabled(self.服务.是否有回退快照(self._机器人ID))
+        self._预览序号 += 1
+        序号 = self._预览序号
+        self._可应用 = False
         if not 名称:
             self.差异表.setRowCount(0)
-            self.应用按钮.setEnabled(False)
-            return
-        方案 = self.服务.获取预设(名称)
-        self.说明.setText(方案.说明)
-        差异 = self.服务.预览差异(self._机器人ID, 方案)
-        self.摘要.setText(差异.摘要)
-        self.差异表.setRowCount(len(差异.变更项))
-        for 行, 项 in enumerate(差异.变更项):
-            for 列, 文本 in enumerate((项.显示名称, _值文本(项.当前值), _值文本(项.目标值))):
-                单元 = QTableWidgetItem(文本)
-                单元.setToolTip(文本)
-                self.差异表.setItem(行, 列, 单元)
-        self.应用按钮.setEnabled(差异.是否有变更)
+        else:
+            self.摘要.setText("正在比较…")
+
+        def 读取():
+            快照 = self.服务.是否有回退快照(self._机器人ID)
+            if not 名称:
+                return 快照, None, None
+            方案 = self.服务.获取预设(名称)
+            return 快照, 方案, self.服务.预览差异(self._机器人ID, 方案)
+
+        def 显示(结果):
+            if 序号 != self._预览序号:
+                return  # 用户已切到别的方案，旧结果丢弃
+            self._可撤销, 方案, 差异 = 结果
+            if 方案 is None:
+                return
+            self.说明.setText(方案.说明)
+            self.摘要.setText(差异.摘要)
+            self.差异表.setRowCount(len(差异.变更项))
+            for 行, 项 in enumerate(差异.变更项):
+                for 列, 文本 in enumerate((项.显示名称, _值文本(项.当前值), _值文本(项.目标值))):
+                    单元 = QTableWidgetItem(文本)
+                    单元.setToolTip(文本)
+                    self.差异表.setItem(行, 列, 单元)
+            self._可应用 = 差异.是否有变更
+
+        self._后台(读取, 显示)
 
     # ------------------------------------------------------------ 操作
     def _应用(self):
         名称 = self.当前方案名
-        if not 名称:
+        if not 名称 or self.忙:
             return
         self._应用前()
-        结果 = self.服务.应用预设(self._机器人ID, 名称)
-        self.状态.setText(f"已切换到「{名称}」，修改 {len(结果.变更项)} 项；可随时撤销")
-        self._应用后(f"切换配置方案：{名称}（{len(结果.变更项)} 项）")
-        self._预览()
+
+        def 完成(结果):
+            self.状态.setText(f"已切换到「{名称}」，修改 {len(结果.变更项)} 项；可随时撤销")
+            self._应用后(f"切换配置方案：{名称}（{len(结果.变更项)} 项）")
+            self._预览()
+
+        self._后台(lambda: self.服务.应用预设(self._机器人ID, 名称), 完成)
 
     def _撤销(self):
+        if self.忙:
+            return
         self._应用前()
-        结果 = self.服务.回退预设(self._机器人ID)
-        self.状态.setText(结果.说明)
-        if 结果.成功:
-            self._应用后(结果.说明)
-        self._预览()
+
+        def 完成(结果):
+            self.状态.setText(结果.说明)
+            if 结果.成功:
+                self._应用后(结果.说明)
+            self._预览()
+
+        self._后台(lambda: self.服务.回退预设(self._机器人ID), 完成)
 
     def _保存当前(self):
         名称, 确定 = QInputDialog.getText(self, "保存当前为方案", "方案名称：")
         名称 = (名称 or "").strip()
         if not 确定 or not 名称:
             return
+        self.保存当前为方案(名称)
+
+    def 保存当前为方案(self, 名称: str):
         self._应用前()
-        try:
-            self.服务.保存当前为预设(self._机器人ID, 名称)
-        except ValueError as 异常:
-            self.状态.setText(str(异常))
-            return
-        self.状态.setText(f"已保存方案「{名称}」")
-        self.载入(名称)
+
+        def 完成(_方案):
+            self.状态.setText(f"已保存方案「{名称}」")
+            self.载入(名称)
+
+        self._后台(lambda: self.服务.保存当前为预设(self._机器人ID, 名称), 完成,
+                 lambda 信息: self.状态.setText(f"保存失败：{信息}"))
 
     def _导入(self):
         路径, _ = QFileDialog.getOpenFileName(self, "导入配置方案", "", "JSON (*.json)")
@@ -398,17 +490,20 @@ class 预设窗口(QDialog):
             return
         self.导入文件(路径)
 
-    def 导入文件(self, 路径: str) -> bool:
-        try:
+    def 导入文件(self, 路径: str) -> None:
+        """后台读文件、解析并保存；完成后选中导入的方案等待确认。"""
+        self.状态.setText("正在导入…")
+
+        def 读取():
             with open(路径, encoding="utf-8-sig") as 文件:
                 文本 = 文件.read()
-            方案 = self.服务.导入预设JSON(文本, 覆盖名称=self._导入名称(文本, 路径))
-        except (OSError, ValueError) as 异常:
-            self.状态.setText(f"导入失败：{异常}")
-            return False
-        self.状态.setText(f"已导入方案「{方案.名称}」，确认差异后点“应用此方案”")
-        self.载入(方案.名称)
-        return True
+            return self.服务.导入预设JSON(文本, 覆盖名称=self._导入名称(文本, 路径))
+
+        def 完成(方案):
+            self.状态.setText(f"已导入方案「{方案.名称}」，确认差异后点“应用此方案”")
+            self.载入(方案.名称)
+
+        self._后台(读取, 完成, lambda 信息: self.状态.setText(f"导入失败：{信息}"))
 
     def _导入名称(self, 文本: str, 路径: str) -> str:
         """内置方案不能被导入覆盖；同名或无名时改成「名称（导入）」。"""
@@ -432,14 +527,12 @@ class 预设窗口(QDialog):
         if 路径:
             self.导出文件(名称, 路径)
 
-    def 导出文件(self, 名称: str, 路径: str) -> bool:
-        try:
-            self.服务.写入预设JSON文件(名称, 路径)
-        except (OSError, ValueError) as 异常:
-            self.状态.setText(f"导出失败：{异常}")
-            return False
-        self.状态.setText(f"已导出到 {路径}")
-        return True
+    def 导出文件(self, 名称: str, 路径: str) -> None:
+        self._后台(
+            lambda: self.服务.写入预设JSON文件(名称, 路径),
+            lambda _: self.状态.setText(f"已导出到 {路径}"),
+            lambda 信息: self.状态.setText(f"导出失败：{信息}"),
+        )
 
 
 # ====================================================================== 现场图

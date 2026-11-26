@@ -81,6 +81,24 @@ class 主界面参数分层测试(unittest.TestCase):
         self.assertEqual(全部 - 主 - 高, set())
         self.assertEqual(set(计划.主界面参数表), {行.键 for 行 in 计划.任务行列表(计划.机器人设置())})
 
+    def test_数据库里可调的设置都有界面入口(self):
+        """机器人设置新增可见字段时必须放进主界面或高级设置（rc149 起漏过几次）。"""
+        from dataclasses import fields
+
+        from 应用 import 任务计划 as 计划
+        from 数据库.任务数据库 import 机器人设置
+
+        已覆盖 = {字段.字段 for 表 in (计划.主界面参数表, 计划.高级参数表) for 页 in 表.values() for 字段 in 页.字段}
+        # 服务器在常规页单独的下拉框；任务开关在任务列表；战斗结果统计强制启用。
+        另有入口 = {"服务器", "开启刷墙", "是否刷主世界", "是否刷夜世界", "是否升级建议升级的建筑",
+                  "是否部落竞赛接任务", "是否试战统计胜率"}
+        缺少 = {
+            字段.name for 字段 in fields(机器人设置)
+            if 字段.metadata.get("UI类型") != "hidden" and 字段.name not in 已覆盖 | 另有入口
+        }
+        self.assertEqual(缺少, set())
+        self.assertIn("内存保护提交额度阈值MB", {字段.字段 for 字段 in 计划.高级参数表["adv_general"].字段})
+
     def test_主界面每个任务最多六个常用参数(self):
         from 应用 import 任务计划 as 计划
         for 键, 页 in 计划.主界面参数表.items():

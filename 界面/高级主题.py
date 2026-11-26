@@ -19,11 +19,13 @@ from PySide6.QtCore import (
     QSize,
     Qt,
     QVariantAnimation,
+    Signal,
 )
 from PySide6.QtGui import (
     QColor,
     QGuiApplication,
     QIcon,
+    QImage,
     QImageReader,
     QPainter,
     QPainterPath,
@@ -869,8 +871,24 @@ class 日志胶囊标签(QLabel):
 
 
 # ==================================================================== 控件 4：现场截图预览弹窗
+def _解码现场截图(路径: str) -> tuple[QImage | None, str]:
+    """后台线程里解码截图（只用 QImage，QPixmap 必须回到界面线程再转换）。"""
+    读取器 = QImageReader(路径)
+    读取器.setAutoTransform(True)
+    图像 = 读取器.read()
+    if 图像.isNull():
+        return None, 读取器.errorString() or "格式不受支持或文件已损坏"
+    return 图像, ""
+
+
 class 现场截图预览弹窗(QDialog):
-    """异常日志直看现场图弹窗：支持高清缩放与缺失/损坏优雅提示。"""
+    """异常日志直看现场图弹窗：支持高清缩放与缺失/损坏优雅提示。
+
+    截图在后台线程解码，构造时先显示“正在加载”，不阻塞界面；
+    解码结束后发出 ``加载完成(成功)``。
+    """
+
+    加载完成 = Signal(bool)
 
     def __init__(
         self,
@@ -885,6 +903,8 @@ class 现场截图预览弹窗(QDialog):
         self.是否加载成功 = False
         self.错误提示 = ""
         self._原图 = QPixmap()
+        self.加载中 = False
+        self._已关闭 = False
         self._缩放比例 = 1.0
         self._适应模式 = True
 
@@ -994,14 +1014,65 @@ class 现场截图预览弹窗(QDialog):
     def _载入图片(self, 元数据: dict[str, Any] | str | None) -> None:
         if self.图片路径 is None or not self.图片路径.exists() or not self.图片路径.is_file():
             self._设置错误状态("截图文件不存在或已被清理", 元数据)
+            self.加载完成.emit(False)
             return
-        读取器 = QImageReader(str(self.图片路径))
-        读取器.setAutoTransform(True)
-        图像 = 读取器.read()
-        if 图像.isNull():
-            详细 = 读取器.errorString() or "格式不受支持或文件已损坏"
-            self._设置错误状态(f"无法读取现场截图（{详细}）", 元数据)
+        self.加载中 = True
+        self.元数据标签.setText(self._格式化元数据(元数据))
+        for 控件 in (self.缩小按钮, self.放大按钮, self.适应按钮, self.原寸按钮):
+            控件.setEnabled(False)
+        self.比例标签.setText("--")
+        self.画布标签.setStyleSheet(f"color: {文字次色}; padding: 28px; font-size: 13px;")
+        self.画布标签.setText("正在加载现场截图…")
+
+        from 界面.组件 import 后台执行
+
+        路径 = str(self.图片路径)
+        后台执行(
+            lambda: _解码现场截图(路径),
+            lambda 结果: self._解码完成(结果[0], 结果[1], 元数据),
+            lambda 信息: self._解码完成(None, 信息, 元数据),
+        )
+
+    def 等待加载(self, 超时毫秒: int = 5000) -> bool:
+        """处理事件直到后台解码结束（测试与脚本用）；返回是否加载成功。"""
+        import time
+
+        from PySide6.QtCore import QCoreApplication
+
+        截止 = time.monotonic() + 超时毫秒 / 1000
+        while self.加载中 and time.monotonic() < 截止:
+            QCoreApplication.processEvents()
+            time.sleep(0.005)
+        return self.是否加载成功
+
+    def _解码完成(self, 图像: QImage | None, 错误: str, 元数据) -> None:
+        if self._已关闭:
+            self.加载中 = False
             return
+        try:
+            self._显示图像(图像, 错误, 元数据)
+        except RuntimeError:
+            # 弹窗已被销毁：结果直接丢弃。
+            return
+        self.加载中 = False
+        self.加载完成.emit(self.是否加载成功)
+
+    def closeEvent(self, 事件) -> None:
+        self._已关闭 = True
+        super().closeEvent(事件)
+
+    def done(self, 结果: int) -> None:
+        self._已关闭 = True
+        super().done(结果)
+
+    def _显示图像(self, 图像: QImage | None, 错误: str, 元数据) -> None:
+        if 图像 is None:
+            self._设置错误状态(f"无法读取现场截图（{错误}）", 元数据)
+            return
+        for 控件 in (self.缩小按钮, self.放大按钮, self.适应按钮, self.原寸按钮):
+            控件.setEnabled(True)
+        self.画布标签.setStyleSheet("")
+        self.画布标签.setText("")
 
         self._原图 = QPixmap.fromImage(图像)
         if self._原图.isNull() or self._原图.width() <= 0 or self._原图.height() <= 0:
