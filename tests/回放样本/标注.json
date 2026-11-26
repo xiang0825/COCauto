@@ -64,8 +64,97 @@
         "resources": null,
         "settlement": null,
         "clan_task_text": "在單場多人遊戲戰鬥中掠奪200000金幣。",
+        "visible_text_fragments": ["掠奪200000金幣"],
         "clan_task_type": "掠夺金币"
       }
+    },
+    {
+      "id": "clan_walkthrough_home",
+      "image": "部落竞赛/01_home.jpg",
+      "source": "docs/实测/部落竞赛-2026-11-24/01_主页_活动按钮.jpg",
+      "expected": {"page": "主世界主页", "world": "主世界"}
+    },
+    {
+      "id": "clan_walkthrough_activity_list",
+      "image": "部落竞赛/02_activity_list.jpg",
+      "source": "docs/实测/部落竞赛-2026-11-24/02_活动列表_部落竞赛开启.jpg",
+      "expected": {"page": "活动弹窗", "world": null}
+    },
+    {
+      "id": "clan_walkthrough_black_oil",
+      "image": "部落竞赛/05_black_oil_task.jpg",
+      "source": "docs/实测/部落竞赛-2026-11-24/05_详情_掠夺黑油.jpg",
+      "expected": {
+        "page": "部落竞赛任务详情",
+        "world": "主世界",
+        "visible_text_fragments": ["掠奪5000"],
+        "clan_task_type": "掠夺黑油"
+      }
+    },
+    {
+      "id": "clan_walkthrough_builder_base",
+      "image": "部落竞赛/06_builder_base_task.jpg",
+      "source": "docs/实测/部落竞赛-2026-11-24/06_详情_夜世界_不接.jpg",
+      "expected": {"page": "部落竞赛任务详情", "world": "主世界", "clan_task_type": null}
+    },
+    {
+      "id": "clan_walkthrough_start_pending",
+      "image": "部落竞赛/07_start_pending.jpg",
+      "source": "docs/实测/部落竞赛-2026-11-24/07_点开始后.jpg",
+      "expected": {"page": "部落竞赛任务详情", "world": "主世界", "clan_task_type": "掠夺黑油"}
+    },
+    {
+      "id": "clan_walkthrough_active_task",
+      "image": "部落竞赛/08_active_task_abandon.jpg",
+      "source": "docs/实测/部落竞赛-2026-11-24/08_已接任务_放弃按钮_不点.jpg",
+      "expected": {"page": "部落竞赛任务详情", "world": "主世界", "start_available": false}
+    },
+    {
+      "id": "clan_walkthrough_gray_cards",
+      "image": "部落竞赛/09_active_task_gray_cards.jpg",
+      "source": "docs/实测/部落竞赛-2026-11-24/09_再次打开_其余卡变灰_判定已有任务.jpg",
+      "expected": {
+        "page": "部落竞赛面板",
+        "world": "主世界",
+        "active_card": [341, 165],
+        "gray_cards": [[438, 165], [535, 165], [632, 165]]
+      }
+    },
+    {
+      "id": "clan_walkthrough_reopened_detail",
+      "image": "部落竞赛/10_detail_open.jpg",
+      "source": "docs/实测/部落竞赛-2026-11-24/10_空白点复核_弹窗打开.jpg",
+      "expected": {"page": "部落竞赛任务详情", "world": "主世界", "start_available": false}
+    },
+    {
+      "id": "clan_walkthrough_closed_reflow",
+      "image": "部落竞赛/11_detail_closed_reflow.jpg",
+      "source": "docs/实测/部落竞赛-2026-11-24/11_空白点160x500_弹窗已关闭_卡片已重排.jpg",
+      "expected": {"page": "部落竞赛面板", "world": "主世界", "detail_open": false}
+    },
+    {
+      "id": "clan_walkthrough_page_two",
+      "image": "部落竞赛/12_page_two.jpg",
+      "source": "docs/实测/部落竞赛-2026-11-24/12_第二页_13张卡_固定坐标会点空.jpg",
+      "expected": {"page": "部落竞赛面板", "world": "主世界", "detail_open": false, "page_index": 2}
+    },
+    {
+      "id": "standby_20261125_clan_panel",
+      "image": "部落竞赛/standby_20261125_clan_panel.jpg",
+      "source": "E:/codex.task/coc/数据集/待命现场/standby_20261125_082017_491_0004.png",
+      "expected": {"page": "部落竞赛面板", "world": "主世界"}
+    },
+    {
+      "id": "standby_20261125_reward_chest",
+      "image": "部落竞赛/standby_20261125_reward_chest.jpg",
+      "source": "E:/codex.task/coc/数据集/待命现场/standby_20261125_215202_408_0001.png",
+      "expected": {"page": "宝箱领奖页", "world": null, "return_button": null}
+    },
+    {
+      "id": "standby_20261126_battle",
+      "image": "部落竞赛/standby_20261126_battle.jpg",
+      "source": "E:/codex.task/coc/数据集/待命现场/standby_20261126_132324_521_0001.png",
+      "expected": {"page": "战斗中", "world": null, "return_button": null}
     }
   ]
 }
