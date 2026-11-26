@@ -49,7 +49,47 @@ def 读取参数() -> dict:
     return 日常公共.加载日常参数("都城", 默认参数)
 
 
-class 都城捐金币任务(日常公共.日常面板任务基类):
+class 都城导航(日常公共.日常面板任务基类):
+    """C1/C2 共用：从主世界主页进入都城、从都城返回主世界。
+
+    需要参数键：都城入口、都城页确认区域、都城页关键词、返回按钮区域、返回按钮关键词。
+    """
+
+    def 进入都城(self) -> str:
+        """返回 "已进入" / "跳过"（未配置、护栏拒绝或点击未被接受，未离开主页）/ "失败"。"""
+        图 = self.截图()
+        x, y = self.参数["都城入口"]
+        if (x, y) == (0, 0):
+            self.日志("都城入口坐标未配置，跳过")
+            return "跳过"
+        if not self.点击前护栏(图, 日常公共.扩展区域((x, y), 40, 40), "都城入口"):
+            return "跳过"
+        if not self.点击(x, y, "进入都城"):
+            return "跳过"
+        if not self.都城页在(self.截图()):
+            self.日志("点了都城入口但未确认都城页，停止并保留画面")
+            return "失败"
+        self.已进入都城 = True
+        return "已进入"
+
+    def 都城页在(self, 图) -> bool:
+        return self.区域有关键词(图, self.参数["都城页确认区域"], self.参数["都城页关键词"]) is not None
+
+    def _返回(self) -> bool:
+        图 = self.截图()
+        按钮 = self.区域有关键词(图, self.参数["返回按钮区域"], self.参数["返回按钮关键词"])
+        if 按钮 is None or 按钮[1] is None:
+            self.日志("没找到返回按钮，保留画面")
+            return False
+        if not self.点击前护栏(图, 日常公共.扩展区域(按钮[1], 50, 22), "返回按钮"):
+            return False
+        if not self.点击(*按钮[1], "返回主世界"):
+            return False
+        self.已进入都城 = False
+        return True
+
+
+class 都城捐金币任务(都城导航):
     日志前缀 = "都城捐金币"
 
     def __init__(self, 上下文, 参数: dict | None = None):
@@ -103,20 +143,10 @@ class 都城捐金币任务(日常公共.日常面板任务基类):
     # ------------------------------------------------------------ 流程
     def _流程(self) -> bool:
         """True=完成或安全跳过（且已回到都城外或从未进入）。"""
+        进入 = self.进入都城()
+        if 进入 != "已进入":
+            return 进入 == "跳过"
         图 = self.截图()
-        x, y = self.参数["都城入口"]
-        if (x, y) == (0, 0):
-            self.日志("都城入口坐标未配置，跳过")
-            return True
-        if not self.点击前护栏(图, 日常公共.扩展区域((x, y), 40, 40), "都城入口"):
-            return True
-        if not self.点击(x, y, "进入都城"):
-            return True
-        图 = self.截图()
-        if not self.区域有关键词(图, self.参数["都城页确认区域"], self.参数["都城页关键词"]):
-            self.日志("点了都城入口但未确认都城页，停止并保留画面")
-            return False
-        self.已进入都城 = True
         余额 = self._读余额(图)
         起点 = int(getattr(self.上下文.设置, "都城金币捐献起点", 0) or 0)
         if 余额 is None:
@@ -186,19 +216,6 @@ class 都城捐金币任务(日常公共.日常面板任务基类):
         return self.安全关闭(
             (x, y), self.参数["捐献弹窗确认区域"], self.参数["捐献弹窗关键词"], "关闭捐献弹窗",
         )
-
-    def _返回(self) -> bool:
-        图 = self.截图()
-        按钮 = self.区域有关键词(图, self.参数["返回按钮区域"], self.参数["返回按钮关键词"])
-        if 按钮 is None or 按钮[1] is None:
-            self.日志("没找到返回按钮，保留画面")
-            return False
-        if not self.点击前护栏(图, 日常公共.扩展区域(按钮[1], 50, 22), "返回按钮"):
-            return False
-        if not self.点击(*按钮[1], "返回主世界"):
-            return False
-        self.已进入都城 = False
-        return True
 
     def 记录完成(self) -> None:
         间隔 = max(30, int(getattr(self.上下文.设置, "都城捐献检查间隔分钟", 360) or 360)) * 60

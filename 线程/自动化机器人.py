@@ -1671,7 +1671,7 @@ class 自动化机器人:
         """
         if 任务键 in {
             "event", "main_resource", "wall", "building", "hero", "pet", "research",
-            "keep_busy", "donate_troops", "capital_donate",
+            "keep_busy", "capital_donate", "capital_raid",
         }:
             上下文._待命恢复世界 = "主世界"
 
@@ -1700,7 +1700,7 @@ class 自动化机器人:
         elif 任务键 == "night_star_bonus":
             上下文.置脚本状态("按任务计划执行：night_star_bonus")
             结果 = self._执行夜世界星星计划(上下文, 检测登录)
-        elif 任务键 in {"donate_troops", "capital_donate"}:
+        elif 任务键 in {"capital_donate", "capital_raid"}:
             上下文.置脚本状态(f"按任务计划执行：{任务键}")
             结果 = self._执行主世界面板日常计划(任务键, 上下文, 检测登录)
         elif 任务键 == "keep_busy":
@@ -1748,9 +1748,9 @@ class 自动化机器人:
         return True
 
     def _执行主世界面板日常计划(self, 任务键: str, 上下文, 检测登录) -> bool:
-        """B 捐兵 / C1 都城捐金币：未校准/冷却在确认页面前就安全跳过。"""
-        if 任务键 == "donate_troops":
-            from 任务流程.日常.捐兵 import 捐兵任务 as 任务类
+        """C1 都城捐金币 / C2 都城突袭：未校准/冷却/非突袭周末在确认页面前就安全跳过。"""
+        if 任务键 == "capital_raid":
+            from 任务流程.日常.都城突袭 import 都城突袭任务 as 任务类
         else:
             from 任务流程.日常.都城捐金币 import 都城捐金币任务 as 任务类
         任务 = 任务类(上下文)

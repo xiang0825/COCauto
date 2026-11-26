@@ -104,7 +104,7 @@ class 面板日常调度测试(unittest.TestCase):
         return SimpleNamespace(可以运行=Mock(return_value=可运行), 执行=Mock(return_value=结果))
 
     def test_未校准或冷却时不确认页面不点击(self):
-        for 键, 路径 in (("donate_troops", "任务流程.日常.捐兵.捐兵任务"),
+        for 键, 路径 in (("capital_raid", "任务流程.日常.都城突袭.都城突袭任务"),
                        ("capital_donate", "任务流程.日常.都城捐金币.都城捐金币任务")):
             实例, 任务 = 机器人(), self._假任务(可运行=False)
             with patch(路径, return_value=任务):
@@ -114,8 +114,8 @@ class 面板日常调度测试(unittest.TestCase):
 
     def test_执行前后都确认主世界(self):
         实例, 任务 = 机器人(), self._假任务()
-        with patch("任务流程.日常.捐兵.捐兵任务", return_value=任务):
-            self.assertTrue(实例._执行主世界面板日常计划("donate_troops", 上下文(), object()))
+        with patch("任务流程.日常.都城突袭.都城突袭任务", return_value=任务):
+            self.assertTrue(实例._执行主世界面板日常计划("capital_raid", 上下文(), object()))
         self.assertEqual(实例._进入并确认主世界.call_count, 2)
         任务.执行.assert_called_once()
 
@@ -126,16 +126,13 @@ class 面板日常调度测试(unittest.TestCase):
         self.assertEqual(实例._进入并确认主世界.call_count, 1)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class 日常任务打包测试(unittest.TestCase):
     def test_日常模块被PyInstaller自动收集(self):
         from PyInstaller.utils.hooks import collect_submodules
 
         模块 = set(collect_submodules("任务流程"))
-        for 名称 in ("保持不闲", "夜世界星星", "捐兵", "都城捐金币", "日常公共"):
+        for 名称 in ("保持不闲", "夜世界星星", "都城捐金币", "都城突袭", "日常公共"):
             self.assertIn(f"任务流程.日常.{名称}", 模块)
 
     def test_日常资源JSON在打包资源目录下(self):
@@ -143,7 +140,7 @@ class 日常任务打包测试(unittest.TestCase):
         import pathlib
 
         根 = pathlib.Path(__file__).resolve().parents[1] / "资源" / "日常"
-        for 名称 in ("夜世界星星", "捐兵", "都城"):
+        for 名称 in ("夜世界星星", "都城", "都城突袭"):
             数据 = json.loads((根 / f"{名称}.json").read_text(encoding="utf-8"))
             self.assertIs(数据["calibrated"], False, 名称)
 
@@ -152,7 +149,32 @@ class 日常任务打包测试(unittest.TestCase):
         from 数据库.任务数据库 import 机器人设置
 
         行 = {r.键: r for r in 计划.任务行列表(机器人设置())}
-        for 键 in ("night_star_bonus", "donate_troops", "capital_donate", "keep_busy"):
+        for 键 in ("night_star_bonus", "capital_donate", "capital_raid", "keep_busy"):
             self.assertIn(键, 行)
             self.assertFalse(行[键].已启用, 键)
             self.assertIn(键, 计划.任务参数表)
+
+
+class 自动捐兵已删除测试(unittest.TestCase):
+    def test_捐兵任务与设置已移除(self):
+        import importlib.util
+        from dataclasses import fields
+
+        from 数据库.任务数据库 import 任务计划定义映射, 机器人设置
+
+        self.assertNotIn("donate_troops", 任务计划定义映射)
+        self.assertIsNone(importlib.util.find_spec("任务流程.日常.捐兵"))
+        self.assertFalse([f.name for f in fields(机器人设置) if "捐兵" in f.name])
+
+    def test_旧配置里的捐兵字段被安全忽略(self):
+        from 数据库.任务数据库 import 任务数据库, 机器人设置
+
+        规范 = 任务数据库._规范化机器人设置JSON(
+            {"是否自动捐兵": True, "捐兵兵种": ["野蛮人"], "任务计划顺序": ["donate_troops", "main_resource"]}
+        )
+        设置 = 机器人设置(**规范)
+        self.assertNotIn("donate_troops", 设置.任务计划顺序)
+
+
+if __name__ == "__main__":
+    unittest.main()
