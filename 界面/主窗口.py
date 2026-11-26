@@ -28,6 +28,16 @@ from 界面.组件 import 后台执行, 应用图标, 提示错误, 提示信息
 提醒有效秒 = 30 * 60
 
 
+托盘设置键 = "最小化到托盘"
+
+
+def 退出应用():
+    """结束事件循环；UI入口 随后回收监控中心并退出进程（测试里替换掉）。"""
+    应用 = QApplication.instance()
+    应用.setQuitOnLastWindowClosed(True)
+    应用.quit()
+
+
 def 界面设置() -> QSettings:
     """窗口尺寸、主题等界面偏好；测试里替换成临时文件，避免清掉真实设置。"""
     return QSettings("COCauto", "城控")
@@ -110,15 +120,9 @@ class 主窗口(QMainWindow):
         self._热键 = 全局快捷键(self._热键信号.按下.emit, self._热键信号.注册失败.emit)
         self._热键.启动()
 
-        from 界面.系统托盘 import 系统托盘控制器
-
-        self.托盘 = 系统托盘控制器(
-            self, 应用图标(), 显示隐藏回调=self._托盘显隐,
-            开始暂停回调=self._主按钮点击, 退出回调=self.退出程序, 名称=self.窗口标题,
-        )
-        if self.托盘.显示():
-            # 主窗藏进托盘后关掉战报等小窗不能让程序退出。
-            QApplication.instance().setQuitOnLastWindowClosed(False)
+        # 系统托盘默认关闭：关窗即退出。勾选「最小化到托盘」后才创建托盘图标。
+        self.托盘 = None
+        self._同步托盘()
 
     # ================================================================ 构建
     def _构建界面(self):
@@ -273,6 +277,7 @@ class 主窗口(QMainWindow):
             self._高级设置 = 高级设置窗口(
                 self.上下文, self.运行页.计划, self.版本号,
                 self._切换主题, lambda: self._检查更新(手动=True), self,
+                托盘开关=(lambda: self.最小化到托盘, self.设置最小化到托盘),
             )
             self._高级设置.finished.connect(self._高级设置关闭)
         self._高级设置.载入()
@@ -484,8 +489,42 @@ class 主窗口(QMainWindow):
             文本 += f" · 金币 {格式化数量(今日.金币)}"
         return 文本
 
+    # ================================================================ 托盘
+    @property
+    def 最小化到托盘(self) -> bool:
+        值 = self._设置.value(托盘设置键, False)
+        return 值 in (True, "true", "True", "1", 1)
+
+    def 设置最小化到托盘(self, 启用: bool):
+        self._设置.setValue(托盘设置键, bool(启用))
+        self._设置.sync()
+        self._同步托盘()
+        self._记录操作("关闭窗口时最小化到系统托盘：" + ("开" if 启用 else "关（关窗即退出）"))
+
+    @property
+    def 托盘生效(self) -> bool:
+        return self.托盘 is not None and self.托盘.是否可用
+
+    def _同步托盘(self):
+        if self.最小化到托盘:
+            if self.托盘 is None:
+                from 界面.系统托盘 import 系统托盘控制器
+
+                self.托盘 = 系统托盘控制器(
+                    self, 应用图标(), 显示隐藏回调=self._托盘显隐,
+                    开始暂停回调=self._主按钮点击, 退出回调=self.退出程序, 名称=self.窗口标题,
+                )
+                self.托盘.显示()
+            # 主窗藏进托盘后关掉战报等小窗不能让程序退出。
+            QApplication.instance().setQuitOnLastWindowClosed(not self.托盘生效)
+        else:
+            if self.托盘 is not None:
+                self.托盘.关闭()
+                self.托盘 = None
+            QApplication.instance().setQuitOnLastWindowClosed(True)
+
     def _刷新托盘(self):
-        if self.托盘.是否可用:
+        if self.托盘生效:
             self.托盘.更新运行状态(self.控制器.状态, self.今日摘要())
 
     def _查看提醒(self):
@@ -605,7 +644,7 @@ class 主窗口(QMainWindow):
         self._设置.setValue("窗口几何", self.saveGeometry())
         self._保存未提交设置()
         self.hide()
-        if not self._托盘提示过:
+        if not self._托盘提示过 and self.托盘 is not None:
             self._托盘提示过 = True
             self.托盘.发送提示("城控仍在后台", "已最小化到系统托盘；右键托盘图标可开始/暂停或退出。")
 
@@ -626,7 +665,7 @@ class 主窗口(QMainWindow):
         if self._关闭中:
             事件.accept()
             return
-        if self.托盘.是否可用 and not getattr(self, "_真退出", False):
+        if self.托盘生效 and not getattr(self, "_真退出", False):
             # 关窗即常驻托盘；真正退出走托盘菜单“退出程序”。
             事件.ignore()
             self._隐藏到托盘()
@@ -646,10 +685,12 @@ class 主窗口(QMainWindow):
             self._悬浮窗.close()
         if self._高级设置 is not None:
             self._高级设置.close()
-        self.托盘.关闭()
+        if self.托盘 is not None:
+            self.托盘.关闭()
+            self.托盘 = None
         for 窗 in (self._战报窗, self._方案窗):
             if 窗 is not None:
                 窗.close()
         self.控制器.关闭()
         事件.accept()
-        QApplication.instance().quit()
+        退出应用()

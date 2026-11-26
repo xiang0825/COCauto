@@ -76,6 +76,7 @@ class 主窗口测试(unittest.TestCase):
             self.窗口._高级设置.close()
         self.窗口.close()
         self._设置补丁.stop()
+        self.应用.setQuitOnLastWindowClosed(True)
 
     def _打开高级页(self, 键):
         with mock.patch.object(self.窗口, "_检查更新"):
@@ -497,21 +498,80 @@ class 主窗口测试(unittest.TestCase):
         self.assertTrue(方案窗.服务.获取预设("隐哥冲黑油").内置)
         方案窗.close()
 
-    def test_托盘不可用时关闭窗口照常退出(self):
-        self.assertFalse(self.窗口.托盘.是否可用)
-        self.窗口.close()
-        self.assertFalse(self.窗口.isVisible())
-        self.窗口._关闭中 = True
+    def _假托盘(self):
+        托盘 = mock.Mock()
+        托盘.是否可用 = True
+        托盘.显示.return_value = True
+        return mock.patch("界面.系统托盘.系统托盘控制器", return_value=托盘), 托盘
 
-    def test_托盘可用时关窗隐藏到托盘(self):
-        with mock.patch.object(type(self.窗口.托盘), "是否可用", new_callable=mock.PropertyMock, return_value=True),                 mock.patch.object(self.窗口.托盘, "发送提示") as 提示:
+    def test_托盘默认关闭且关窗真正退出(self):
+        self.assertFalse(self.窗口.最小化到托盘)
+        self.assertIsNone(self.窗口.托盘)
+        self.assertTrue(self.应用.quitOnLastWindowClosed())
+        with mock.patch("界面.主窗口.退出应用") as 退出,                 mock.patch.object(self.控制器, "关闭", wraps=self.控制器.关闭) as 控制器关闭:
+            self.窗口.close()
+        self.assertFalse(self.窗口.isVisible())
+        self.assertTrue(self.窗口._关闭中)
+        控制器关闭.assert_called_once()
+        退出.assert_called_once()
+        self.assertIsNone(self.窗口.托盘)
+
+    def test_关窗退出时运行中先确认(self):
+        self.实例.当前状态 = "运行中"
+        with mock.patch("界面.主窗口.确认", return_value=False), mock.patch("界面.主窗口.退出应用") as 退出:
+            self.窗口.close()
+        self.assertTrue(self.窗口.isVisible())
+        退出.assert_not_called()
+        with mock.patch("界面.主窗口.确认", return_value=True), mock.patch("界面.主窗口.退出应用") as 退出:
+            self.窗口.close()
+        self.assertFalse(self.窗口.isVisible())
+        退出.assert_called_once()
+
+    def test_常规页勾选最小化到托盘后关窗隐藏(self):
+        补丁, 托盘 = self._假托盘()
+        设置窗 = self._打开高级页("adv_general")
+        self.assertTrue(设置窗.托盘开关.isVisible())
+        self.assertFalse(设置窗.托盘开关.isChecked())
+        with 补丁, mock.patch("界面.主窗口.退出应用") as 退出:
+            设置窗.托盘开关.setChecked(True)
+            self.assertTrue(self.窗口.最小化到托盘)
+            self.assertIs(self.窗口.托盘, 托盘)
+            托盘.显示.assert_called_once()
+            self.assertFalse(self.应用.quitOnLastWindowClosed())
             self.窗口.close()
             self.assertFalse(self.窗口.isVisible())
             self.assertFalse(self.窗口._关闭中)
-            提示.assert_called_once()
+            退出.assert_not_called()
+            托盘.发送提示.assert_called_once()
             self.窗口._托盘显隐()
             self.assertTrue(self.窗口.isVisible())
+            # 取消勾选：托盘图标立即移除，关窗恢复为直接退出。
+            设置窗.托盘开关.setChecked(False)
+            托盘.关闭.assert_called_once()
+            self.assertIsNone(self.窗口.托盘)
+            self.assertTrue(self.应用.quitOnLastWindowClosed())
+        设置窗.close()
 
+    def test_托盘菜单退出能真正退出(self):
+        补丁, 托盘 = self._假托盘()
+        with 补丁, mock.patch("界面.主窗口.退出应用") as 退出:
+            self.窗口.设置最小化到托盘(True)
+            self.窗口.close()
+            self.assertFalse(self.窗口.isVisible())
+            self.窗口.退出程序()
+        self.assertTrue(self.窗口._关闭中)
+        退出.assert_called_once()
+        托盘.关闭.assert_called_once()
+        self.assertIsNone(self.窗口.托盘)
+
+    def test_托盘设置保存在界面偏好里(self):
+        补丁, _托盘 = self._假托盘()
+        with 补丁:
+            self.窗口.设置最小化到托盘(True)
+        self.assertTrue(self.窗口.最小化到托盘)
+        self.assertNotIn("托盘", "".join(vars(self.数据库.获取机器人设置("robot_1"))))
+        self.窗口.设置最小化到托盘(False)
+        self.assertFalse(self.窗口.最小化到托盘)
 
 if __name__ == "__main__":
     unittest.main()

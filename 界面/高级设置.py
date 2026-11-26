@@ -102,7 +102,7 @@ class _参数页(QWidget):
 
 
 class 高级设置窗口(QDialog):
-    def __init__(self, 上下文, 计划组件, 版本号: str, 切换主题, 检查更新, 父=None):
+    def __init__(self, 上下文, 计划组件, 版本号: str, 切换主题, 检查更新, 父=None, 托盘开关=None):
         super().__init__(父)
         self.setWindowTitle("高级设置")
         self.setObjectName("根")
@@ -146,6 +146,14 @@ class 高级设置窗口(QDialog):
         常规布局.setSpacing(8)
         常规布局.addLayout(横排(标签("服务器", "次要"), self.服务器, None))
         常规布局.addLayout(横排(标签("界面主题", "次要"), self.主题按钮, None))
+        from 界面.高级主题 import 滑动开关
+
+        # 托盘开关是界面偏好（QSettings），不写进机器人设置；默认关闭＝关窗即退出。
+        self._托盘开关 = 托盘开关
+        self.托盘开关 = 滑动开关("关闭窗口时最小化到系统托盘（关闭时点 × 直接退出程序）")
+        self.托盘开关.setVisible(托盘开关 is not None)
+        self.托盘开关.toggled.connect(self._托盘开关变化)
+        常规布局.addWidget(self.托盘开关)
         测试通知 = QPushButton("发送测试桌面通知")
         测试通知.setToolTip("立即在屏幕右下角弹一条测试通知（不节流、不影响脚本运行）")
         测试通知.clicked.connect(self._发送测试桌面通知)
@@ -172,6 +180,8 @@ class 高级设置窗口(QDialog):
                     页.载入()
             设置 = self._计划.设置
             self.服务器.setCurrentText(getattr(设置, "服务器", "国际服") or "国际服")
+            if self._托盘开关 is not None:
+                self.托盘开关.setChecked(bool(self._托盘开关[0]()))
         finally:
             self._载入中 = False
 
@@ -195,6 +205,11 @@ class 高级设置窗口(QDialog):
         self.页面["adv_notification"].状态.setText(
             "已发送测试桌面通知" if 成功 else "测试桌面通知发送失败"
         )
+
+    def _托盘开关变化(self, 启用: bool):
+        if self._载入中 or self._托盘开关 is None:
+            return
+        self._托盘开关[1](bool(启用))
 
     def _服务器变化(self, 名称: str):
         if self._载入中:

@@ -30,9 +30,17 @@ class _后台任务(QRunnable):
             结果 = self.函数()
         except Exception as 异常:  # 后台失败统一回到界面线程显示
             traceback.print_exc()
-            self.信号.失败.emit(str(异常) or type(异常).__name__)
+            self._发出(self.信号.失败, str(异常) or type(异常).__name__)
         else:
-            self.信号.成功.emit(结果)
+            self._发出(self.信号.成功, 结果)
+
+    @staticmethod
+    def _发出(信号, 值):
+        try:
+            信号.emit(值)
+        except RuntimeError:
+            # 退出过程中界面线程的对象可能已销毁，结果直接丢弃。
+            pass
 
 
 _进行中: set[_后台任务] = set()
