@@ -108,7 +108,9 @@ class 主窗口测试(unittest.TestCase):
         self.窗口.resize(800, 540)
         self.应用.processEvents()
         列表 = self.运行页.计划.任务列表
-        self.assertEqual(列表.count(), 8)
+        from 数据库.任务数据库 import 任务计划定义列表
+
+        self.assertEqual(列表.count(), len(任务计划定义列表))
         视口 = 列表.viewport().rect()
         for 行 in range(列表.count()):
             区域 = 列表.visualItemRect(列表.item(行))

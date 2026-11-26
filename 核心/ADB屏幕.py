@@ -115,6 +115,13 @@ class ADB屏幕:
                 原图 = self.设备.获取屏幕图像cv(0, 0, 2000, 2000)
                 self._原始截图缓存 = 原图
                 self._原始截图缓存时间 = 当前时间
+                新帧回调 = getattr(self, "_新帧回调", None)
+                if callable(新帧回调):
+                    # 异常留证的近期帧缓存（自身节流）；失败绝不影响截图。
+                    try:
+                        新帧回调(原图)
+                    except Exception:
+                        pass
             设备高度, 设备宽度 = 原图.shape[:2]
             from 模块.画面几何 import 记录设备尺寸
 

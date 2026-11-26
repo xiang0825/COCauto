@@ -42,6 +42,10 @@ class 任务计划定义:
     任务计划定义("hero", "英雄或建筑升级", "欲升级的英雄或建筑", "list", "升级已配置的英雄或建筑目标"),
     任务计划定义("pet", "战宠升级", "欲升级的战宠", "string", "升级已配置的战宠目标"),
     任务计划定义("research", "兵种或法术研究", "欲升级的兵种或法术", "string", "升级已配置的研究目标"),
+    任务计划定义("night_star_bonus", "夜世界打满星星奖励", "是否夜世界星星奖励", "bool", "每天在夜世界打到星级奖励领满为止（有每日场次上限）"),
+    任务计划定义("capital_donate", "捐都城金币", "是否捐都城金币", "bool", "进入都城把都城金币捐给正在升级的建筑；须先实机校准"),
+    任务计划定义("capital_raid", "都城突袭出击", "是否都城突袭出击", "bool", "突袭周末用免费次数自动出击（简化下兵）；须先实机校准"),
+    任务计划定义("keep_busy", "实验室和工人不闲", "是否保持实验室工人不闲", "bool", "资源够时按优先级排研究；空闲工人按优先级（可选游戏建议兜底）排升级"),
 )
 任务计划定义映射 = {定义.键: 定义 for 定义 in 任务计划定义列表}
 默认任务计划顺序 = [定义.键 for 定义 in 任务计划定义列表]
@@ -81,6 +85,17 @@ def 规范化任务计划顺序(任务顺序) -> list[str]:
         else:
             当前顺序.append(任务键)
     return 当前顺序
+
+
+def 规范化每日通知时间(值, 默认值: str = "23:30") -> str:
+    """把 ``H:MM`` / ``HH：MM`` 规范成 ``HH:MM``；不合法时回退默认值。"""
+    文本 = str(值 or "").strip().replace("：", ":")
+    部分 = 文本.split(":")
+    if len(部分) == 2 and all(片.strip().isdigit() for 片 in 部分):
+        时, 分 = int(部分[0]), int(部分[1])
+        if 0 <= 时 <= 23 and 0 <= 分 <= 59:
+            return f"{时:02d}:{分:02d}"
+    return 默认值
 
 
 def 任务计划是否启用(设置, 任务键: str) -> bool:
@@ -398,6 +413,55 @@ class 机器人设置:
         }
     )
 
+    # ---------------- 日常任务（事项 #45），全部默认关闭 ----------------
+    是否保持实验室工人不闲: bool = field(
+        default=False,
+        metadata={"显示名称": "实验室和工人不闲", "描述": "资源够时按优先级排研究、空闲工人按优先级排升级", "UI类型": "bool"},
+    )
+    不闲研究优先级: List[str] = field(
+        default_factory=list,
+        metadata={"显示名称": "研究优先级", "描述": "按顺序尝试，资源不足/未解锁/满级跳下一个", "UI类型": "hidden"},
+    )
+    不闲建筑优先级: List[str] = field(
+        default_factory=list,
+        metadata={"显示名称": "建筑/英雄优先级", "描述": "空闲工人按顺序升级", "UI类型": "hidden"},
+    )
+    不闲建筑使用建议兜底: bool = field(
+        default=True,
+        metadata={"显示名称": "优先级都不可用时按游戏建议升级", "描述": "", "UI类型": "hidden"},
+    )
+    不闲检查间隔分钟: int = field(
+        default=60,
+        metadata={"显示名称": "不闲检查间隔（分钟）", "描述": "", "UI类型": "hidden"},
+    )
+
+    是否夜世界星星奖励: bool = field(
+        default=False,
+        metadata={"显示名称": "夜世界打满星星奖励", "描述": "每天在夜世界打到星级奖励领满为止", "UI类型": "bool"},
+    )
+    夜世界每日星级奖励次数: int = field(
+        default=1,
+        metadata={"显示名称": "每日星级奖励次数", "描述": "确认几次星级奖励弹窗算今日领满", "UI类型": "hidden"},
+    )
+    夜世界星星每日最多场次: int = field(
+        default=12,
+        metadata={"显示名称": "每日最多场次", "描述": "奖励弹窗漏识别时的保护上限", "UI类型": "hidden"},
+    )
+
+    是否捐都城金币: bool = field(
+        default=False,
+        metadata={"显示名称": "捐都城金币", "描述": "把都城金币捐到都城（需实机校准）", "UI类型": "bool"},
+    )
+    都城金币捐献起点: int = field(default=0, metadata={"显示名称": "都城金币达到多少才捐", "描述": "", "UI类型": "hidden"})
+    都城捐献检查间隔分钟: int = field(default=360, metadata={"显示名称": "都城捐献检查间隔（分钟）", "描述": "", "UI类型": "hidden"})
+
+    是否都城突袭出击: bool = field(
+        default=False,
+        metadata={"显示名称": "都城突袭出击", "描述": "突袭周末用免费次数自动出击（需实机校准）", "UI类型": "bool"},
+    )
+    都城突袭每轮最多出击: int = field(default=6, metadata={"显示名称": "每轮最多出击次数", "描述": "", "UI类型": "hidden"})
+    都城突袭检查间隔分钟: int = field(default=60, metadata={"显示名称": "都城突袭检查间隔（分钟）", "描述": "", "UI类型": "hidden"})
+
     是否采集进攻界面图像: bool = field(
         default=False,
         metadata={
@@ -642,6 +706,36 @@ class 机器人设置:
         }
     )
 
+    异常现场保留份数: int = field(
+        default=30,
+        metadata={
+            "显示名称": "异常现场保留份数",
+            "描述": "卡住、心跳超时、未知页面、任务异常退出时把当前截图+前几帧+日志摘要存到 EXE 同级 异常现场/；只保留最近这么多份，超出自动删除最旧的（0 表示关闭留证）",
+            "UI类型": "spinbox",
+            "最小值": 0,
+            "最大值": 500,
+            "步进": 5,
+        }
+    )
+
+    每日完成通知: bool = field(
+        default=True,
+        metadata={
+            "显示名称": "每日完成通知",
+            "描述": "每天到点用桌面弹窗汇总今天的场次、胜率、金/圣水/黑油收益和部落竞赛进度；竞赛奖励不会自动领，只提示可领奖",
+            "UI类型": "bool",
+        }
+    )
+
+    每日通知时间: str = field(
+        default="23:30",
+        metadata={
+            "显示名称": "每日通知时间",
+            "描述": "24 小时制 HH:MM，默认 23:30",
+            "UI类型": "entry",
+        }
+    )
+
     资源易窃取最低评分: float = field(
         default=5.0,
         metadata={
@@ -875,6 +969,14 @@ class 机器人设置:
         self.部落竞赛检查间隔分钟 = max(10, min(240, self._安全整型(self.部落竞赛检查间隔分钟, 30)))
         self.部落竞赛个人积分上限 = max(0, self._安全整型(self.部落竞赛个人积分上限, 0))
         self.满仓自动顺手刷墙 = bool(self.满仓自动顺手刷墙)
+        self.每日完成通知 = bool(self.每日完成通知)
+        self.每日通知时间 = 规范化每日通知时间(self.每日通知时间)
+        for 字段名 in ("不闲研究优先级", "不闲建筑优先级"):
+            原值 = getattr(self, 字段名)
+            原值 = 原值 if isinstance(原值, list) else []
+            setattr(self, 字段名, [
+                项 for 项 in dict.fromkeys(str(值).strip() for 值 in 原值) if 项
+            ])
         # 兼容旧配置，同时丢弃未知任务键并补齐新增任务。
         self.任务计划顺序 = 规范化任务计划顺序(self.任务计划顺序)
         # 只保留已登记的兵种并去重，旧配置或手改数据库不会带入未知名字。
@@ -905,6 +1007,14 @@ class 机器人设置:
             ("刷墙资源阈值比例", 90, 50, 100),
             ("单次顺手刷墙上限", 2, 1, 2),
             ("模型空闲释放秒数", 600, 0, 86400),
+            ("异常现场保留份数", 30, 0, 500),
+            ("不闲检查间隔分钟", 60, 10, 720),
+            ("夜世界每日星级奖励次数", 1, 1, 5),
+            ("夜世界星星每日最多场次", 12, 1, 40),
+            ("都城金币捐献起点", 0, 0, 10_000_000),
+            ("都城捐献检查间隔分钟", 360, 30, 1440),
+            ("都城突袭每轮最多出击", 6, 1, 6),
+            ("都城突袭检查间隔分钟", 60, 15, 720),
         ):
             数值 = self._安全整型(getattr(self, 字段名), 默认值)
             setattr(self, 字段名, max(最小值, min(最大值, 数值)))
@@ -1338,6 +1448,22 @@ class 任务数据库:
             conn.execute(
                 "DELETE FROM 系统配置 WHERE 配置键 = ?",
                 ("协议已同意",)
+            )
+            conn.commit()
+
+    def 读取系统配置(self, 配置键: str, 默认值: Optional[str] = None) -> Optional[str]:
+        """读取一条全局配置（字符串）；不存在时返回默认值。"""
+        with self._获取连接() as conn:
+            结果 = conn.execute(
+                "SELECT 配置值 FROM 系统配置 WHERE 配置键 = ?", (str(配置键),)
+            ).fetchone()
+        return 结果[0] if 结果 is not None else 默认值
+
+    def 保存系统配置(self, 配置键: str, 配置值: str) -> None:
+        with self._获取连接() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO 系统配置 VALUES (?, ?, ?)",
+                (str(配置键), str(配置值), time.time()),
             )
             conn.commit()
 

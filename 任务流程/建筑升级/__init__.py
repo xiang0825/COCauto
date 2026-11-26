@@ -11,10 +11,14 @@ from 任务流程.兵种或法术升级.打开研究面板 import 打开研究�
 class 建筑升级任务(夜世界基础任务):
     """循环执行建筑升级，直到没有空闲工人为止；失败记录并一天内不重试"""
 
-    def __init__(self, 上下文):
+    def __init__(self, 上下文, 指定建筑覆盖=None, 启用建议覆盖=None):
         super().__init__(上下文)
         self.空闲工人: bool = False
         self.当前建筑: str | None = None
+        # keep_busy（实验室和工人不闲）用自己的优先级列表调用本任务，
+        # 不改写用户在 building/hero 里的配置；None 表示沿用设置。
+        self._指定建筑覆盖 = None if 指定建筑覆盖 is None else list(指定建筑覆盖)
+        self._启用建议覆盖 = 启用建议覆盖
 
     def 执行(self) -> bool:
         try:
@@ -27,8 +31,16 @@ class 建筑升级任务(夜世界基础任务):
                     return True
                 self.上下文._建筑英雄升级本轮已执行 = True
 
-            指定建筑 = self.上下文.设置.欲升级的英雄或建筑
-            启用建议建筑 = self.上下文.设置.是否升级建议升级的建筑
+            指定覆盖 = getattr(self, "_指定建筑覆盖", None)
+            建议覆盖 = getattr(self, "_启用建议覆盖", None)
+            指定建筑 = (
+                self.上下文.设置.欲升级的英雄或建筑
+                if 指定覆盖 is None else list(指定覆盖)
+            )
+            启用建议建筑 = (
+                self.上下文.设置.是否升级建议升级的建筑
+                if 建议覆盖 is None else bool(建议覆盖)
+            )
             if getattr(self, "_仅建议升级阶段", False):
                 指定建筑 = []
 

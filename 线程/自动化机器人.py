@@ -1669,7 +1669,10 @@ class 自动化机器人:
         任务循环只负责顺序、停止和失败策略；具体任务分派集中在这里，
         防止以后新增任务时把条件分支继续堆进主循环。
         """
-        if 任务键 in {"event", "main_resource", "wall", "building", "hero", "pet", "research"}:
+        if 任务键 in {
+            "event", "main_resource", "wall", "building", "hero", "pet", "research",
+            "keep_busy", "capital_donate", "capital_raid",
+        }:
             上下文._待命恢复世界 = "主世界"
 
         if 任务键 == "event":
@@ -1694,6 +1697,15 @@ class 自动化机器人:
             if self._官方数据显示已满级(任务键, 上下文):
                 return True, False
             结果 = self._执行升级计划(任务键, 上下文, 检测登录)
+        elif 任务键 == "night_star_bonus":
+            上下文.置脚本状态("按任务计划执行：night_star_bonus")
+            结果 = self._执行夜世界星星计划(上下文, 检测登录)
+        elif 任务键 in {"capital_donate", "capital_raid"}:
+            上下文.置脚本状态(f"按任务计划执行：{任务键}")
+            结果 = self._执行主世界面板日常计划(任务键, 上下文, 检测登录)
+        elif 任务键 == "keep_busy":
+            上下文.置脚本状态("按任务计划执行：keep_busy")
+            结果 = self._执行保持不闲计划(上下文, 检测登录)
         else:
             上下文.置脚本状态(f"任务计划包含未知任务键：{任务键}")
             return False, False
@@ -1703,6 +1715,87 @@ class 自动化机器人:
             and bool(getattr(上下文, "_资源计划已打满", False))
         )
         return bool(结果), 资源已打满
+
+    def _日常任务前确认主世界(self, 上下文, 检测登录, 阶段: str) -> bool:
+        if not self._进入并确认主世界(上下文, 阶段):
+            上下文.页面恢复失败 = True
+            上下文.置脚本状态(f"{阶段}未确认主世界，禁止继续点击")
+            return False
+        if 检测登录 is not None and not self._断线时恢复游戏连接(上下文, 检测登录):
+            上下文.页面恢复失败 = True
+            上下文.置脚本状态(f"{阶段}断线恢复失败，禁止继续点击")
+            return False
+        return True
+
+    def _执行保持不闲计划(self, 上下文, 检测登录) -> bool:
+        """D. 实验室和工人不闲：研究段 → 重新确认主世界 → 工人段。"""
+        from 任务流程.日常.保持不闲 import 保持不闲任务
+
+        任务 = 保持不闲任务(上下文)
+        if 任务.冷却中():
+            return True
+        if not self._日常任务前确认主世界(上下文, 检测登录, "实验室不闲研究段前"):
+            return False
+        if not 任务.执行研究段():
+            return False
+        if self.停止事件.is_set():
+            return True
+        if not self._日常任务前确认主世界(上下文, 检测登录, "工人不闲升级段前"):
+            return False
+        if not 任务.执行工人段():
+            return False
+        任务.记录完成()
+        return True
+
+    def _执行主世界面板日常计划(self, 任务键: str, 上下文, 检测登录) -> bool:
+        """C1 都城捐金币 / C2 都城突袭：未校准/冷却/非突袭周末在确认页面前就安全跳过。"""
+        if 任务键 == "capital_raid":
+            from 任务流程.日常.都城突袭 import 都城突袭任务 as 任务类
+        else:
+            from 任务流程.日常.都城捐金币 import 都城捐金币任务 as 任务类
+        任务 = 任务类(上下文)
+        if not 任务.可以运行():
+            return True
+        if not self._日常任务前确认主世界(上下文, 检测登录, f"{任务键}前"):
+            return False
+        任务.可以运行 = lambda: True  # 已检查过，避免重复写日志/等待
+        结果 = 任务.执行()
+        if not 结果:
+            return False
+        return self._日常任务前确认主世界(上下文, 检测登录, f"{任务键}后")
+
+    def _执行夜世界星星计划(self, 上下文, 检测登录) -> bool:
+        """A. 夜世界打满星星奖励：进夜世界后逐场打，今日领满或到上限即停。"""
+        from 任务流程.日常.夜世界星星 import 夜世界星星任务
+
+        任务 = 夜世界星星任务(上下文)
+        上下文._待命恢复世界 = "主世界"
+        if 任务.今日已完成():
+            return True
+        if not 到夜世界任务(上下文).执行():
+            if getattr(上下文, "_夜世界入口暂不可用", False):
+                上下文.页面恢复失败 = False
+                请求等待 = getattr(上下文, "请求任务计划等待", None)
+                if callable(请求等待):
+                    请求等待(60, "夜世界入口暂不可用")
+                上下文.置脚本状态("夜世界星星：入口本轮未确认，安全跳过，稍后重试")
+                return True
+            上下文.页面恢复失败 = True
+            上下文.置脚本状态("夜世界星星：进入夜世界失败，禁止继续点击")
+            return False
+        上下文._待命恢复世界 = "夜世界"
+        while not self.停止事件.is_set():
+            if not self._断线时恢复游戏连接(上下文, 检测登录):
+                return False
+            结果 = 任务.打一场()
+            if 结果 == "完成":
+                任务.今日已完成()
+                return True
+            if 结果 == "失败":
+                上下文.页面恢复失败 = True
+                上下文.置脚本状态("夜世界星星：本场未确认完成，保留当前画面")
+                return False
+        return True
 
     def _满仓继续打鱼(self, 上下文, 世界: str) -> bool:
         """资源打满后动作为“继续打鱼”时返回 True，调用方照常发起下一场进攻。"""
@@ -1845,6 +1938,12 @@ class 自动化机器人:
         )
         self.设备.设置目标包名(设置.部落冲突包名)
         self.op = ADB屏幕(self.设备, 日志回调=self.记录日志)
+        try:
+            from 应用.异常留证 import 安装帧缓存
+
+            安装帧缓存(self.op, self.机器人标志)
+        except Exception:
+            pass
         企业微信通知器实例 = None
         if 设置.企业微信webhook:
             try:
@@ -2286,8 +2385,59 @@ class 自动化机器人:
 
         return False
 
+    def 保存异常现场(self, 类别: str, 原因: str, 当前图像=None) -> bool:
+        """安排一份异常现场（当前画面、前几帧、最近日志）到 EXE 同级 异常现场/。
+
+        不阻塞调用方（心跳停止、任务退出、待命路径）：这里只取最后一帧的
+        引用和前序帧快照后入队；判断正式数据库、读设置、读日志、编码、写盘
+        和写“已保存”日志都在后台写盘线程里做。不调用 ADB。返回是否已入队。
+        只在使用正式数据库时留证；测试/临时数据库不往程序目录写现场。
+        """
+        try:
+            from 应用 import 异常留证
+
+            数据库 = getattr(self, "数据库", None)
+            文件路径 = getattr(数据库, "文件路径", None)
+            if not isinstance(文件路径, str):
+                return False
+            if 当前图像 is None:
+                # 截图提供器里最后一张真实帧（不触发新的 screencap）。
+                当前图像 = getattr(getattr(self, "op", None), "_原始截图缓存", None)
+            标志 = self.机器人标志
+
+            def 是正式数据库() -> bool:
+                return os.path.normcase(os.path.abspath(文件路径)) == os.path.normcase(
+                    os.path.abspath(任务数据库.默认数据库路径())
+                )
+
+            def 保留份数() -> int:
+                return int(getattr(数据库.获取机器人设置(标志), "异常现场保留份数", 异常留证.默认保留份数))
+
+            def 日志摘要() -> list[str]:
+                return 异常留证.格式化日志摘要(数据库.查询日志历史(标志, 最大条数=40), 40)
+
+            def 已保存(路径) -> None:
+                try:
+                    self.记录日志(f"[异常留证] 已保存{类别}现场：{路径}", 300, "警告")
+                except Exception:
+                    pass
+
+            return 异常留证.保存异常现场(
+                类别,
+                原因,
+                机器人标志=标志,
+                当前图像=当前图像,
+                日志摘要=日志摘要,
+                保留份数=保留份数,
+                前置检查=是正式数据库,
+                完成回调=已保存,
+            )
+        except Exception:
+            return False
+
     def _处理待命超时通知(self, 上下文, 原因: str) -> None:
         """待命超阈值后触发一次现场留图与多渠道通知，绝不抛出异常。"""
+        self.保存异常现场("未知页面待命", 原因)
         try:
             保存并通知 = getattr(上下文, "保存待命现场截图并通知", None)
             if callable(保存并通知):
@@ -2807,6 +2957,7 @@ class 自动化机器人:
             if not self.停止原因:
                 self.停止原因 = "任务流程提前结束，请查看最后日志"
             self.停止事件.set()
+            self._异常退出留证(上下文)
             self._桌面通知线程停止()
             # 在清理 op 之前发送停止通知（此时 op 还活着，可以截图）
             try:
@@ -2898,6 +3049,18 @@ class 自动化机器人:
                 pass
 
     人工停止原因 = frozenset({"控制台关闭", "手动终止", "界面停止按钮", "未启动"})
+
+    # 心跳超时由监控中心在停止前留证；人工停止和任务自然完成不留证。
+    _不留证停止原因 = frozenset({"任务自然完成", "无心跳"})
+
+    def _异常退出留证(self, 上下文) -> None:
+        try:
+            原因 = str(self.停止原因 or "")
+            if 原因 in self.人工停止原因 or 原因 in self._不留证停止原因:
+                return
+            self.保存异常现场("异常退出", 原因)
+        except Exception:
+            pass
 
     def _桌面通知线程停止(self) -> None:
         """线程结束时弹桌面通知；人工停止（界面按钮/关窗）不弹。"""
