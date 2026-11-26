@@ -289,6 +289,7 @@ class 任务候选:
     冷却: bool = False
     禁点原因: str | None = None
     开始点: tuple[int, int] | None = None
+    详情超时: bool = False
 
 
 def 选择任务(候选列表: Iterable[任务候选], 启用白名单: Iterable[str], 配置: dict) -> 任务候选 | None:
@@ -342,6 +343,8 @@ class 部落竞赛任务(基础任务):
         self._现在 = 现在
         self._截止 = 0.0
         self._模板缓存: dict[str, Any] = {}
+        self._扫描中止原因: str | None = None
+        self._记录: dict | None = None
         self.结果 = ""
         # 本轮从面板读到的进度，写进状态供界面显示（不影响任何点击决策）。
         self._本轮个人积分: tuple[int, int] | None = None
@@ -548,6 +551,7 @@ class 部落竞赛任务(基础任务):
             self._记录结果(记录, "已满分", self._冷却分钟("已满分"))
             return True
 
+        self._记录 = 记录
         try:
             self._截止 = self._时钟() + self._超时设置("总流程秒", 180)
             try:
@@ -803,7 +807,14 @@ class 部落竞赛任务(基础任务):
             self._日志("白名单为空，不接任务")
             return "无可接任务"
 
+        self._扫描中止原因 = None
         候选列表 = self._扫描任务卡()
+        self._保存详情超时卡位(候选列表)
+        if self._扫描中止原因 == "详情超时":
+            # 连续多张卡点开后都等不到详情：画面/识别状态不可信，停手不再点任何卡，
+            # 交给 执行() 走安全关闭回主页，按『详情超时』冷却后再来。
+            self._日志("连续多张任务卡详情超时，本轮不再点击任务卡，关闭面板交给打鱼")
+            return "详情超时"
         for 候选 in 候选列表:
             状态 = "冷却" if 候选.冷却 else (f"禁点({候选.禁点原因})" if 候选.禁点原因 else (候选.类型 or "不在白名单"))
             self._日志(f"任务卡 页{候选.页 + 1}{候选.位置}：{状态}，{候选.积分 or '?'}分；{候选.文本[:40]}")
@@ -818,6 +829,9 @@ class 部落竞赛任务(基础任务):
             最佳 = 选择任务(可选候选, 启用, 配置)
             if 最佳 is None:
                 if not 失败原因:
+                    if self._扫描中止原因 == "扫描未完成":
+                        self._日志("时间预算内未扫完任务卡且已读卡片中没有可接任务，关闭面板交给打鱼")
+                        return "扫描未完成"
                     self._日志("没有符合白名单的可接任务")
                     return "无可接任务"
                 if "复核不一致" in 失败原因 and "护栏阻止" not in 失败原因:
@@ -835,6 +849,10 @@ class 部落竞赛任务(基础任务):
             if 结果 == "超时":
                 # 已点击『开始』但确认超时：禁止再盲点其他卡片，直接停手
                 return "超时"
+            if 结果 == "详情超时":
+                # 复核时点开选中卡却等不到详情：面板状态不可信，不再顺延去点其他卡
+                self._日志(f"选中卡 {最佳.类型}（{最佳.积分 or '?'}分）复核时详情超时，停手不再点击其他卡")
+                return "详情超时"
             跳过位置.add((最佳.页, tuple(最佳.位置)))
             失败原因.append(结果)
             self._日志(f"候选 {最佳.类型}（{最佳.积分 or '?'}分）尝试结果={结果}，跳过并顺延次优候选")
@@ -979,6 +997,7 @@ class 部落竞赛任务(基础任务):
             图像 = self._截图()
             文本 = 拼接文本(区域文字(self._OCR(图像), self.配置.get("面板", {}).get("卡片区ROI", (0, 0, 800, 600))))
             候选.冷却 = True
+            候选.详情超时 = True
             候选.文本 = 文本
             禁点 = 含禁点文字(文本, self.配置)
             if 禁点:
@@ -1038,8 +1057,16 @@ class 部落竞赛任务(基础任务):
         已读: set[tuple[str, int | None]] = set()
         当前页 = 0
         上页指纹 = None
+        连续超时 = 0
+        超时上限 = max(1, int(self._超时设置("连续详情超时上限", 3)))
+        # 预留不超过总超时的四分之一，避免很短的总超时（测试/手动调小）一开扫就放弃。
+        预留秒 = min(self._超时设置("选择预留秒", 90), self._超时设置("总流程秒", 180) / 4)
+        已跳过卡位 = self._今日详情超时卡位()
         for 页号, 页 in enumerate(页列表):
             self._检查总超时()
+            if self._扫描预算不足(预留秒):
+                self._扫描中止原因 = "扫描未完成"
+                break
             当前页 = self._切换到页(当前页, 页号)
             页面图像 = self._截图()
             本页指纹 = self._卡片区指纹(页面图像)
@@ -1053,6 +1080,18 @@ class 部落竞赛任务(基础任务):
             ]
             for 位置 in 位置列表:
                 卡片坐标 = tuple(位置)
+                if self._扫描预算不足(预留秒):
+                    # 留够『复核+开始+确认+关面板』的时间：用已读到的卡先挑，
+                    # 不再把整个总超时耗在扫卡上（rc154 实机 12 张卡扫 7 分钟没挑过一次）。
+                    self._日志(f"扫描任务卡剩余时间不足 {int(预留秒)} 秒，停止扫描，用已读到的 {len(候选列表)} 张卡挑选")
+                    self._扫描中止原因 = "扫描未完成"
+                    break
+                if self._卡位已跳过(已跳过卡位, 页号, 卡片坐标):
+                    self._日志(f"跳过今日详情超时过的卡 页{页号 + 1}{卡片坐标}")
+                    候选列表.append(
+                        任务候选(页=页号, 位置=卡片坐标, 类型=None, 积分=None, 冷却=True)
+                    )
+                    continue
                 if self._单卡已变灰(页面图像, 卡片坐标):
                     self._日志(f"跳过灰卡/冷却卡 页{页号 + 1}{卡片坐标}")
                     候选列表.append(
@@ -1061,13 +1100,64 @@ class 部落竞赛任务(基础任务):
                     continue
                 候选 = self._读取详情(页号, 卡片坐标)
                 self._关闭详情()
+                if 候选.详情超时:
+                    连续超时 += 1
+                    候选列表.append(候选)
+                    if 连续超时 >= 超时上限:
+                        self._日志(f"连续 {连续超时} 张任务卡详情超时，停止扫描")
+                        self._扫描中止原因 = "详情超时"
+                        break
+                    continue
+                连续超时 = 0
                 键 = (候选.文本, 候选.积分)
                 if 候选.文本 and 键 in 已读:
                     continue
                 已读.add(键)
                 候选列表.append(候选)
+            if self._扫描中止原因:
+                break
         self._当前页 = 当前页
         return 候选列表
+
+    def _扫描预算不足(self, 预留秒: float) -> bool:
+        return self._截止 - self._时钟() < float(预留秒)
+
+    def _今日详情超时卡位(self) -> list[tuple[int, int, int]]:
+        记录 = (getattr(self, "_记录", None) or {}).get("详情超时卡") or {}
+        if not isinstance(记录, dict) or 记录.get("日期") != self._现在().strftime("%Y-%m-%d"):
+            return []
+        卡位 = []
+        for 项 in 记录.get("卡位") or []:
+            try:
+                页, x, y = (int(值) for 值 in 项)
+            except (TypeError, ValueError):
+                continue
+            卡位.append((页, x, y))
+        return 卡位
+
+    @staticmethod
+    def _卡位已跳过(卡位列表, 页: int, 位置: tuple[int, int]) -> bool:
+        return any(
+            页 == 已页 and abs(int(位置[0]) - x) <= 30 and abs(int(位置[1]) - y) <= 30
+            for 已页, x, y in 卡位列表
+        )
+
+    def _保存详情超时卡位(self, 候选列表: list[任务候选]) -> None:
+        """详情超时的卡位记到当天：今天之后的检查直接跳过，不再每次白等。"""
+        记录 = getattr(self, "_记录", None)
+        if 记录 is None:
+            return
+        新卡位 = [(候选.页, int(候选.位置[0]), int(候选.位置[1])) for 候选 in 候选列表 if 候选.详情超时]
+        if not 新卡位:
+            return
+        卡位 = self._今日详情超时卡位()
+        for 页, x, y in 新卡位:
+            if not self._卡位已跳过(卡位, 页, (x, y)):
+                卡位.append((页, x, y))
+        记录["详情超时卡"] = {
+            "日期": self._现在().strftime("%Y-%m-%d"),
+            "卡位": [list(项) for 项 in 卡位],
+        }
 
     def _开始任务(self, 目标: 任务候选) -> str:
         当前页 = getattr(self, "_当前页", 0)
