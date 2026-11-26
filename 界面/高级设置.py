@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 from 应用 import 任务计划 as 计划
 from 数据库.任务数据库 import 机器人设置
 from 界面.参数表单 import 参数表单
-from 界面.组件 import 标签, 横排
+from 界面.组件 import 后台执行, 提示信息, 提示错误, 标签, 横排, 确认
 
 连接页键 = "connection"
 # 主界面「更多参数」从哪个任务跳到哪一页。
@@ -154,6 +154,12 @@ class 高级设置窗口(QDialog):
         self.托盘开关.setVisible(托盘开关 is not None)
         self.托盘开关.toggled.connect(self._托盘开关变化)
         常规布局.addWidget(self.托盘开关)
+        self.问题包按钮 = QPushButton("导出问题包")
+        self.问题包按钮.setToolTip(
+            "把最近日志、异常现场摘要、运行状态、版本和（去掉账号/密钥、已打码的）配置打成 zip，放在程序同级目录"
+        )
+        self.问题包按钮.clicked.connect(self._导出问题包)
+        常规布局.addLayout(横排(标签("排查问题", "次要"), self.问题包按钮, None))
         测试通知 = QPushButton("发送测试桌面通知")
         测试通知.setToolTip("立即在屏幕右下角弹一条测试通知（不节流、不影响脚本运行）")
         测试通知.clicked.connect(self._发送测试桌面通知)
@@ -205,6 +211,38 @@ class 高级设置窗口(QDialog):
         self.页面["adv_notification"].状态.setText(
             "已发送测试桌面通知" if 成功 else "测试桌面通知发送失败"
         )
+
+    def _导出问题包(self):
+        from 应用.问题包 import 导出问题包
+
+        # 截图里可能有玩家名/部落名，默认不带，用户确认才带。
+        包含截图 = 确认(
+            self, "导出问题包",
+            "是否附带异常现场截图？\n截图画面里可能有玩家名、部落名等个人信息。\n选“否”只导出已打码的日志和摘要。",
+        )
+        self.问题包按钮.setEnabled(False)
+        self.问题包按钮.setText("导出中…")
+        数据库 = self.上下文.控制器.数据库
+
+        def 结束():
+            self.问题包按钮.setEnabled(True)
+            self.问题包按钮.setText("导出问题包")
+
+        def 成功(路径):
+            结束()
+            记录 = getattr(self.上下文, "记录操作", None)
+            if callable(记录):
+                记录(f"已导出问题包：{路径}")
+            提示信息(
+                self, "问题包已导出",
+                f"问题包已保存到：\n{路径}\n\n账号、令牌、Webhook、设备序列号已去除，日志里的玩家名/标签、IP 已打码。",
+            )
+
+        def 失败(错误: str):
+            结束()
+            提示错误(self, "导出问题包失败", 错误)
+
+        后台执行(lambda: 导出问题包(数据库, 包含截图=包含截图), 成功, 失败)
 
     def _托盘开关变化(self, 启用: bool):
         if self._载入中 or self._托盘开关 is None:

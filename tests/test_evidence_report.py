@@ -515,7 +515,7 @@ class 问题包测试(unittest.TestCase):
 
 
 class 问题包按钮测试(unittest.TestCase):
-    def test_侧栏按钮导出后弹窗显示路径(self):
+    def test_高级设置按钮导出后弹窗显示路径(self):
         import os
         import queue
 
@@ -543,16 +543,19 @@ class 问题包按钮测试(unittest.TestCase):
                 窗口 = 主窗口(应用控制器(监控中心), queue.Queue(), "rc-test")
             try:
                 包路径 = Path(目录) / "问题包_x.zip"
+                self.assertFalse(hasattr(窗口, "_问题包按钮"))  # 入口在高级设置，不在主窗口侧栏
+                窗口.打开高级设置("adv_general")
                 for 选择 in (False, True):
                     with self.subTest(包含截图=选择), \
                             patch("应用.问题包.导出问题包", return_value=包路径) as 导出, \
-                            patch("界面.主窗口.确认", return_value=选择), \
-                            patch("界面.主窗口.后台执行", side_effect=lambda 函数, 成功, 失败: 成功(函数())), \
-                            patch("界面.主窗口.提示信息") as 提示:
-                        窗口._问题包按钮.click()
+                            patch("界面.高级设置.确认", return_value=选择), \
+                            patch("界面.高级设置.后台执行", side_effect=lambda 函数, 成功, 失败: 成功(函数())), \
+                            patch("界面.高级设置.提示信息") as 提示:
+                        高级 = 窗口._高级设置
+                        高级.问题包按钮.click()
                         导出.assert_called_once_with(数据库, 包含截图=选择)
                         self.assertIn(str(包路径), 提示.call_args.args[2])
-                        self.assertTrue(窗口._问题包按钮.isEnabled())
+                        self.assertTrue(高级.问题包按钮.isEnabled())
             finally:
                 窗口._关闭中 = True
                 窗口.close()
