@@ -359,6 +359,14 @@ def _字段(*名称: str) -> tuple[参数字段, ...]:
     "hero": 任务参数表["hero"],
     "pet": 任务参数表["pet"],
     "research": 任务参数表["research"],
+    "night_star_bonus": 任务参数表["night_star_bonus"],
+    "donate_troops": 参数页(
+        "自动捐兵", 任务计划定义映射["donate_troops"].说明,
+        _字段("捐兵主力保留数量", "捐兵每轮最多请求数", "捐兵检查间隔分钟"),
+        ("要捐的兵种/法术在「高级设置 → 日常任务」里勾选。",) + 任务参数表["donate_troops"].提示,
+    ),
+    "capital_donate": 任务参数表["capital_donate"],
+    "keep_busy": 任务参数表["keep_busy"],
 }
 
 高级参数表: dict[str, 参数页] = {
@@ -383,6 +391,11 @@ def _字段(*名称: str) -> tuple[参数字段, ...]:
         "部落竞赛", "接任务规则与官方 API 积分上限。",
         _字段("部落竞赛个人积分上限"),
         任务参数表["event"].提示,
+    ),
+    "adv_daily": 参数页(
+        "日常任务", "自动捐兵要捐的兵种和法术。",
+        _字段("捐兵兵种", "捐兵法术"),
+        任务参数表["donate_troops"].提示,
     ),
     "adv_notification": 任务参数表["notification"],
     "adv_official": 任务参数表["official_api"],

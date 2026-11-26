@@ -22,8 +22,9 @@ from 界面.组件 import 后台执行, 提示信息, 提示错误, 标签, 横�
     "main_resource": "adv_search",
     "night_resource": "adv_search",
     "event": "adv_event",
+    "donate_troops": "adv_daily",
 }
-页顺序 = (连接页键, "adv_search", "adv_combat", "adv_event", "adv_notification", "adv_official", "adv_general")
+页顺序 = (连接页键, "adv_search", "adv_combat", "adv_event", "adv_daily", "adv_notification", "adv_official", "adv_general")
 
 
 class _参数页(QWidget):

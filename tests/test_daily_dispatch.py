@@ -128,3 +128,31 @@ class 面板日常调度测试(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class 日常任务打包测试(unittest.TestCase):
+    def test_日常模块被PyInstaller自动收集(self):
+        from PyInstaller.utils.hooks import collect_submodules
+
+        模块 = set(collect_submodules("任务流程"))
+        for 名称 in ("保持不闲", "夜世界星星", "捐兵", "都城捐金币", "日常公共"):
+            self.assertIn(f"任务流程.日常.{名称}", 模块)
+
+    def test_日常资源JSON在打包资源目录下(self):
+        import json
+        import pathlib
+
+        根 = pathlib.Path(__file__).resolve().parents[1] / "资源" / "日常"
+        for 名称 in ("夜世界星星", "捐兵", "都城"):
+            数据 = json.loads((根 / f"{名称}.json").read_text(encoding="utf-8"))
+            self.assertIs(数据["calibrated"], False, 名称)
+
+    def test_新界面任务列表能看到新任务且默认关闭(self):
+        from 应用 import 任务计划 as 计划
+        from 数据库.任务数据库 import 机器人设置
+
+        行 = {r.键: r for r in 计划.任务行列表(机器人设置())}
+        for 键 in ("night_star_bonus", "donate_troops", "capital_donate", "keep_busy"):
+            self.assertIn(键, 行)
+            self.assertFalse(行[键].已启用, 键)
+            self.assertIn(键, 计划.任务参数表)
