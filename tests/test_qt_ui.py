@@ -580,6 +580,45 @@ class 主窗口测试(unittest.TestCase):
             self.assertIn("隐哥冲黑油", 名称)
         方案窗.close()
 
+    def test_配置方案重开后新会话先完成旧回调后完成按钮恢复(self):
+        补丁, 任务 = self._捕获后台()
+        with 补丁:
+            方案窗 = self.窗口.打开方案()
+            旧载入 = 任务.pop()
+            方案窗.close()
+            self.窗口.打开方案()
+            # 新会话（载入及随后的预览）先全部完成
+            while 任务:
+                函数, 成功, _ = 任务.pop(0)
+                成功(函数())
+            self.assertTrue(方案窗.忙)  # 旧会话的读取还没回来
+            self.assertFalse(方案窗.保存当前按钮.isEnabled())
+            名称 = [方案窗.列表.item(行).data(Qt.UserRole) for 行 in range(方案窗.列表.count())]
+            # 旧回调最后完成：不改列表，但按钮要恢复可用
+            旧载入[1]([])
+            self.assertFalse(方案窗.忙)
+            self.assertEqual([方案窗.列表.item(行).data(Qt.UserRole) for 行 in range(方案窗.列表.count())], 名称)
+            for 按钮 in (方案窗.保存当前按钮, 方案窗.导入按钮, 方案窗.导出按钮):
+                self.assertTrue(按钮.isEnabled(), 按钮.text())
+            self.assertEqual(方案窗.应用按钮.isEnabled(), 方案窗._可应用)
+        方案窗.close()
+
+    def test_配置方案旧会话失败回调后完成也恢复按钮且不显示旧错误(self):
+        补丁, 任务 = self._捕获后台()
+        with 补丁:
+            方案窗 = self.窗口.打开方案()
+            旧载入 = 任务.pop()
+            方案窗.close()
+            self.窗口.打开方案()
+            while 任务:
+                函数, 成功, _ = 任务.pop(0)
+                成功(函数())
+            旧载入[2]("旧会话读取失败")
+        self.assertFalse(方案窗.忙)
+        self.assertTrue(方案窗.导入按钮.isEnabled())
+        self.assertNotIn("旧会话读取失败", 方案窗.状态.text())
+        方案窗.close()
+
     def test_关闭窗口后应用结果仍通知主界面(self):
         方案窗 = self.窗口.打开方案()
         方案窗.等待空闲()
