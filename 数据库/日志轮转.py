@@ -8,8 +8,12 @@
 - 首次清空后做一次 VACUUM 把 200MB 级的历史日志空间还给磁盘；完成后在
   ``系统配置`` 记一个标记，以后不再做。
 - ``robot-error.log`` 启动时轮转为 ``robot-error.log.bak``（只留上一份）。
+- 脚本停止后（停止按钮、任务计划结束、异常停止）界面在后台调用
+  ``停止后导出并清空``：同样先导出备份再清空 ``任务日志``，不做 VACUUM、
+  不轮转错误日志。异常留证/问题包要读最近日志时用 ``读取最近日志``，
+  表里不够时自动从备份补齐。
 
-主人已批准这项自动清空（含历史日志），这是唯一被批准的自动删除。
+主人已批准这项自动清空（含历史日志，仅限 任务日志 表与界面日志），这是唯一被批准的自动删除。
 """
 from __future__ import annotations
 
@@ -58,6 +62,15 @@ def 导出并清空任务日志(数据库路径, 备份路径=None) -> int:
             except OSError:
                 pass
             raise
+        # 战报/每日通知要从日志解析今天和昨天的战斗、收益、搜敌、竞赛积分：
+        # 先把这些行归档进 运行时状态（同一事务），归档失败就不清空。
+        from 数据库.日志统计归档 import 归档待清空日志
+
+        try:
+            归档待清空日志(连接, 最大ID)
+        except BaseException:
+            连接.rollback()
+            raise
         # 只删已经导出的部分，导出期间新写入的行留到下次。
         连接.execute("DELETE FROM 任务日志 WHERE 记录ID <= ?", (最大ID,))
         连接.commit()
@@ -91,6 +104,76 @@ def _写出临时备份(连接, 临时路径: Path, 最大ID) -> int:
         文件.flush()
         os.fsync(文件.fileno())
     return 条数
+
+
+def 停止后导出并清空(数据库路径, 记录=print) -> int | None:
+    """脚本停止后调用：导出备份（覆盖上一份）、归档统计行，再清空任务日志；绝不抛异常。
+
+    返回清空的条数（0 表示表本来就空）；任何一步失败返回 ``None``，此时数据库
+    日志原样保留，调用方也不能清空界面日志。
+    """
+    try:
+        return 导出并清空任务日志(数据库路径)
+    except Exception as 异常:
+        记录(f"停止后导出/清空日志失败（日志保留不动）：{异常}")
+        return None
+
+
+def 读取备份日志(备份路径, 机器人标志: str | None = None, 最大条数: int = 100) -> list[dict]:
+    """读 ``上次日志.bak.jsonl`` 末尾最多 ``最大条数`` 条（按时间正序）；文件不存在返回空列表。"""
+    路径 = Path(备份路径)
+    if not 路径.is_file() or 最大条数 <= 0:
+        return []
+    from collections import deque
+
+    结果: deque = deque(maxlen=int(最大条数))
+    with open(路径, encoding="utf-8", errors="replace") as 文件:
+        for 行 in 文件:
+            try:
+                项 = json.loads(行)
+            except ValueError:
+                continue
+            if not isinstance(项, dict):
+                continue
+            if 机器人标志 is not None and 项.get("机器人") != 机器人标志:
+                continue
+            结果.append(项)
+    return list(结果)
+
+
+def 读取最近日志(数据库路径, 机器人标志: str, 最大条数: int = 100, 备份路径=None) -> list[tuple[float, str]]:
+    """最近日志 [(时间戳, 内容)]，按时间正序。
+
+    停止后表已清空时，异常留证/问题包仍要看得到停止前的日志：表里不足
+    ``最大条数`` 时用备份文件里同一机器人的最后几条补在前面。只读，不改任何东西。
+    """
+    数据库路径 = Path(数据库路径)
+    备份路径 = Path(备份路径) if 备份路径 else 数据库路径.with_name(备份文件名)
+    表内: list[tuple[float, str]] = []
+    if 数据库路径.is_file():
+        try:
+            连接 = _连接(数据库路径)
+            try:
+                行列表 = 连接.execute(
+                    "SELECT 记录时间, 日志内容 FROM 任务日志 WHERE 机器人标志 = ? "
+                    "ORDER BY 记录ID DESC LIMIT ?",
+                    (str(机器人标志), int(最大条数)),
+                ).fetchall()
+            finally:
+                连接.close()
+            表内 = [(float(时间 or 0), str(内容)) for 时间, 内容 in reversed(行列表)]
+        except sqlite3.Error:
+            表内 = []
+    缺少 = int(最大条数) - len(表内)
+    if 缺少 <= 0:
+        return 表内
+    try:
+        备份 = 读取备份日志(备份路径, str(机器人标志), 缺少)
+    except OSError:
+        备份 = []
+    最早 = 表内[0][0] if 表内 else float("inf")
+    补齐 = [(float(项.get("ts") or 0), str(项.get("内容", ""))) for 项 in 备份]
+    return [项 for 项 in 补齐 if 项[0] <= 最早] + 表内
 
 
 def 需要压缩(数据库路径) -> bool:

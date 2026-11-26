@@ -27,6 +27,10 @@ class 鼠标控制器:
         self._按下时间 = 0.0
         # 由任务上下文注入；返回 True 表示当前输入必须被阻断。
         self._安全点击检查回调 = None
+        # 由机器人注入的 threading.Event；置位后最底层拒绝发送任何新输入。
+        # 与安全回调分开保存：“已确认安全按钮”会临时清空安全回调，但
+        # 绝不能借此绕过停止请求。
+        self._停止事件 = None
 
     def _获取锁(self) -> threading.RLock:
         锁 = getattr(self, "_锁", None)
@@ -39,7 +43,17 @@ class 鼠标控制器:
         return 锁
 
     # ------------------------------------------------------------ 安全
+    def _已请求停止(self) -> bool:
+        事件 = getattr(self, "_停止事件", None)
+        try:
+            return 事件 is not None and bool(事件.is_set())
+        except Exception:
+            # 无法确认停止状态时宁可不发送输入。
+            return True
+
     def _允许鼠标按下(self):
+        if self._已请求停止():
+            return False
         回调 = getattr(self, "_安全点击检查回调", None)
         if not callable(回调):
             return True
@@ -67,6 +81,8 @@ class 鼠标控制器:
 
     # ------------------------------------------------------------ 点击
     def _左键点击内部(self):
+        if self._已请求停止():
+            return False
         return self._设备.触控(self._x, self._y)
 
     def 左键点击(self):
@@ -86,6 +102,8 @@ class 鼠标控制器:
             if hasattr(self._设备, "连续触控"):
                 return self._设备.连续触控([(int(x), int(y))] * 次数, 间隔毫秒=间隔毫秒)
             for 序号 in range(次数):
+                if self._已请求停止():
+                    return False
                 self.移动到(x, y)
                 if not self._左键点击内部():
                     return False
@@ -151,6 +169,12 @@ class 鼠标控制器:
             self._按下起点 = None
             if 起点 is None:
                 return 1
+            # 本控制器的“按下”只记录起点，不向设备发送任何事件；真正的
+            # tap/swipe 在抬起时一次性发送（设备层的 swipe 自带释放）。
+            # 因此停止后放弃本次手势即可，不会在设备上留下按住状态。
+            if self._已请求停止():
+                self._有移动 = False
+                return False
             if not self._有移动:
                 return self._设备.触控(self._x, self._y)
             时长 = max(40, min(1500, int((time.monotonic() - self._按下时间) * 1000)))

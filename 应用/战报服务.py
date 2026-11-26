@@ -274,6 +274,22 @@ class 战报服务:
                 ).fetchall()
             except sqlite3.Error:
                 状态行 = []
+            # 任务日志在启动/停止后会清空；清空前已把统计相关行归档到 运行时状态。
+            try:
+                from 数据库.日志统计归档 import 读取归档行
+
+                已有 = {(float(时间), str(内容)) for 时间, 内容 in 日志行}
+                归档 = [
+                    项 for 项 in 读取归档行(conn, 机器人ID, 起始时间, 截止时间)
+                    if 项 not in 已有
+                ]
+                if 归档:
+                    日志行 = sorted(
+                        [(float(时间), str(内容)) for 时间, 内容 in 日志行] + 归档,
+                        key=lambda 项: 项[0],
+                    )
+            except sqlite3.Error:
+                pass
             try:
                 学习行 = conn.execute(
                     """SELECT 记录时间, 状态值

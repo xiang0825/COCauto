@@ -150,8 +150,8 @@ class 升级英雄任务(夜世界基础任务):
         延时 = getattr(self.上下文, "脚本延时", None)
         for 尝试序号 in range(3):
             try:
-                from 任务流程.世界跳转.新版界面坐标 import 新版建造面板OCR区域
-                OCR结果 = self.执行OCR识别(新版建造面板OCR区域)
+                from 任务流程.世界跳转.新版界面坐标 import 新版建造面板OCR区域, 锚定
+                OCR结果 = self.执行OCR识别(锚定(新版建造面板OCR区域))
             except Exception:
                 OCR结果 = []
             文本 = "".join(
@@ -179,9 +179,9 @@ class 升级英雄任务(夜世界基础任务):
                 "缺少英雄殿堂入口关闭能力，禁止发送ESC或盲点输入"
             )
             return False
-        from 任务流程.世界跳转.新版界面坐标 import 建造面板外侧安全点
+        from 任务流程.世界跳转.新版界面坐标 import 建造面板外侧安全点, 锚定
         if 点击(
-            *建造面板外侧安全点,
+            *锚定(建造面板外侧安全点),
             延时=700,
             是否精确点击=True,
         ) is False:

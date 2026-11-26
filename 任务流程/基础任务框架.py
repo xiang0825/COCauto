@@ -57,6 +57,10 @@ np = _延迟模块("numpy")
 模板匹配引擎 = _延迟导入对象("模块.检测.模板匹配器", "模板匹配引擎")
 生成贝塞尔轨迹 = _延迟导入对象("工具包.工具函数", "生成贝塞尔轨迹")
 
+# 后台预热线程和任务线程可能同时第一次取 OCR 引擎：创建过程加锁，只建一套 ONNX 会话。
+_OCR创建锁 = threading.Lock()
+
+
 @dataclass
 class 任务上下文:
     机器人标志: str
@@ -191,14 +195,52 @@ class 任务上下文:
             raise MemoryError("内存保护已触发，禁止重新加载 OCR 模型")
         引擎 = getattr(self, "_共享OCR引擎", None)
         if 引擎 is None:
-            # OCR 依赖 ONNX Runtime，只有资源/升级任务真正需要文字识别时
-            # 才导入，避免打开 GUI 或只配置任务就占用一大块常驻内存。
-            from 模块.检测.OCR识别器 import 安全OCR引擎
+            with _OCR创建锁:
+                引擎 = getattr(self, "_共享OCR引擎", None)
+                if 引擎 is None:
+                    # OCR 依赖 ONNX Runtime，只有资源/升级任务真正需要文字识别时
+                    # 才导入，避免打开 GUI 或只配置任务就占用一大块常驻内存。
+                    from 模块.检测.OCR识别器 import 安全OCR引擎
 
-            引擎 = 安全OCR引擎()
-            self._共享OCR引擎 = 引擎
+                    引擎 = 安全OCR引擎()
+                    self._共享OCR引擎 = 引擎
         self.标记模型使用("OCR")
         return 引擎
+
+    def 后台预热OCR(self) -> threading.Thread | None:
+        """启动阶段在后台加载 OCR 模型并空跑一次，不阻塞主流程。
+
+        2026-11-26 18:14 实机：竞赛排第一项时，首次 OCR（含加载 ONNX 模型）卡了
+        2 分钟以上。登录检测/稳定性复核期间先把模型载好，第一次真正识别就不用等。
+        已加载、内存保护已触发或预热正在进行时不重复启动；失败只写日志。
+        """
+        if getattr(self, "_内存保护已触发", False) or getattr(self, "_共享OCR引擎", None) is not None:
+            return None
+        已有 = getattr(self, "_OCR预热线程", None)
+        if 已有 is not None and 已有.is_alive():
+            return 已有
+
+        def 写日志(文本: str) -> None:
+            try:
+                self.置脚本状态(文本)
+            except Exception:
+                pass
+
+        def 预热() -> None:
+            开始 = time.monotonic()
+            try:
+                引擎 = self.获取OCR引擎()
+                import numpy as np
+
+                引擎(np.full((48, 160, 3), 255, dtype=np.uint8))
+                写日志(f"OCR 模型已在后台预热完成（{time.monotonic() - 开始:.1f}秒）")
+            except Exception as 异常:
+                写日志(f"[警告] OCR 后台预热失败，首次识别时再加载：{异常}")
+
+        线程 = threading.Thread(target=预热, name="OCR预热", daemon=True)
+        self._OCR预热线程 = 线程
+        线程.start()
+        return 线程
 
     def 获取YOLO检测器(self):
         """延迟创建并复用默认 YOLO 检测器。"""
@@ -1467,8 +1509,8 @@ class 任务上下文:
                 if 图像 is None or not hasattr(图像, "shape"):
                     return ""
                 高, 宽 = 图像.shape[:2]
-                from 任务流程.世界跳转.新版界面坐标 import 新版建造面板OCR区域
-                区域左, 区域上, 区域右, 区域下 = 新版建造面板OCR区域
+                from 任务流程.世界跳转.新版界面坐标 import 新版建造面板OCR区域, 锚定
+                区域左, 区域上, 区域右, 区域下 = 锚定(新版建造面板OCR区域)
                 左 = int(宽 * 区域左 / 800)
                 上 = int(高 * 区域上 / 600)
                 右 = int(宽 * 区域右 / 800)
@@ -1503,8 +1545,8 @@ class 任务上下文:
                     "检测到新版英雄侧栏，使用面板外安全点收起；"
                     "禁止点击右上角相似控件、立即完成和宝石"
                 )
-                from 任务流程.世界跳转.新版界面坐标 import 建造面板外侧安全点
-                if not self.点击已确认安全按钮(*建造面板外侧安全点, 延时=700):
+                from 任务流程.世界跳转.新版界面坐标 import 建造面板外侧安全点, 锚定
+                if not self.点击已确认安全按钮(*锚定(建造面板外侧安全点), 延时=700):
                     self.页面恢复失败 = True
                     self.置脚本状态(
                         "英雄侧栏外侧安全收起未通过复核，禁止继续点击"
@@ -2662,6 +2704,9 @@ class 任务上下文:
 
     def 输入前安全检查(self) -> bool:
         """供原始鼠标路径使用；返回 True 表示必须阻断本次输入。"""
+        停止事件 = getattr(self, "停止事件", None)
+        if 停止事件 is not None and 停止事件.is_set():
+            return True
         if getattr(self, "_内存保护已触发", False):
             return True
         if getattr(self, "_正在开启奖励宝箱", False):
@@ -2671,6 +2716,10 @@ class 任务上下文:
         结果 = getattr(self, "_最近点击页面结果", None)
         if 结果 is None:
             结果 = self.识别点击画面()
+        # 匹配等待页只有一个“取消”按钮：任何输入都只可能取消匹配，
+        # 一律阻断，等待游戏端自行进入战斗。
+        if 结果 is not None and getattr(结果, "页面", "") == "搜索对手中":
+            return True
         # 城墙任务已经通过 OCR 定位到二次确认按钮时，确认点击拥有更高
         # 优先级。升级确认页的几何特征与普通“升级详情”面板相同；如果
         # 先进入下面的通用关闭器，它会点击右上角 X，随后原确认坐标必然
@@ -3957,6 +4006,9 @@ class 任务上下文:
                 self.停止事件.wait(timeout=等待秒数)
 
     def 点击(self,x,y,延时=None,是否精确点击=False):
+        停止事件 = getattr(self, "停止事件", None)
+        if 停止事件 is not None and 停止事件.is_set():
+            return False
         if getattr(self, "_正在开启奖励宝箱", False):
             return False
         # 所有任务共用这一入口；危险页面一旦被识别，ESC 并确认主页，
@@ -4015,6 +4067,11 @@ class 任务上下文:
 
         if self.鼠标 is None:
             raise RuntimeError("鼠标控制器未初始化")
+
+        # 上面的页面复核、日志回调都可能耗时；期间收到停止就不再发送这次点击。
+        停止事件 = getattr(self, "停止事件", None)
+        if 停止事件 is not None and 停止事件.is_set():
+            return False
 
         self.鼠标.移动到(x, y)
         点击成功 = self.鼠标.左键点击()
@@ -4260,14 +4317,17 @@ class 基础任务(ABC):
         """统一异常处理 - 委托给上下文处理"""
         self.上下文.处理异常(self.__class__.__name__, 异常, 是否重启游戏, 是否重启机器人)
 
-    def 是否出现图片(self, 模板路径: str, 区域: Tuple[int, int, int, int] = (0, 0, 800, 600), 相似度阈值=0.9) -> Tuple[
-        bool, Tuple[int, int]]:
+    def 是否出现图片(self, 模板路径: str, 区域: Tuple[int, int, int, int] = (0, 0, 800, 600), 相似度阈值=0.9,
+                     几何多尺度: bool = False) -> Tuple[bool, Tuple[int, int]]:
         """
         当前机器人操作的模拟器是否出现指定图片，并返回坐标。
 
         参数:
             模板路径: 模板图路径（可为多个路径用 | 分隔）
             区域: 指定识别区域，格式为 (x1, y1, x2, y2)
+            几何多尺度: 原尺度未达阈值时，再按设备几何推导的 (sx, sy)
+                尺度重试（阈值不变）。800×600 参考尺寸下没有候选尺度，
+                行为与旧版完全相同。
 
         返回:
             是否匹配, (x, y) 坐标
@@ -4275,6 +4335,15 @@ class 基础任务(ABC):
         x1, y1, x2, y2 = 区域
         屏幕图像 = self.上下文.op.获取屏幕图像cv(x1, y1, x2, y2)
         是否匹配, (x, y), _ = self.模板识别.执行匹配(屏幕图像, 模板路径, 相似度阈值)
+        if not 是否匹配 and 几何多尺度:
+            多尺度 = getattr(self.模板识别, "执行多尺度最佳匹配", None)
+            if callable(多尺度):
+                try:
+                    分数, (多x, 多y), _, _ = 多尺度(屏幕图像, 模板路径)
+                    if float(分数) >= float(相似度阈值):
+                        是否匹配, x, y = True, int(多x), int(多y)
+                except Exception:
+                    pass
 
         # 注意坐标需要加上区域偏移量
         if 是否匹配:

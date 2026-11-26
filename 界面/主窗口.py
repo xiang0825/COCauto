@@ -24,6 +24,39 @@ from 界面.组件 import 后台执行, 应用图标, 提示错误, 提示信息
 
 # 竞赛积分超过这么久没更新，多半是上一期的数据，不再显示。
 竞赛积分有效秒 = 10 * 24 * 3600
+
+
+def 竞赛已接任务文本(竞赛: dict) -> str:
+    """部落竞赛已接任务（与“正在执行”的任务分开显示）；没有已接任务返回空串。"""
+    名称 = str((竞赛 or {}).get("当前任务") or "").strip()
+    if not 名称:
+        return ""
+    文本 = f"竞赛已接：{名称}"
+    进度 = (竞赛 or {}).get("当前任务进度")
+    if isinstance(进度, (list, tuple)) and len(进度) == 2:
+        try:
+            文本 += f" · 进度 {int(进度[0])}/{int(进度[1])}"
+        except (TypeError, ValueError):
+            pass
+    return 文本
+
+
+def 停止清理后应清空界面(结果) -> bool:
+    """只有数据库日志确实已导出并清空，界面日志才跟着清；失败/跳过/线程未退出都保留。"""
+    return 结果 is not None and bool(getattr(结果, "成功", False))
+
+
+def 运行状态文本(任务名称: str | None, 阶段: str | None) -> str:
+    """顶栏：正在执行的任务名 + 最近关键状态；两者都没有时给等待提示。"""
+    if 任务名称 and 阶段:
+        return f"正在执行：{任务名称} · {阶段}"
+    if 任务名称:
+        return f"正在执行：{任务名称}"
+    if 阶段:
+        return 阶段
+    return "正在运行，等待下一条关键状态…"
+
+
 # 提醒条只显示最近这段时间内的异常。
 提醒有效秒 = 30 * 60
 
@@ -221,8 +254,11 @@ class 主窗口(QMainWindow):
         self.竞赛进度.setFixedHeight(6)
         self.竞赛进度.setRange(0, 1)
         self.竞赛进度.setValue(0)
+        self.竞赛任务文字 = 标签("", "数据名")
+        self.竞赛任务文字.setVisible(False)
         竞赛布局.addWidget(self.竞赛文字)
         竞赛布局.addWidget(self.竞赛进度)
+        竞赛布局.addWidget(self.竞赛任务文字)
         布局.addWidget(竞赛, 2)
         return 条
 
@@ -419,7 +455,10 @@ class 主窗口(QMainWindow):
             文本 = "已暂停，按 F1 或“继续”恢复；游戏倒计时不会暂停"
         else:
             阶段 = self.聚合器.当前阶段(self.控制器.实例ID)
-            文本 = 展示文本(阶段) if 阶段 else "正在运行，等待下一条关键状态…"
+            文本 = 运行状态文本(
+                self.聚合器.当前任务名称(self.控制器.实例ID),
+                展示文本(阶段) if 阶段 else None,
+            )
             if 快照.已运行秒 is not None:
                 文本 += f" · 已运行 {时长文本(快照.已运行秒)}"
         self.当前动作.设置文本(文本)
@@ -449,8 +488,11 @@ class 主窗口(QMainWindow):
             self.竞赛进度.setRange(0, 1)
             self.竞赛进度.setValue(0)
         提示 = []
-        if 概况.竞赛.get("当前任务"):
-            提示.append(f"当前任务：{概况.竞赛['当前任务']}")
+        已接 = 竞赛已接任务文本(概况.竞赛)
+        self.竞赛任务文字.setText(已接)
+        self.竞赛任务文字.setVisible(bool(已接))
+        if 已接:
+            提示.append(已接)
         下次 = float(概况.竞赛.get("下次检查时间", 0) or 0)
         if 下次 > time.time():
             提示.append("下次检查 " + time.strftime("%H:%M", time.localtime(下次)))
@@ -544,11 +586,30 @@ class 主窗口(QMainWindow):
             self._刷新提醒()
             self._刷新运行任务()
             self._刷新托盘()
+            self._停止后清空日志()
             self.运行页.定时刷新()
             if self._悬浮窗 is not None:
                 self._悬浮窗.刷新()
         except Exception as 异常:  # 刷新异常不能让定时器停摆
             print(f"界面刷新异常：{异常}")
+
+    def _停止后清空日志(self):
+        """脚本停止（按钮/计划结束/异常）后在后台导出备份并清空日志，界面不卡。"""
+        if not self.控制器.检测到停止():
+            return
+
+        def 完成(结果):
+            if not 停止清理后应清空界面(结果):
+                # 失败/跳过/线程未退出：数据库日志没清，界面日志也不清。
+                if 结果 is not None and 结果.状态 == "失败":
+                    self._记录操作(f"停止后导出日志失败，日志保留未清空：{结果.原因}")
+                return
+            self.聚合器.清空会话(结果.截止)
+            self.运行页.刷新日志(强制=True)
+            if 结果.条数:
+                self._记录操作(f"脚本已停止：{结果.条数} 条日志已导出到 上次日志.bak.jsonl 并清空")
+
+        后台执行(self.控制器.停止后清空日志, 完成, lambda 信息: print(f"停止后清空日志失败：{信息}"))
 
     def _消费日志(self):
         self.聚合器.消费实时队列()

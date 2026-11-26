@@ -27,6 +27,7 @@ import math
 import os
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -214,8 +215,27 @@ def 兵种要求满足(文本: str, 配置: dict, 阵容签名: str | None) -> b
                for 单位 in 阵容单位(阵容签名))
 
 
+def 命中不接名单(文本: str, 配置: dict) -> str | None:
+    """主人明确不接的任务类别（捐兵/捐法术/捐攻城机器等）；命中返回类别名。
+
+    ``不接名单`` 在 ``资源/活动/部落竞赛.json`` 里按类别列关键词，比白名单更优先：
+    即使 OCR 把详情读歪、碰巧凑上某个白名单关键词，也一律不接。
+    """
+    文本 = 纠正OCR文本(文本, 配置)
+    if not 文本:
+        return None
+    for 类别, 词表 in (配置.get("不接名单") or {}).items():
+        if not isinstance(词表, (list, tuple)):
+            continue
+        if any(规范文本(词) and 规范文本(词) in 文本 for 词 in 词表):
+            return str(类别)
+    return None
+
+
 def 识别任务类型(文本: str, 配置: dict, 阵容签名: str | None = None) -> str | None:
-    """按白名单定义判断任务类型；全局排除词命中、指定兵种阵容里没有时返回 None。"""
+    """按白名单定义判断任务类型；不接名单/全局排除词命中、指定兵种阵容里没有时返回 None。"""
+    if 命中不接名单(文本, 配置):
+        return None
     文本 = 纠正OCR文本(文本, 配置)
     if not 文本:
         return None
@@ -335,9 +355,14 @@ class 部落竞赛任务(基础任务):
     """部落竞赛接任务。``执行`` 返回 False 只表示页面无法恢复到主世界。"""
 
     def __init__(self, 上下文, 配置: dict | None = None, 官方摘要=None,
-                 时钟: Callable[[], float] = time.monotonic, 现在: Callable[[], datetime] = datetime.now):
+                 时钟: Callable[[], float] = time.monotonic, 现在: Callable[[], datetime] = datetime.now,
+                 回主世界: Callable[[], bool] | None = None):
         super().__init__(上下文)
         self._配置 = 配置
+        # 任务计划里的 event 项传入：不在主世界主页时先调用它安全切回主世界
+        # （复用引擎的 _进入并确认主世界，不在这里重写世界入口识别）。
+        # 打鱼间隙（进攻前）调用时已在主页，不传。
+        self._回主世界 = 回主世界
         self.官方摘要 = 官方摘要
         self._时钟 = 时钟
         self._现在 = 现在
@@ -400,14 +425,74 @@ class 部落竞赛任务(基础任务):
         except TypeError:
             return self.上下文.op.获取屏幕图像cv(0, 0, 800, 600)
 
-    def _OCR(self, 图像) -> list[文字项]:
-        try:
-            获取 = getattr(self.上下文, "获取OCR引擎", None)
-            引擎 = 获取() if callable(获取) else self.ocr引擎
-            return 整理OCR结果(引擎(图像))
-        except Exception as 异常:
-            self._日志(f"OCR 失败：{异常}")
+    # 同一进程里只允许一次未返回的 OCR：超时后被放弃的识别线程还在跑时，
+    # 不再并发调用同一个 native 引擎。
+    _OCR进行中: threading.Thread | None = None
+
+    def _OCR(self, 图像, 区域=None) -> list[文字项]:
+        """限时 OCR。
+
+        2026-11-26 18:14 实机：竞赛排在第一项、本会话首次用 OCR 时，点开活动列表后
+        第一次识别（含首次加载 OCR 模型）2 分钟以上没返回，期间一条日志都没有，
+        步骤超时也轮不到判断。这里把识别放到后台线程：每 ``OCR进度日志秒`` 写一条
+        进度日志（也是心跳），超过 ``OCR秒`` 仍未返回就抛 ``部落竞赛超时``，
+        交给 执行() 走安全关闭回主页并按冷却重试，不再无声卡住。
+        """
+        旧线程 = 部落竞赛任务._OCR进行中
+        if 旧线程 is not None and 旧线程.is_alive():
+            raise 部落竞赛超时("上一次 OCR 仍未返回，本轮放弃识别")
+        结果: dict[str, Any] = {}
+        偏移 = (0, 0)
+        if 区域 is not None and 图像 is not None and hasattr(图像, "shape"):
+            # 只识别需要的小区域：活动列表这类文字很多的整屏 OCR 实机要 1~4 分钟。
+            高, 宽 = 图像.shape[:2]
+            x1, y1, x2, y2 = [int(值) for 值 in 区域]
+            x1, y1 = max(0, min(宽, x1)), max(0, min(高, y1))
+            x2, y2 = max(x1, min(宽, x2)), max(y1, min(高, y2))
+            if x2 > x1 and y2 > y1:
+                图像 = 图像[y1:y2, x1:x2].copy()
+                偏移 = (x1, y1)
+        self._OCR偏移 = 偏移
+
+        def 识别():
+            try:
+                获取 = getattr(self.上下文, "获取OCR引擎", None)
+                引擎 = 获取() if callable(获取) else self.ocr引擎
+                结果["值"] = 引擎(图像)
+            except Exception as 异常:  # 识别失败按“没有文字”处理
+                结果["异常"] = 异常
+
+        线程 = threading.Thread(target=识别, name="部落竞赛OCR", daemon=True)
+        部落竞赛任务._OCR进行中 = 线程
+        线程.start()
+        上限 = self._超时设置("OCR秒", 60)
+        间隔 = max(1.0, self._超时设置("OCR进度日志秒", 10))
+        开始 = time.monotonic()
+        while True:
+            线程.join(timeout=min(间隔, max(0.05, 上限 - (time.monotonic() - 开始))))
+            if not 线程.is_alive():
+                break
+            已过 = time.monotonic() - 开始
+            if 已过 >= 上限:
+                self._日志(f"OCR 识别超过{int(上限)}秒仍未返回，放弃本轮并关闭面板")
+                raise 部落竞赛超时(f"OCR 识别超过{int(上限)}秒未返回")
+            self._日志(f"OCR 识别中（已{int(已过)}秒；首次使用需要加载文字识别模型）")
+        部落竞赛任务._OCR进行中 = None
+        耗时 = time.monotonic() - 开始
+        if 耗时 >= 5:
+            self._日志(f"OCR 耗时{耗时:.1f}秒（区域={tuple(区域) if 区域 is not None else '整屏'}）")
+        if "异常" in 结果:
+            self._日志(f"OCR 失败：{结果['异常']}")
             return []
+        try:
+            项列表 = 整理OCR结果(结果.get("值"))
+        except Exception as 异常:
+            self._日志(f"OCR 结果解析失败：{异常}")
+            return []
+        if 偏移 == (0, 0):
+            return 项列表
+        dx, dy = 偏移
+        return [文字项(项.文本, (项.框[0] + dx, 项.框[1] + dy, 项.框[2] + dx, 项.框[3] + dy)) for 项 in 项列表]
 
     def _读模板(self, 名称: str):
         if 名称 in self._模板缓存:
@@ -475,6 +560,8 @@ class 部落竞赛任务(基础任务):
     def _点击(self, 点: tuple[int, int], 说明: str) -> bool:
         self._检查总超时()
         self._日志(f"点击{说明} {点}")
+        # 写日志（心跳/通知回调）期间可能刚好收到停止：发送点击前再查一次。
+        self._检查总超时()
         结果 = self.上下文.点击(int(点[0]), int(点[1]), 是否精确点击=True)
         if 结果 is False:
             self._日志(f"点击{说明}被点击护栏拒绝")
@@ -542,15 +629,24 @@ class 部落竞赛任务(基础任务):
     def 执行(self, 进攻前: bool = False) -> bool:
         设置 = self.上下文.设置
         if not getattr(设置, "是否部落竞赛接任务", False):
+            来源 = "打鱼间隙" if 进攻前 else "任务计划"
+            self._日志(f"本轮跳过（{来源}）：设置里未开启“部落竞赛接任务”")
             return True
         记录 = self._读状态()
+        self._本次进攻前 = bool(进攻前)
         if 进攻前:
             记录["进攻计数"] = int(记录.get("进攻计数", 0) or 0) + 1
         现在 = time.time()
-        if not self._已到检查时机(记录, 现在):
+        if not self._已到检查时机(记录, 现在, 进攻前=进攻前):
             if 进攻前:
                 self._写状态(记录)
+            try:
+                说明 = self._跳过说明(记录, 现在, 进攻前)
+            except Exception:
+                说明 = "本轮跳过：未到检查时机"
+            self._日志(说明)
             return True
+        self._日志(self._触发说明(记录, 现在, 进攻前))
         self._本轮个人积分 = None
         self._本轮选择 = ""
         try:
@@ -575,6 +671,12 @@ class 部落竞赛任务(基础任务):
             self._提醒一次(记录, "满分", "部落竞赛个人积分已满，请手动去领奖励。")
             self._记录结果(记录, "已满分", self._冷却分钟("已满分"))
             return True
+
+        if self._回主世界 is not None and not self._是主世界主页():
+            if not self._切回主世界():
+                self._记录结果(记录, "非主世界", self._冷却分钟("非主世界"))
+                # 切换流程判定页面不可恢复时交给引擎安全待命；否则让后续任务照常继续。
+                return not bool(getattr(self.上下文, "页面恢复失败", False))
 
         self._记录 = 记录
         try:
@@ -607,21 +709,110 @@ class 部落竞赛任务(基础任务):
         self._记录结果(记录, 结果, self._冷却分钟(结果))
         return True
 
-    def _已到检查时机(self, 记录: dict, 现在: float) -> bool:
+    def _当前页面描述(self) -> str:
+        识别 = getattr(self.上下文, "识别点击画面", None)
+        if not callable(识别):
+            return "页面未知"
+        try:
+            结果 = 识别(强制=True)
+        except Exception:
+            return "页面未知"
+        页面 = getattr(结果, "页面", "") or "未知"
+        世界 = getattr(结果, "世界", None) or "未知"
+        return f"页面={页面}，世界={世界}"
+
+    def _切回主世界(self) -> bool:
+        """不在主世界主页时调用注入的世界切换；回到主页返回 True，失败写清原因。"""
+        self._日志(f"当前不在主世界主页（{self._当前页面描述()}），先安全切回主世界再查看竞赛任务")
+        原因 = ""
+        try:
+            成功 = bool(self._回主世界())
+        except Exception as 异常:
+            成功 = False
+            原因 = f"切换异常：{异常}"
+        if 成功 and self._是主世界主页():
+            self._日志("已回到主世界主页，继续打开竞赛面板查看可接任务")
+            return True
+        if not 原因:
+            原因 = "世界切换未成功" if not 成功 else f"切换后仍未确认主世界主页（{self._当前页面描述()}）"
+        self._日志(
+            f"无法回到主世界主页：{原因}；本轮不接任务，"
+            f"约{int(self._冷却分钟('非主世界'))}分钟后重试"
+        )
+        return False
+
+    @staticmethod
+    def _时分(时间戳: float) -> str:
+        try:
+            return datetime.fromtimestamp(float(时间戳)).strftime("%H:%M")
+        except (OverflowError, OSError, ValueError):
+            return ""
+
+    def _跳过说明(self, 记录: dict, 现在: float, 进攻前: bool = False) -> str:
+        """未到检查时机时写给用户看的跳过原因：冷却剩余、上次结果、已接任务。"""
+        原因 = []
+        下次 = float(记录.get("下次检查时间", 0) or 0)
+        if 下次 > 现在:
+            剩余分 = max(1, math.ceil((下次 - 现在) / 60))
+            时分 = self._时分(下次)
+            原因.append(f"冷却中，还剩约{剩余分}分钟" + (f"（{时分} 后再查看）" if 时分 else ""))
+        目标 = 记录.get("下次检查进攻计数")
+        if 目标 is not None:
+            try:
+                还差 = int(目标) - self._已完成进攻计数(记录, 进攻前)
+                if 还差 > 0:
+                    原因.append(f"或再打完{还差}场后提前查看")
+            except (TypeError, ValueError):
+                pass
+        上次 = 记录.get("结果")
+        if 上次:
+            时间 = float(记录.get("时间", 0) or 0)
+            时分 = self._时分(时间) if 时间 > 0 else ""
+            时间文本 = f"（{时分}）" if 时分 else ""
+            原因.append(f"上次结果：{上次}{时间文本}")
+        if 记录.get("当前任务"):
+            原因.append(f"已接任务：{记录['当前任务']}")
+        来源 = "打鱼间隙" if 进攻前 else "任务计划"
+        return f"本轮跳过（{来源}）：" + ("；".join(原因) if 原因 else "未到检查时机")
+
+    @staticmethod
+    def _已完成进攻计数(记录: dict, 进攻前: bool) -> int:
+        """已经打完的场次。进攻前调用时“进攻计数”已含即将开打的这一场，要减掉。
+
+        2026-11-26 18:20 实机：接任务时计数 N、预定 N+1 场后复查；下一次进攻前
+        计数刚加到 N+1 就被当成“已打 1 场”，一场没打（41 秒后）又开了竞赛面板。
+        """
+        计数 = int(记录.get("进攻计数", 0) or 0)
+        return 计数 - 1 if 进攻前 else 计数
+
+    def _已到检查时机(self, 记录: dict, 现在: float, 进攻前: bool = False) -> bool:
         if 现在 >= float(记录.get("下次检查时间", 0) or 0):
             return True
         目标场次 = 记录.get("下次检查进攻计数")
         if 目标场次 is None:
             return False
         try:
-            return int(记录.get("进攻计数", 0) or 0) >= int(目标场次)
+            return self._已完成进攻计数(记录, 进攻前) >= int(目标场次)
         except (TypeError, ValueError):
             return False
+
+    def _触发说明(self, 记录: dict, 现在: float, 进攻前: bool) -> str:
+        """开面板前写明是谁触发的、为什么现在查看。"""
+        来源 = "主世界刷资源打鱼间隙（进攻前）" if 进攻前 else "任务计划 部落竞赛接任务"
+        下次 = float(记录.get("下次检查时间", 0) or 0)
+        if 下次 <= 0:
+            原因 = "首次检查"
+        elif 现在 >= 下次:
+            原因 = "冷却已到期"
+        else:
+            原因 = f"已打满预定场次（已完成{self._已完成进攻计数(记录, 进攻前)}场，预定第{记录.get('下次检查进攻计数')}场后查看）"
+        return f"开始检查竞赛任务（触发：{来源}；{原因}）"
 
     def _计划进攻复查(self, 记录: dict, 结果: str) -> int | None:
         """按结果和任务进度预测下一次开面板的进攻计数；None 表示只看时间冷却。"""
         规则 = self.配置.get("进攻复查", {}) if isinstance(self.配置, dict) else {}
-        计数 = int(记录.get("进攻计数", 0) or 0)
+        # 统一按“已打完的场次”计，和 _已到检查时机 的比较口径一致。
+        计数 = self._已完成进攻计数(记录, bool(getattr(self, "_本次进攻前", False)))
         if 结果 == "已接任务":
             记录["进度基线"] = {"进度": 0, "进攻计数": 计数}
             return 计数 + 1  # 打一场后回来看速率
@@ -666,8 +857,19 @@ class 部落竞赛任务(基础任务):
         if 结果 == "已接任务" and self._本轮选择:
             记录["当前任务"] = self._本轮选择
             记录["当前任务时间"] = 现在
-        elif 结果 in {"已满分", "入口不存在"}:
-            记录.pop("当前任务", None)
+            记录.pop("当前任务进度", None)
+        elif 结果 == "已有任务":
+            进度 = getattr(self, "_进度", None)
+            if 进度:
+                记录["当前任务进度"] = [int(进度[0]), int(进度[1])]
+            if not 记录.get("当前任务"):
+                # 手动接的或上次没记下名字：界面仍要知道有进行中的任务。
+                记录["当前任务"] = "进行中的任务"
+                记录["当前任务时间"] = 现在
+        elif 结果 in {"已满分", "入口不存在", "无可接任务", "可领奖"}:
+            # 面板上已没有进行中的任务（做完了/没任务/活动结束）：界面不能再显示旧任务。
+            for 键 in ("当前任务", "当前任务时间", "当前任务进度"):
+                记录.pop(键, None)
         if 结果 not in {"入口不存在", "非主世界", "资源缺失", "资源未校准"}:
             记录["本期见过入口"] = self._现在().strftime("%Y-%m")
         self._写状态(记录)
@@ -801,11 +1003,23 @@ class 部落竞赛任务(基础任务):
             self._延时(800)
         return self._是主世界主页()
 
+    def _卡片区(self, 扩展: int = 0) -> tuple[int, int, int, int]:
+        x1, y1, x2, y2 = self.配置.get("面板", {}).get("卡片区ROI") or (0, 0, 800, 600)
+        return (max(0, x1 - 扩展), max(0, y1 - 扩展), min(800, x2 + 扩展), min(600, y2 + 扩展))
+
     def _关闭X附近禁点(self, 图像, 点: tuple[int, int]) -> str | None:
         """红 X 附近出现宝石/购买/跳过/重置/立即等字样或宝石图标时返回原因。"""
         x, y = int(点[0]), int(点[1])
-        附近 = (x - 160, max(0, y - 40), min(800, x + 60), y + 120)
-        禁点 = 含禁点文字(拼接文本(区域文字(self._OCR(图像), 附近)), self.配置)
+        附近 = (max(0, x - 160), max(0, y - 40), min(800, x + 60), y + 120)
+        try:
+            项列表 = self._OCR(图像, 附近)
+        except 部落竞赛超时 as 异常:
+            if "OCR" not in str(异常):
+                raise
+            # OCR 卡住时仍要能关掉已打开的列表/面板回主页；只剩宝石图标模板做复核。
+            self._日志("OCR 不可用，关闭前只用宝石图标模板复核 X 附近")
+            项列表 = []
+        禁点 = 含禁点文字(拼接文本(区域文字(项列表, 附近)), self.配置)
         if 禁点 is None and self._匹配模板(图像, "宝石图标", 附近) is not None:
             禁点 = "宝石图标"
         return 禁点
@@ -833,22 +1047,47 @@ class 部落竞赛任务(基础任务):
         except Exception as 异常:
             self._日志(f"保存入口现场截图失败（不影响流程）：{异常}")
 
+    def _活动列表视觉确认(self) -> bool:
+        """页面识别器的快速视觉特征（居中高亮活动列表+右侧绿色入口+右上红X）。"""
+        识别 = getattr(self.上下文, "识别点击画面", None)
+        if not callable(识别):
+            return False
+        try:
+            结果 = 识别(强制=True)
+        except Exception:
+            return False
+        if getattr(结果, "页面", "") != "活动弹窗":
+            return False
+        try:
+            return float(getattr(结果, "可信度", 0) or 0) >= 0.90
+        except (TypeError, ValueError):
+            return False
+
     def _活动列表已打开(self):
+        """确认活动列表：先用视觉特征+关闭 X 模板（不 OCR），不行再只 OCR 标题小区域。
+
+        2026-11-26 实机：原来每次轮询都整屏 OCR 活动列表（文字最多的一页），
+        单次确认 164~251 秒；面板/详情等其它步骤只要 1~4 秒。
+        """
         图像 = self._截图()
-        列表 = self.配置.get("活动列表", {})
-        项列表 = self._OCR(图像)
-        if 查找关键词(项列表, 列表.get("标题关键词", ["活动"]), 列表.get("标题ROI")) is None:
-            return None
         if self._匹配模板(图像, "活动列表关闭") is None:
             return None
-        return 项列表
+        if self._活动列表视觉确认():
+            return True
+        列表 = self.配置.get("活动列表", {})
+        标题区 = 列表.get("标题ROI") or (300, 25, 500, 65)
+        项列表 = self._OCR(图像, 标题区)
+        if 查找关键词(项列表, 列表.get("标题关键词", ["活动"]), 标题区) is None:
+            return None
+        return True
 
     def _找部落竞赛开启(self) -> tuple[int, int] | None:
         列表 = self.配置.get("活动列表", {})
         for 次数 in range(int(列表.get("最多滑动次数", 4)) + 1):
             self._检查总超时()
             图像 = self._截图()
-            项列表 = self._OCR(图像)
+            # 标题、『剩余时间』和禁点检查都只看列表区，不必整屏 OCR。
+            项列表 = self._OCR(图像, 列表.get("列表ROI"))
             标题 = self._找竞赛标题(项列表, 列表)
             if 标题 is not None:
                 # 『开启』两个字 OCR 读不出来：用模板在标题下方同一张活动卡
@@ -895,16 +1134,21 @@ class 部落竞赛任务(基础任务):
         return min(命中, key=lambda 项: 项.框[1]) if 命中 else None
 
     def _识别竞赛面板(self):
+        """先用面板标题/关闭 X 模板和标题小区域 OCR 确认，确认后才整帧 OCR 一次面板内容。
+
+        内容 OCR 保留整帧：个人积分、进度、进行中、以及位置不固定的“已满分/可领奖”
+        横幅都要从同一份文字里判断；每次开面板只做这一次（实机 1~4 秒），仍受 OCR 限时保护。
+        """
         图像 = self._截图()
         面板 = self.配置.get("面板", {})
-        项列表 = self._OCR(图像)
-        if 查找关键词(项列表, 面板.get("标题关键词", ["部落竞赛"]), 面板.get("标题ROI")) is None:
-            return None
         if self._匹配模板(图像, "面板标题") is None:
             return None
         if self._匹配模板(图像, "关闭按钮") is None:
             return None
-        return {"图像": 图像, "文字": 项列表}
+        标题区 = 面板.get("标题ROI")
+        if 查找关键词(self._OCR(图像, 标题区), 面板.get("标题关键词", ["部落竞赛"]), 标题区) is None:
+            return None
+        return {"图像": 图像, "文字": self._OCR(图像)}
 
     def _处理面板(self, 面板: dict) -> str:
         配置 = self.配置
@@ -1125,7 +1369,8 @@ class 部落竞赛任务(基础任务):
         if not 详情:
             # 没有开始按钮：可能是冷却中的卡或识别不清，都不接。
             图像 = self._截图()
-            文本 = 拼接文本(区域文字(self._OCR(图像), self.配置.get("面板", {}).get("卡片区ROI", (0, 0, 800, 600))))
+            卡片区 = self._卡片区()
+            文本 = 拼接文本(区域文字(self._OCR(图像, 卡片区), 卡片区))
             候选.冷却 = True
             候选.详情超时 = True
             候选.文本 = 文本
@@ -1138,13 +1383,17 @@ class 部落竞赛任务(基础任务):
         候选.开始点 = 详情["开始点"]
         候选.禁点原因 = 详情["禁点"]
         候选.冷却 = 详情["冷却"]
+        不接 = 命中不接名单(详情["文本"], self.配置)
+        if 不接 and not 候选.禁点原因:
+            候选.禁点原因 = f"不接名单:{不接}"
         候选.类型 = 识别任务类型(详情["文本"], self.配置, self._阵容签名())
         return 候选
 
     def _识别详情(self):
         图像 = self._截图()
-        项列表 = self._OCR(图像)
-        卡片区 = self.配置.get("面板", {}).get("卡片区ROI", (0, 0, 800, 600))
+        卡片区 = self._卡片区()
+        # 详情框相对『开始』最多下探约 50 像素，OCR 区域在卡片区外多留一圈。
+        项列表 = self._OCR(图像, self._卡片区(扩展=60))
         开始 = 查找关键词(项列表, self.配置.get("OCR", {}).get("开始关键词", ["开始"]), 卡片区)
         if 开始 is None:
             return None
@@ -1205,7 +1454,7 @@ class 部落竞赛任务(基础任务):
                 break
             if 本页指纹 is not None:
                 上页指纹 = 本页指纹
-            位置列表 = 识别卡片位置(self._OCR(页面图像), self.配置) or [
+            位置列表 = 识别卡片位置(self._OCR(页面图像, self._卡片区()), self.配置) or [
                 tuple(位置) for 位置 in 页.get("卡片", [])
             ]
             for 位置 in 位置列表:
@@ -1332,8 +1581,8 @@ class 部落竞赛任务(基础任务):
     def _任务已开始(self, 允许弹窗: bool = True):
         """开始后确认任务已接：放弃按钮 / 0/N 进度 / 其余卡片全部变灰。"""
         图像 = self._截图()
-        项列表 = self._OCR(图像)
         卡片区 = self.配置.get("面板", {}).get("卡片区ROI")
+        项列表 = self._OCR(图像, 卡片区)
         放弃词 = self.配置.get("OCR", {}).get("已接确认关键词", ["放弃"])
         if 查找关键词(项列表, 放弃词, 卡片区):
             return True
@@ -1365,9 +1614,10 @@ class 部落竞赛任务(基础任务):
             关闭点 = self._匹配模板(图像, "关闭按钮") or self._匹配模板(图像, "活动列表关闭")
             if 关闭点 is None:
                 # 详情弹窗挡住了 X 之外没有别的情况；先点空白处，再找 X。
-                项列表 = self._OCR(图像)
+                标题区 = self.配置.get("面板", {}).get("标题ROI")
+                项列表 = self._OCR(图像, 标题区)
                 if 查找关键词(项列表, self.配置.get("面板", {}).get("标题关键词", ["部落竞赛"]),
-                         self.配置.get("面板", {}).get("标题ROI")) is not None:
+                         标题区) is not None:
                     self._关闭详情()
                     continue
                 self._日志("没有找到可确认的关闭按钮，不盲点")

@@ -59,7 +59,10 @@ class 等待回营或第二次战斗(夜世界基础任务):
                     return False
 
                 if not getattr(self, "只等待回营", False) and (
-                    (页面 == "战斗中" and self.是否出现换兵种箭头())
+                    (页面 == "战斗中" and (
+                        self.是否出现换兵种箭头()
+                        or self._第二场开始倒计时已出现()
+                    ))
                     or (not 有页面识别 and self.是否出现换兵种箭头())
                 ):
 
@@ -105,9 +108,52 @@ class 等待回营或第二次战斗(夜世界基础任务):
         except Exception:
             return None, True
 
+    # 第二场开始前顶部显示“離戰鬥開始剩下 / 离战斗开始剩下”，第一场进行中
+    # 显示“结束剩下”。OCR 只作箭头模板漏检时的辅助证据，并节流调用。
+    第二场倒计时OCR区域 = (280, 0, 520, 42)
+    第二场倒计时OCR间隔秒 = 2.0
+
+    def _第二场开始倒计时已出现(self) -> bool:
+        """只读 OCR 顶部倒计时标题，确认第二场（开始前倒计时）已出现。"""
+        现在 = time.monotonic()
+        上次 = float(getattr(self, "_上次第二场OCR时间", 0.0) or 0.0)
+        if 上次 and 现在 - 上次 < self.第二场倒计时OCR间隔秒:
+            return False
+        self._上次第二场OCR时间 = 现在
+        识别 = getattr(self, "执行OCR识别", None)
+        if not callable(识别):
+            return False
+        try:
+            结果 = 识别(self.第二场倒计时OCR区域) or []
+        except Exception:
+            return False
+        文字列表 = []
+        for 项 in 结果:
+            try:
+                文字列表.append(str(项[1][0] if isinstance(项[1], (list, tuple)) else 项[1]))
+            except (TypeError, IndexError, KeyError):
+                文字 = 项.get("文字") if isinstance(项, dict) else None
+                if 文字:
+                    文字列表.append(str(文字))
+        return self.是第二场开始倒计时文字("".join(文字列表))
+
+    @staticmethod
+    def 是第二场开始倒计时文字(文字: str) -> bool:
+        文字 = str(文字 or "").replace(" ", "")
+        if not 文字 or "结束" in 文字 or "結束" in 文字:
+            return False
+        return ("开始" in 文字 or "開始" in 文字) and "剩" in 文字
+
     def 是否出现换兵种箭头(self):
         """验证是否已开始战斗"""
-        是否匹配, (x, y)=self.是否出现图片("更换兵种箭头[1].bmp|更换兵种箭头[2].bmp|更换兵种箭头[3].bmp|更换兵种箭头[4].bmp|更换兵种箭头[5].bmp",(163,495,800,600))
+        # 箭头素材来自早期 4:3 客户端；16:9 实机上原尺度仅 0.66~0.78，
+        # 需要按设备几何缩放模板（1280×720 为 sx≈0.9、sy≈1.2）才能达到
+        # 0.92 以上。阈值保持 0.9，800×600 参考尺寸不做额外尺度。
+        是否匹配, (x, y)=self.是否出现图片(
+            "更换兵种箭头[1].bmp|更换兵种箭头[2].bmp|更换兵种箭头[3].bmp|更换兵种箭头[4].bmp|更换兵种箭头[5].bmp",
+            (163,495,800,600),
+            几何多尺度=True,
+        )
         if 是否匹配:
             if self.上下文.点击(x-18, y-28) is False:
                 self.上下文.置脚本状态(
