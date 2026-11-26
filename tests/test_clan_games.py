@@ -207,6 +207,7 @@ def 构造任务(游戏, 设置=None, 数据库=None, 配置覆盖=None, 官方�
         发送企业微信通知=lambda 文本, 包含截图=True: 通知.append(文本),
         停止事件=None,
         页面恢复失败=False,
+        待命现场目录=tempfile.mkdtemp(prefix="clan_entry_test_"),
     )
     任务配置 = dict(配置)
     if 配置覆盖:
@@ -499,7 +500,8 @@ class 流程测试(unittest.TestCase):
         游戏 = 模拟游戏(卡片=self.标准卡片())
         任务, _, _, _, _ = 构造任务(游戏, 配置覆盖={"超时": {"步骤秒": 8, "总流程秒": 6, "轮询毫秒": 500}})
         self.assertTrue(任务.执行())
-        self.assertEqual(任务.结果, "超时")
+        # 总超时太短时扫卡阶段会因预算不足先收手（扫描未完成），否则抛总超时；都不得点开始。
+        self.assertIn(任务.结果, ("超时", "扫描未完成"))
         self.assertEqual(游戏.开始点击, [])
         self.assertEqual(游戏.状态, "home")
 
@@ -562,6 +564,334 @@ class 流程测试(unittest.TestCase):
         任务, _, _, _, _ = 构造任务(游戏, 数据库=数据库, 官方摘要=SimpleNamespace(部落竞赛累计积分=104000))
         self.assertTrue(任务.执行())
         self.assertEqual(游戏.点击记录, [])
+
+
+class 详情超时与扫描预算测试(unittest.TestCase):
+    """事项 #38：rc154 实机 12 张卡逐张点详情，冷却卡每张白等 8 秒+，7 分钟总超时耗尽前
+    一次都没挑过任务，每 30 分钟重复一遍。"""
+
+    设置 = staticmethod(lambda: SimpleNamespace(
+        是否部落竞赛接任务=True,
+        部落竞赛任务白名单=list(核心白名单),
+        部落竞赛检查间隔分钟=30,
+        部落竞赛个人积分上限=4000,
+    ))
+
+    def test_连续三张详情超时就停手关面板并冷却30分钟(self):
+        卡片 = [dict(文本=文本_夜世界, 积分="150", 冷却=True)] * 3 + [dict(文本=文本_金币, 积分="300")] * 9
+        游戏 = 模拟游戏(卡片=卡片)
+        任务, 上下文, 日志, _, _ = 构造任务(游戏)
+        self.assertTrue(任务.执行())
+        self.assertEqual(任务.结果, "详情超时")
+        self.assertEqual(游戏.开始点击, [])
+        self.assertEqual(游戏.状态, "home")
+        self.assertFalse(上下文.页面恢复失败)
+        点卡 = [记录 for 记录 in 游戏.点击记录 if 记录[0] == "panel" and 记录[1:] not in ((160, 500), (709, 40))]
+        self.assertEqual(len(点卡), 3)  # 第 4 张起不再点
+        记录 = 上下文.数据库.状态["部落竞赛检查记录"]
+        self.assertEqual(记录["结果"], "详情超时")
+        self.assertAlmostEqual(记录["下次检查时间"] - 记录["时间"], 30 * 60, delta=1)
+        self.assertEqual(记录["详情超时卡"]["日期"], "2026-11-24")
+        self.assertEqual(len(记录["详情超时卡"]["卡位"]), 3)
+        self.assertTrue(any("连续 3 张任务卡详情超时" in 条 for 条 in 日志), 日志)
+
+    def test_今日详情超时过的卡位直接跳过不再点开(self):
+        卡片 = [dict(文本=文本_夜世界, 积分="150", 冷却=True)] * 3 + [dict(文本=文本_夜世界, 积分="150")] * 8
+        卡片.append(dict(文本=文本_金币, 积分="300"))
+        游戏 = 模拟游戏(卡片=卡片)
+        数据库 = 假数据库()
+        数据库.状态["部落竞赛检查记录"] = {"详情超时卡": {
+            "日期": "2026-11-24", "卡位": [[0, 341, 165], [0, 438, 165], [0, 535, 165]]}}
+        任务, _, 日志, _, _ = 构造任务(游戏, 数据库=数据库)
+        self.assertTrue(任务.执行())
+        self.assertEqual(任务.结果, "已接任务")
+        self.assertEqual(游戏.开始点击, [11])
+        点过 = {记录[1:] for 记录 in 游戏.点击记录 if 记录[0] == "panel"}
+        for 位置 in ((341, 165), (438, 165), (535, 165)):
+            self.assertNotIn(位置, 点过)
+        self.assertTrue(any("跳过今日详情超时过的卡" in 条 for 条 in 日志), 日志)
+
+    def test_昨天的详情超时卡位不再跳过(self):
+        游戏 = 模拟游戏(卡片=流程测试.标准卡片(None))
+        数据库 = 假数据库()
+        数据库.状态["部落竞赛检查记录"] = {"详情超时卡": {"日期": "2026-11-23", "卡位": [[0, 341, 165]]}}
+        任务, _, _, _, _ = 构造任务(游戏, 数据库=数据库)
+        任务.执行()
+        self.assertIn((341, 165), {记录[1:] for 记录 in 游戏.点击记录 if 记录[0] == "panel"})
+
+    def test_扫描时间预算不足时用已读卡挑选而不是耗尽总超时(self):
+        # 冷却卡和夜世界卡交替（不触发连续超时上限），每张冷却卡白等 8 秒+
+        卡片 = [dict(文本=文本_金币, 积分="300")]
+        for 序 in range(11):
+            卡片.append(dict(文本=文本_夜世界, 积分="150", 冷却=序 % 2 == 0))
+        游戏 = 模拟游戏(卡片=卡片)
+        任务, _, 日志, _, _ = 构造任务(
+            游戏, 配置覆盖={"超时": {"步骤秒": 8, "总流程秒": 60, "轮询毫秒": 500, "选择预留秒": 90}})
+        self.assertTrue(任务.执行())
+        self.assertEqual(任务.结果, "已接任务")
+        self.assertEqual(游戏.开始点击, [0])
+        self.assertEqual(游戏.状态, "home")
+        self.assertTrue(any("停止扫描" in 条 for 条 in 日志), 日志)
+
+    def test_预算不足且已读卡没有可接任务时返回扫描未完成(self):
+        卡片 = [dict(文本=文本_夜世界, 积分="150", 冷却=序 % 2 == 0) for 序 in range(12)]
+        游戏 = 模拟游戏(卡片=卡片)
+        任务, 上下文, _, _, _ = 构造任务(
+            游戏, 配置覆盖={"超时": {"步骤秒": 8, "总流程秒": 60, "轮询毫秒": 500}})
+        self.assertTrue(任务.执行())
+        self.assertEqual(任务.结果, "扫描未完成")
+        self.assertEqual(游戏.开始点击, [])
+        self.assertEqual(游戏.状态, "home")
+        记录 = 上下文.数据库.状态["部落竞赛检查记录"]
+        self.assertAlmostEqual(记录["下次检查时间"] - 记录["时间"], 30 * 60, delta=1)
+
+    def test_复核时选中卡详情超时就停手不顺延点其他卡(self):
+        游戏 = 模拟游戏()
+        任务, _, 日志, _, _ = 构造任务(游戏)
+        任务._扫描任务卡 = lambda: [
+            任务候选(0, (341, 165), "掠夺金币", 300, 文本=文本_金币),
+            任务候选(0, (438, 165), "掠夺黑油", 150, 文本=文本_黑油),
+        ]
+        任务._识别详情 = lambda: None
+        游戏.状态 = "panel"
+        任务._截止 = 9999.0
+        结果 = 任务._处理面板({"图像": np.full((600, 800, 3), (40, 160, 230), np.uint8), "文字": []})
+        self.assertEqual(结果, "详情超时")
+        选中点击 = [条 for 条 in 日志 if "点击选中的任务卡" in 条]
+        self.assertEqual(len(选中点击), 1, 日志)
+        self.assertEqual(游戏.开始点击, [])
+
+    def test_详情超时护栏不点宝石购买跳过重置加速(self):
+        禁点 = 配置["OCR"]["禁点关键词"]
+        for 词 in ("宝石", "购买", "跳过", "重置"):
+            self.assertTrue(any(词 in 规 for 规 in map(模块.规范文本, 禁点)), 词)
+
+
+class 点开别的活动模拟(模拟游戏):
+    """点『开启』（或活动按钮）后前 N 次打开的是别的活动面板：有红 X，没有『部落竞赛』标题。"""
+
+    def __init__(self, *参数, 错误次数=99, 错在="开启", X附近文字=None, **键参数):
+        super().__init__(*参数, **键参数)
+        self.剩余错误 = 错误次数
+        self.错在 = 错在
+        self.X附近文字 = X附近文字
+        self.关错误面板次数 = 0
+
+    def 点击(self, x, y):
+        近 = lambda 点: abs(x - 点[0]) <= 30 and abs(y - 点[1]) <= 30
+        if self.状态 == "other":
+            self.点击记录.append((self.状态, x, y))
+            if 近((709, 40)):
+                self.关错误面板次数 += 1
+                self.状态 = "home"
+            return True
+        if self.剩余错误 > 0:
+            if self.错在 == "开启" and self.状态 == "events" and 近((592, 492)):
+                self.点击记录.append((self.状态, x, y))
+                self.剩余错误 -= 1
+                self.状态 = "other"
+                return True
+            if self.错在 == "活动按钮" and self.状态 == "home" and 近((196, 556)):
+                self.点击记录.append((self.状态, x, y))
+                self.剩余错误 -= 1
+                self.状态 = "other"
+                return True
+            if self.错在 == "无反应" and self.状态 == "home" and 近((196, 556)):
+                self.点击记录.append((self.状态, x, y))
+                self.剩余错误 -= 1
+                return True
+        return super().点击(x, y)
+
+    def ocr结果(self):
+        if self.状态 == "other":
+            结果 = [ocr("鑄造大師挑戰", 140, 110, 260, 130), ocr("攻擊", 560, 290, 620, 310)]
+            if self.X附近文字:
+                结果.append(ocr(self.X附近文字, 620, 60, 700, 80))
+            return 结果
+        return super().ocr结果()
+
+    def 模板(self, 名称, 区域):
+        if self.状态 == "other":
+            点 = (709, 40) if 名称 == "关闭按钮" else None
+            if 点 and 区域 is not None:
+                x1, y1, x2, y2 = 区域
+                if not (x1 <= 点[0] <= x2 and y1 <= 点[1] <= y2):
+                    return None
+            return 点
+        return super().模板(名称, 区域)
+
+
+class 入口护栏测试(unittest.TestCase):
+    """事项 #38：实机看到脚本打开的不是部落竞赛（别的活动面板）然后卡住。"""
+
+    def 卡片(self):
+        return 流程测试.标准卡片(None)
+
+    def 识别页面(self, 游戏):
+        return lambda 强制=False: SimpleNamespace(
+            页面="主世界主页" if 游戏.状态 == "home" else "未知", 世界="主世界", 可信度=0.9)
+
+    def test_点开别的活动面板时安全关X重试后放弃并冷却(self):
+        游戏 = 点开别的活动模拟(卡片=self.卡片())
+        任务, 上下文, 日志, _, _ = 构造任务(游戏)
+        self.assertTrue(任务.执行())
+        self.assertEqual(任务.结果, "入口异常")
+        self.assertEqual(游戏.状态, "home")
+        self.assertFalse(上下文.页面恢复失败)
+        self.assertEqual(游戏.关错误面板次数, 2)  # 入口重试 2 次，每次都只点红 X
+        self.assertEqual(游戏.开始点击, [])
+        self.assertFalse([记录 for 记录 in 游戏.点击记录 if 记录[0] == "other" and 记录[1:] != (709, 40)])
+        记录 = 上下文.数据库.状态["部落竞赛检查记录"]
+        self.assertEqual(记录["结果"], "入口异常")
+        self.assertAlmostEqual(记录["下次检查时间"] - 记录["时间"], 30 * 60, delta=1)
+        现场 = sorted(Path(上下文.待命现场目录).glob("clan_entry_*.png"))
+        self.assertEqual(len(现场), 2)
+        self.assertTrue(any("放弃本轮" in 条 for 条 in 日志), 日志)
+
+    def test_第一次点开别的活动第二次进入竞赛正常接任务(self):
+        游戏 = 点开别的活动模拟(卡片=self.卡片(), 错误次数=1)
+        任务, 上下文, _, _, _ = 构造任务(游戏)
+        self.assertTrue(任务.执行())
+        self.assertEqual(任务.结果, "已接任务")
+        self.assertEqual(游戏.关错误面板次数, 1)
+        self.assertEqual(游戏.开始点击, [11])
+        self.assertEqual(游戏.状态, "home")
+
+    def test_活动按钮打开的不是活动列表也安全关闭重试(self):
+        游戏 = 点开别的活动模拟(卡片=self.卡片(), 错在="活动按钮")
+        任务, 上下文, _, _, _ = 构造任务(游戏)
+        self.assertTrue(任务.执行())
+        self.assertEqual(任务.结果, "入口异常")
+        self.assertEqual(游戏.关错误面板次数, 2)
+        self.assertEqual(游戏.状态, "home")
+        self.assertFalse(上下文.页面恢复失败)
+
+    def test_点活动按钮没反应时重试后放弃不卡住(self):
+        游戏 = 点开别的活动模拟(卡片=self.卡片(), 错在="无反应")
+        任务, 上下文, _, _, 时间 = 构造任务(游戏)
+        self.assertTrue(任务.执行())
+        self.assertEqual(任务.结果, "入口异常")
+        self.assertEqual(游戏.状态, "home")
+        self.assertLess(时间["t"], 配置["超时"]["总流程秒"])
+
+    def test_错误面板X附近有宝石购买字样时不点X(self):
+        游戏 = 点开别的活动模拟(卡片=self.卡片(), X附近文字="購買")
+        任务, 上下文, 日志, _, _ = 构造任务(游戏)
+        结果 = 任务.执行()
+        self.assertEqual(任务.结果, "面板未确认")
+        self.assertEqual(游戏.关错误面板次数, 0)
+        self.assertFalse(结果)
+        self.assertTrue(上下文.页面恢复失败)
+        self.assertTrue(any("不点击" in 条 for 条 in 日志), 日志)
+
+    def test_开启按钮不越过下一张活动卡(self):
+        游戏 = 模拟游戏()
+        任务, _, _, _, _ = 构造任务(游戏)
+        任务._截止 = 9999.0
+        任务._截图 = lambda: np.zeros((600, 800, 3), np.uint8)
+        # 部落竞赛卡在下方露出标题和描述，『开启』按钮还在列表外；下一张卡的绿色『攻击』在标题下 100 像素
+        任务._OCR = lambda _图: [
+            文字项("部落競賽", (140, 368, 200, 384)),
+            文字项("剩餘時間：", (520, 368, 580, 384)),
+            文字项("泰坦衝突賽季", (140, 440, 230, 456)),
+            文字项("剩餘時間：", (520, 440, 580, 456)),
+        ]
+        区域记录 = []
+        任务._匹配模板 = lambda 图像, 名称, 区域=None: 区域记录.append(区域) or (
+            (592, 500) if 名称 == "开启按钮" and 区域 and 区域[3] >= 500 else None)
+        任务._滑动 = lambda *_a: None
+        任务._延时 = lambda *_a: None
+        self.assertIsNone(任务._找部落竞赛开启())
+        self.assertTrue(区域记录)
+        self.assertTrue(all(区域[3] < 440 for 区域 in 区域记录 if 区域), 区域记录)
+
+    def test_慢识别时等待期间持续写心跳日志(self):
+        游戏 = 模拟游戏(卡片=self.卡片(), 面板会出现=False)
+        任务, _, 日志, _, 时间 = 构造任务(游戏, 配置覆盖={"超时": {"步骤秒": 60, "总流程秒": 420, "轮询毫秒": 500}})
+        原识别 = 任务._识别竞赛面板
+
+        def 慢识别():
+            时间["t"] += 9
+            return 原识别()
+
+        任务._识别竞赛面板 = 慢识别
+        任务.执行()
+        self.assertTrue(any("仍在等待部落竞赛面板" in 条 for 条 in 日志), 日志)
+
+
+class 心跳测试(unittest.TestCase):
+    """REVISE：单次识别阻塞超过 60 秒不能被判无心跳；真正死锁超过总超时 + 宽限仍要被停。"""
+
+    宽限 = 5  # 自动化机器人.心跳超时宽限秒数
+
+    def 构造(self):
+        游戏 = 模拟游戏(卡片=流程测试.标准卡片(None))
+        任务, 上下文, _, _, 时间 = 构造任务(游戏)
+        心跳 = []  # (记录时间, 下次超时)
+
+        def 记录(文本, 超时=60, *a, **k):
+            心跳.append((时间["t"], 时间["t"] + float(超时)))
+
+        上下文.置脚本状态 = 记录
+        return 游戏, 任务, 心跳, 时间
+
+    def 已判无心跳(self, 心跳, 当前):
+        return 当前 > 心跳[-1][1] + self.宽限
+
+    def test_单次识别阻塞90秒不被判无心跳(self):
+        游戏, 任务, 心跳, 时间 = self.构造()
+        原识别 = 任务._活动列表已打开
+        检查点 = []
+
+        def 阻塞识别():
+            if not 检查点:
+                开始 = 时间["t"]
+                时间["t"] += 90  # OCR/截图卡住 90 秒，期间没有任何日志
+                检查点.append(self.已判无心跳([项 for 项 in 心跳 if 项[0] <= 开始], 时间["t"]))
+            return 原识别()
+
+        任务._活动列表已打开 = 阻塞识别
+        self.assertTrue(任务.执行())
+        self.assertEqual(检查点, [False])
+        self.assertEqual(任务.结果, "已接任务")
+
+    def test_死锁超过总超时加宽限仍会被判无心跳(self):
+        游戏, 任务, 心跳, 时间 = self.构造()
+        总超时 = 配置["超时"]["总流程秒"]
+
+        class _死锁(Exception):
+            pass
+
+        def 死锁识别():
+            # 用异常代表“永不返回”：此后不会再有任何日志
+            raise _死锁()
+
+        任务._活动列表已打开 = 死锁识别
+        任务._截止 = 任务._时钟() + 总超时
+        try:
+            任务._流程()
+        except _死锁:
+            pass
+        最后 = 心跳[-1]
+        # 死锁一直不返回：总超时 + 心跳宽限之后监控必然判定无心跳
+        self.assertTrue(self.已判无心跳(心跳, 最后[0] + 总超时 + 30 + self.宽限 + 1))
+        # 心跳有效期不会无限延长
+        self.assertLessEqual(最后[1] - 最后[0], 总超时 + 30)
+
+    def test_流程外日志仍按默认60秒(self):
+        游戏, 任务, 心跳, 时间 = self.构造()
+        任务._截止 = 0.0
+        任务._日志("测试")
+        self.assertEqual(心跳[-1][1] - 心跳[-1][0], 60.0)
+
+    def test_旧上下文只接受一个参数也能写日志(self):
+        游戏 = 模拟游戏()
+        任务, 上下文, _, _, _ = 构造任务(游戏)
+        日志 = []
+        上下文.置脚本状态 = lambda 文本: 日志.append(文本)
+        任务._截止 = 9999.0
+        任务._日志("x")
+        self.assertEqual(日志, ["部落竞赛：x"])
 
 
 class 辅助函数测试(unittest.TestCase):
