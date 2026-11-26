@@ -306,3 +306,37 @@ class 日志聚合器:
         if 最新 and time.time() - float(最新[0]) < 最长秒:
             return 最新[1]
         return None
+
+    def 当前任务键(self, 机器人ID: str, 最长秒: float = 900, 最多条数: int = 400) -> str | None:
+        """最近一条能看出所属任务的运行日志对应的任务键；过期或无法判断返回 None。"""
+        截止 = time.time() - 最长秒
+        for 序号, 项 in enumerate(reversed(self.全部条目())):
+            if 序号 >= 最多条数 or 项.时间戳 < 截止:
+                return None
+            if 项.机器人ID != 机器人ID:
+                continue
+            键 = 推断任务键(项.内容)
+            if 键:
+                return 键
+        return None
+
+
+# 从运行日志推断当前任务（主界面高亮任务行用）：先认引擎的“按任务计划执行：键”，
+# 其余任务按特征词判断。
+_任务特征词 = (
+    ("event", ("部落竞赛",)),
+    ("night_resource", ("夜世界",)),
+    ("wall", ("刷墙", "城墙")),
+    ("main_resource", ("搜敌", "进攻", "战斗", "下兵", "部署", "回营", "找鱼")),
+)
+
+
+def 推断任务键(内容: str) -> str | None:
+    文本 = 去掉实时前缀(内容)
+    if "按任务计划执行：" in 文本:
+        余下 = 文本.split("按任务计划执行：", 1)[1].split()
+        return 余下[0] if 余下 else None
+    for 键, 词表 in _任务特征词:
+        if any(词 in 文本 for 词 in 词表):
+            return 键
+    return None

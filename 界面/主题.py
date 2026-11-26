@@ -107,7 +107,27 @@ def _下拉图标(颜色: str) -> str:
     ))
 
 
+默认主题名 = "高级暗黑"
+
+
+def 按名称取配色(名称: str | None) -> 配色:
+    """高级暗黑是默认主题；旧版保存的“深色”也映射到高级暗黑。"""
+    from 界面.高级主题 import 高级深色
+
+    if 名称 == 浅色.名称:
+        return 浅色
+    return 高级深色
+
+
+def 下一个配色(色: 配色) -> 配色:
+    return 按名称取配色(默认主题名 if 色.名称 == 浅色.名称 else 浅色.名称)
+
+
 def 生成样式表(色: 配色) -> str:
+    if 色.名称 == 默认主题名:
+        from 界面.高级主题 import 生成高级暗黑样式表
+
+        return 生成高级暗黑样式表() + 方案A样式(色)
     勾选 = _勾选图标()
     下拉 = _下拉图标(色.次要文字)
     return f"""
@@ -222,7 +242,17 @@ QToolTip {{
     background: {色.卡片}; color: {色.文字}; border: 1px solid {色.卡片描边}; padding: 5px;
 }}
 QMessageBox {{ background: {色.卡片}; }}
+""" + 方案A样式(色)
 
+
+def 是暗色(色: 配色) -> bool:
+    return 色.名称 != "浅色"
+
+
+def 方案A样式(色: 配色) -> str:
+    """主窗口单屏布局（状态栏、数据条、提醒条、分段按钮）专用样式，浅色与暗色共用。"""
+    暗 = 是暗色(色)
+    return f"""
 QDialog#根 {{ background: {色.背景}; }}
 QLabel#当前动作 {{ font-size: 14px; font-weight: 600; }}
 QPushButton#设备芯片 {{
@@ -232,15 +262,16 @@ QWidget#数据条 {{ background: {色.侧栏}; border-bottom: 1px solid {色.分
 QLabel#数据名 {{ color: {色.弱文字}; font-size: 11px; }}
 QLabel#数据值, QLabel#数据值金, QLabel#数据值水 {{
     font-size: 18px; font-weight: 700;
+    font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
 }}
 QLabel#数据值金 {{ color: {色.警告}; }}
-QLabel#数据值水 {{ color: {"#c88be0" if 色.名称 == "深色" else "#9b3fb0"}; }}
+QLabel#数据值水 {{ color: {"#C4B5FD" if 暗 else "#9b3fb0"}; }}
 QFrame#竖分隔 {{ background: {色.分隔}; min-width: 1px; max-width: 1px; border: none; }}
 QProgressBar#竞赛进度 {{ border: none; background: {色.分隔}; border-radius: 3px; }}
 QProgressBar#竞赛进度::chunk {{ background: {色.强调}; border-radius: 3px; }}
 QFrame#提醒条 {{
-    background: {"#3a2f1c" if 色.名称 == "深色" else "#fff6e5"};
-    border: 1px solid {"#5a4524" if 色.名称 == "深色" else "#f3dfb5"}; border-radius: 8px;
+    background: {"rgba(245, 158, 11, 0.10)" if 暗 else "#fff6e5"};
+    border: 1px solid {"rgba(245, 158, 11, 0.28)" if 暗 else "#f3dfb5"}; border-radius: 8px;
 }}
 QLabel#提醒文字 {{ color: {色.警告}; }}
 QPushButton#分段 {{ padding: 3px 9px; border-radius: 6px; font-size: 12px; min-height: 14px; }}
@@ -249,4 +280,14 @@ QPushButton#分段:checked {{
 }}
 QListWidget#任务列表::item {{ padding: 5px 4px; }}
 QListWidget#设置导航::item {{ padding: 7px 10px; }}
+QTableWidget {{
+    background: {色.卡片}; color: {色.文字}; gridline-color: {色.分隔};
+    border: 1px solid {色.卡片描边}; border-radius: 8px;
+}}
+QTableWidget::item {{ padding: 4px 6px; }}
+QHeaderView::section {{
+    background: {色.输入底}; color: {色.次要文字}; border: none;
+    border-bottom: 1px solid {色.分隔}; padding: 6px 8px; font-weight: 600;
+}}
+QTableCornerButton::section {{ background: {色.输入底}; border: none; }}
 """

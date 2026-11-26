@@ -9,7 +9,7 @@ from typing import Callable
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFrame, QGridLayout, QLabel, QLineEdit, QPlainTextEdit,
+    QAbstractButton, QCheckBox, QComboBox, QFrame, QGridLayout, QLabel, QLineEdit, QPlainTextEdit,
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
@@ -70,8 +70,9 @@ class 参数表单(QWidget):
     def _创建编辑器(self, 字段: 计划.参数字段, 设置) -> QWidget:
         值 = 字段.当前值(设置)
         if 字段.类型 == "bool":
-            控件 = QCheckBox(字段.标签)
-            控件.setChecked(bool(值))
+            from 界面.高级主题 import 滑动开关
+
+            控件 = 滑动开关(字段.标签, bool(值))
             控件.toggled.connect(lambda _=None: self._修改回调())
         elif 字段.类型 == "choice":
             控件 = QComboBox()
@@ -137,7 +138,7 @@ class 参数表单(QWidget):
         for 名称, 控件 in self.编辑器.items():
             if hasattr(控件, "勾选框"):
                 值[名称] = [项 for 项, 框 in 控件.勾选框.items() if 框.isChecked()]
-            elif isinstance(控件, QCheckBox):
+            elif isinstance(控件, QAbstractButton):
                 值[名称] = 控件.isChecked()
             elif isinstance(控件, QComboBox):
                 值[名称] = 控件.currentText()

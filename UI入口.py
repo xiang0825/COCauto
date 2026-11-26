@@ -47,7 +47,7 @@ def _整理上次日志(启动提示, 应用) -> None:
 
         路径 = 任务数据库.默认数据库路径()
         if 需要压缩(路径):
-            启动提示.setText("城控正在启动…（首次整理历史日志，约需 20 秒）")
+            启动提示.更新进度(12, "首次整理历史日志，约需 20 秒…")
             应用.processEvents()
         会话日志轮转(路径)
     except Exception:
@@ -61,8 +61,10 @@ def main() -> int:
         报告 = sys.argv[位置 + 1] if len(sys.argv) > 位置 + 1 else "自检报告.txt"
         return 运行自检(报告)
     _配置高DPI()
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
+    import time
+
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication, QMessageBox
 
     应用 = QApplication(sys.argv)
     应用.setApplicationName("城控")
@@ -76,19 +78,21 @@ def main() -> int:
     from 界面.组件 import 应用图标
     应用.setWindowIcon(应用图标())
 
-    # 先显示一个可见的启动提示，再载入数据库、监控中心和各页面；
-    # 即使后续初始化很慢，用户也能看到程序已经在启动。
-    启动提示 = QLabel("城控正在启动…")
-    启动提示.setWindowFlags(Qt.SplashScreen | Qt.FramelessWindowHint)
-    启动提示.setAlignment(Qt.AlignCenter)
-    启动提示.setStyleSheet(
-        "QLabel { background:#ffffff; color:#1f2733; border:1px solid #e3e7ec;"
-        " border-radius:12px; padding:28px 48px; font-size:15px;"
-        " font-family:'Microsoft YaHei UI'; }"
-    )
+    # 先显示启动画面，再载入数据库、监控中心和主界面；进度条显示的是真实启动阶段。
+    from 界面.启动动画 import 高级启动画面
+
+    开始时间 = time.monotonic()
+    启动提示 = 高级启动画面("城控", "部落冲突控制台", 读取版本号())
     启动提示.show()
+    启动提示.启动动画()
+    启动提示.更新进度(5, "正在初始化…")
     应用.processEvents()
 
+    def 阶段(百分比: int, 文案: str):
+        启动提示.更新进度(百分比, 文案)
+        应用.processEvents()
+
+    阶段(10, "整理上次日志…")
     _整理上次日志(启动提示, 应用)
 
     监控中心 = None
@@ -97,14 +101,21 @@ def main() -> int:
         from 应用.控制器 import 应用控制器
         from 界面.主窗口 import 主窗口
 
+        阶段(35, "启动监控中心…")
         日志队列: queue.Queue = queue.Queue(maxsize=2000)
         监控中心 = 机器人监控中心(日志队列)
+        阶段(55, "连接任务数据库…")
         控制器 = 应用控制器(监控中心)
+        阶段(75, "构建主界面…")
         窗口 = 主窗口(控制器, 日志队列, 读取版本号())
         单实例 = 单实例服务(窗口.唤醒)
-        窗口.show()
-        启动提示.close()
+        阶段(90, "载入任务设置…")
         窗口.载入()
+        阶段(100, "准备就绪")
+        # 至少展示 0.8 秒让动画走完，最多不额外等待超过 1.3 秒。
+        已过 = (time.monotonic() - 开始时间) * 1000
+        余下 = int(max(0, min(高级启动画面.推荐最小展示毫秒 - 已过, 高级启动画面.推荐最大展示毫秒)))
+        QTimer.singleShot(余下, lambda: 启动提示.淡出并显示主窗(窗口))
         退出码 = 应用.exec()
         单实例.关闭()
         return 退出码

@@ -158,7 +158,7 @@ class 状态胶囊(QLabel):
         颜色 = 状态颜色(self._色, 状态)
         底色 = QColor(颜色)
         底色.setAlpha(36)
-        self.setText(f"● {文本 or 状态}")
+        self.setText(f"● {文本 or 状态}" if getattr(self, "显示圆点", True) else (文本 or 状态))
         self.setStyleSheet(
             f"QLabel {{ color: {颜色}; background: rgba({底色.red()},{底色.green()},"
             f"{底色.blue()},{底色.alpha()}); border-radius: 11px; padding: 3px 11px;"

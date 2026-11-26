@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QFrame, QListWidget, QListWidgetItem, QMenu, QPushButton,
     QScrollArea, QVBoxLayout, QWidget,
@@ -16,6 +17,7 @@ from 界面.参数表单 import 参数表单
 from 界面.组件 import 卡片, 标签, 横排
 
 _键角色 = Qt.UserRole + 1
+_名称角色 = Qt.UserRole + 2
 
 # 列表里用短名称，窄栏也不换行；完整名称在提示里。
 任务短名 = {
@@ -35,6 +37,7 @@ class 任务计划组件:
         self._设置 = None
         self._当前页键 = "main_resource"
         self._载入中 = False
+        self._运行任务键 = None
         self.保存计时 = QTimer()
         self.保存计时.setSingleShot(True)
         self.保存计时.setInterval(600)
@@ -118,6 +121,7 @@ class 任务计划组件:
         for 行 in 计划.任务行列表(self._设置):
             项 = QListWidgetItem(任务短名.get(行.键, 行.名称))
             项.setData(_键角色, 行.键)
+            项.setData(_名称角色, 项.text())
             项.setFlags(项.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled)
             项.setCheckState(Qt.Checked if 行.已启用 else Qt.Unchecked)
             提示 = f"{行.名称}：{行.说明}"
@@ -128,6 +132,36 @@ class 任务计划组件:
             if 行.键 == 当前键:
                 self.任务列表.setCurrentItem(项)
         self.任务列表.blockSignals(False)
+        self._刷新运行标记()
+
+    # ------------------------------------------------------------ 运行标记
+    @property
+    def 运行任务键(self) -> str | None:
+        return self._运行任务键
+
+    def 标记运行任务(self, 键: str | None):
+        """高亮正在执行的任务行（加粗 + 前缀 ▸），键为 None 时清除。"""
+        if 键 == self._运行任务键:
+            return
+        self._运行任务键 = 键
+        self._刷新运行标记()
+
+    def _刷新运行标记(self):
+        强调 = getattr(getattr(self.上下文, "配色", None), "强调", "#F59E0B")
+        self.任务列表.blockSignals(True)
+        try:
+            for 行 in range(self.任务列表.count()):
+                项 = self.任务列表.item(行)
+                键 = 项.data(_键角色)
+                名称 = 项.data(_名称角色) or 项.text()
+                运行 = 键 == self._运行任务键
+                字体 = 项.font()
+                字体.setBold(运行)
+                项.setFont(字体)
+                项.setText(名称 + ("  · 执行中" if 运行 else ""))
+                项.setForeground(QBrush(QColor(强调)) if 运行 else QBrush())
+        finally:
+            self.任务列表.blockSignals(False)
 
     @property
     def 有未保存修改(self) -> bool:
@@ -275,7 +309,7 @@ class 任务计划组件:
                 项 = self.任务列表.item(行)
                 启用 = 计划.任务计划是否启用(self._设置, 项.data(_键角色))
                 if 项.checkState() == Qt.Checked and not 启用:
-                    缺目标.append(项.text())
+                    缺目标.append(项.data(_名称角色) or 项.text())
                 项.setCheckState(Qt.Checked if 启用 else Qt.Unchecked)
         finally:
             self._载入中 = False

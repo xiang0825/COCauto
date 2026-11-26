@@ -18,9 +18,9 @@ from 应用.控制器 import 应用控制器, 状态已停止, 状态暂停中, 
 from 应用.快捷键 import 全局快捷键
 from 应用.日志模型 import 展示文本, 日志聚合器
 from 数据库.今日统计 import 格式化数量
-from 界面.主题 import 全部配色, 浅色, 深色, 生成样式表
+from 界面.主题 import 按名称取配色, 是暗色, 下一个配色, 默认主题名, 生成样式表
 from 界面.页面基类 import 界面上下文
-from 界面.组件 import 后台执行, 提示错误, 提示信息, 标签, 状态胶囊, 省略标签, 确认
+from 界面.组件 import 后台执行, 应用图标, 提示错误, 提示信息, 标签, 状态胶囊, 省略标签, 确认
 
 # 竞赛积分超过这么久没更新，多半是上一期的数据，不再显示。
 竞赛积分有效秒 = 10 * 24 * 3600
@@ -65,13 +65,17 @@ class 主窗口(QMainWindow):
         self.控制器 = 控制器
         self.版本号 = 版本号
         self._设置 = 界面设置()
-        self._配色 = 全部配色.get(str(self._设置.value("主题", 浅色.名称)), 浅色)
+        self._配色 = 按名称取配色(str(self._设置.value("主题v2", 默认主题名)))
         self._悬浮窗 = None
         self._高级设置 = None
         self._最新发布 = None
         self._关闭中 = False
         self._提醒已读至 = time.time() - 提醒有效秒
         self._当前提醒 = None
+        self._战报窗 = None
+        self._方案窗 = None
+        self._托盘提示过 = False
+        self._图标状态 = None
 
         数据库 = 控制器.数据库
         self.聚合器 = 日志聚合器(
@@ -106,6 +110,16 @@ class 主窗口(QMainWindow):
         self._热键 = 全局快捷键(self._热键信号.按下.emit, self._热键信号.注册失败.emit)
         self._热键.启动()
 
+        from 界面.系统托盘 import 系统托盘控制器
+
+        self.托盘 = 系统托盘控制器(
+            self, 应用图标(), 显示隐藏回调=self._托盘显隐,
+            开始暂停回调=self._主按钮点击, 退出回调=self.退出程序, 名称=self.窗口标题,
+        )
+        if self.托盘.显示():
+            # 主窗藏进托盘后关掉战报等小窗不能让程序退出。
+            QApplication.instance().setQuitOnLastWindowClosed(False)
+
     # ================================================================ 构建
     def _构建界面(self):
         from 界面.页面_运行 import 运行页
@@ -116,6 +130,10 @@ class 主窗口(QMainWindow):
         纵.setContentsMargins(0, 0, 0, 0)
         纵.setSpacing(0)
         纵.addWidget(self._构建顶栏())
+        from 界面.方案A部件 import 运行光条
+
+        self.光条 = 运行光条()
+        纵.addWidget(self.光条)
         纵.addWidget(self._构建数据条())
         纵.addWidget(self._构建提醒条())
         self.运行页 = 运行页(self.上下文, self.切换悬浮窗, self.打开高级设置)
@@ -130,7 +148,12 @@ class 主窗口(QMainWindow):
         布局 = QHBoxLayout(顶栏)
         布局.setContentsMargins(14, 10, 14, 10)
         布局.setSpacing(10)
+        from 界面.高级主题 import 呼吸状态指示灯
+
+        self.指示灯 = 呼吸状态指示灯("待机", 12)
+        布局.addWidget(self.指示灯, 0, Qt.AlignVCenter)
         self.状态 = 状态胶囊(self._配色)
+        self.状态.显示圆点 = False
         布局.addWidget(self.状态, 0, Qt.AlignVCenter)
         self.当前动作 = 省略标签("")
         self.当前动作.setObjectName("当前动作")
@@ -147,9 +170,15 @@ class 主窗口(QMainWindow):
         self.停止按钮 = QPushButton("停止")
         self.停止按钮.setObjectName("危险按钮")
         self.停止按钮.clicked.connect(self._停止)
+        self.战报按钮 = QPushButton("战报")
+        self.战报按钮.setToolTip("今日战报：今日 vs 昨日 + 每小时效率")
+        self.战报按钮.clicked.connect(self.打开战报)
+        self.方案按钮 = QPushButton("方案")
+        self.方案按钮.setToolTip("配置方案：一键切换、差异预览、撤销、导入导出")
+        self.方案按钮.clicked.connect(self.打开方案)
         self.设置按钮 = QPushButton("高级设置")
         self.设置按钮.clicked.connect(lambda: self.打开高级设置())
-        for 按钮 in (self.主按钮, self.停止按钮, self.设置按钮):
+        for 按钮 in (self.主按钮, self.停止按钮, self.战报按钮, self.方案按钮, self.设置按钮):
             按钮.setCursor(Qt.PointingHandCursor)
             布局.addWidget(按钮, 0, Qt.AlignVCenter)
         return 顶栏
@@ -253,6 +282,41 @@ class 主窗口(QMainWindow):
         self._高级设置.raise_()
         self._高级设置.activateWindow()
 
+    def 打开战报(self):
+        from 界面.方案A部件 import 战报窗口
+
+        if self._战报窗 is None:
+            self._战报窗 = 战报窗口(self.控制器.数据库, self.控制器.实例ID, self._配色, self)
+        self._战报窗._配色 = self._配色
+        self._战报窗.刷新()
+        self._战报窗.show()
+        self._战报窗.raise_()
+        self._战报窗.activateWindow()
+        return self._战报窗
+
+    def 打开方案(self):
+        from 界面.方案A部件 import 预设窗口
+
+        if self._方案窗 is None:
+            self._方案窗 = 预设窗口(
+                self.控制器.数据库, self.控制器.实例ID,
+                self._保存未提交设置, self._方案已应用, self,
+            )
+        else:
+            self._保存未提交设置()
+            self._方案窗.载入()
+        self._方案窗.show()
+        self._方案窗.raise_()
+        self._方案窗.activateWindow()
+        return self._方案窗
+
+    def _方案已应用(self, 说明: str):
+        self._记录操作(说明)
+        self.控制器.设置已变更()
+        self.运行页.计划.载入()
+        if self._高级设置 is not None and self._高级设置.isVisible():
+            self._高级设置.载入()
+
     def _高级设置关闭(self, _结果=None):
         self.控制器.设置已变更()
         if not self.运行页.计划.有未保存修改:
@@ -265,6 +329,26 @@ class 主窗口(QMainWindow):
         self.主按钮.setText({状态运行中: "暂停", 状态暂停中: "继续"}.get(状态, "开始"))
         self.主按钮.setToolTip("F2：暂停（游戏倒计时不会暂停）" if 状态 == 状态运行中 else "F1：开始或继续")
         self.停止按钮.setEnabled(状态 in (状态运行中, 状态暂停中))
+        self.指示灯.设置状态({状态运行中: "运行中", 状态暂停中: "暂停中"}.get(状态, "待机"))
+        self.光条.设置状态(状态)
+        self._刷新图标(状态)
+
+    def _刷新图标(self, 状态: str, 强制: bool = False):
+        键 = (状态, self._配色.名称)
+        if 键 == self._图标状态 and not 强制:
+            return
+        self._图标状态 = 键
+        from PySide6.QtCore import QSize
+        from 界面.高级主题 import 创建矢量图标
+
+        普通 = self._配色.次要文字
+        self.主按钮.setIcon(创建矢量图标("暂停" if 状态 == 状态运行中 else "运行", "#111318", 16))
+        self.停止按钮.setIcon(创建矢量图标("停止", self._配色.错误, 16))
+        self.战报按钮.setIcon(创建矢量图标("战报", 普通, 16))
+        self.方案按钮.setIcon(创建矢量图标("刷新", 普通, 16))
+        self.设置按钮.setIcon(创建矢量图标("设置", 普通, 16))
+        for 按钮 in (self.主按钮, self.停止按钮, self.战报按钮, self.方案按钮, self.设置按钮):
+            按钮.setIconSize(QSize(16, 16))
 
     def _保存未提交设置(self):
         计划 = self.运行页.计划
@@ -380,6 +464,30 @@ class 主窗口(QMainWindow):
         self.提醒文字.设置文本(文本)
         self._提醒外框.setVisible(True)
 
+    def _刷新运行任务(self):
+        键 = None
+        if self.控制器.状态 in (状态运行中, 状态暂停中):
+            键 = self.聚合器.当前任务键(self.控制器.实例ID)
+        self.运行页.计划.标记运行任务(键)
+
+    def 今日摘要(self) -> str:
+        try:
+            今日 = self.控制器.今日概况().今日
+        except Exception:
+            return ""
+        if not 今日.场次:
+            return "今日暂无战绩"
+        文本 = f"今日 {今日.场次} 场"
+        if 今日.胜率 is not None:
+            文本 += f" · 胜率 {今日.胜率}%"
+        if 今日.收益场次:
+            文本 += f" · 金币 {格式化数量(今日.金币)}"
+        return 文本
+
+    def _刷新托盘(self):
+        if self.托盘.是否可用:
+            self.托盘.更新运行状态(self.控制器.状态, self.今日摘要())
+
     def _查看提醒(self):
         self.运行页.切换模式("异常")
 
@@ -395,6 +503,8 @@ class 主窗口(QMainWindow):
             self._刷新状态栏()
             self._刷新数据条()
             self._刷新提醒()
+            self._刷新运行任务()
+            self._刷新托盘()
             self.运行页.定时刷新()
             if self._悬浮窗 is not None:
                 self._悬浮窗.刷新()
@@ -433,15 +543,19 @@ class 主窗口(QMainWindow):
 
     # ================================================================ 主题
     def _切换主题(self):
-        self._应用主题(深色 if self._配色 is 浅色 else 浅色)
+        self._应用主题(下一个配色(self._配色))
 
     def _应用主题(self, 色):
         self._配色 = 色
         self.上下文.配色 = 色
-        self._设置.setValue("主题", 色.名称)
+        self._设置.setValue("主题v2", 色.名称)
         QApplication.instance().setStyleSheet(生成样式表(色))
         self.状态.应用配色(色)
         self.运行页.应用配色(色)
+        from PySide6.QtGui import QColor
+
+        self.光条.设置配色(色.强调, QColor(255, 255, 255, 14) if 是暗色(色) else QColor(0, 0, 0, 14))
+        self._刷新图标(self.控制器.状态, 强制=True)
 
     # ================================================================ 更新
     def _检查更新(self, 手动: bool):
@@ -481,6 +595,28 @@ class 主窗口(QMainWindow):
             self.resize(宽, 高)
             self.move(屏幕.center().x() - 宽 // 2, 屏幕.center().y() - 高 // 2)
 
+    def _托盘显隐(self):
+        if self.isVisible() and not self.isMinimized():
+            self._隐藏到托盘()
+        else:
+            self.唤醒()
+
+    def _隐藏到托盘(self):
+        self._设置.setValue("窗口几何", self.saveGeometry())
+        self._保存未提交设置()
+        self.hide()
+        if not self._托盘提示过:
+            self._托盘提示过 = True
+            self.托盘.发送提示("城控仍在后台", "已最小化到系统托盘；右键托盘图标可开始/暂停或退出。")
+
+    def 退出程序(self):
+        """托盘“退出程序”：走正常关闭流程（运行中会确认）。"""
+        self._真退出 = True
+        if not self.isVisible():
+            self.唤醒()
+        if not self.close():
+            self._真退出 = False
+
     def 唤醒(self):
         self.showNormal()
         self.raise_()
@@ -489,6 +625,11 @@ class 主窗口(QMainWindow):
     def closeEvent(self, 事件):
         if self._关闭中:
             事件.accept()
+            return
+        if self.托盘.是否可用 and not getattr(self, "_真退出", False):
+            # 关窗即常驻托盘；真正退出走托盘菜单“退出程序”。
+            事件.ignore()
+            self._隐藏到托盘()
             return
         if self.控制器.状态 in (状态运行中, 状态暂停中) and not 确认(
             self, "退出控制台", "任务仍在运行。退出会停止任务，确定退出？",
@@ -505,5 +646,10 @@ class 主窗口(QMainWindow):
             self._悬浮窗.close()
         if self._高级设置 is not None:
             self._高级设置.close()
+        self.托盘.关闭()
+        for 窗 in (self._战报窗, self._方案窗):
+            if 窗 is not None:
+                窗.close()
         self.控制器.关闭()
         事件.accept()
+        QApplication.instance().quit()

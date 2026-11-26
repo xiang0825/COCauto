@@ -391,6 +391,127 @@ class 主窗口测试(unittest.TestCase):
         后台.assert_called_once()
         self.assertFalse(设置窗.更新按钮.isEnabled())
 
+    # ------------------------------------------------------------ 方案 A 高级感
+    def test_默认高级暗黑主题并记住切换(self):
+        self.assertEqual(self.窗口._配色.名称, "高级暗黑")
+        self.窗口._切换主题()
+        self.assertEqual(self.窗口._设置.value("主题v2"), self.窗口._配色.名称)
+        self.assertNotEqual(self.窗口._配色.名称, "高级暗黑")
+
+    def test_呼吸灯与光条跟随运行状态(self):
+        self.窗口._每秒刷新()
+        self.assertEqual(self.窗口.指示灯.状态, "待机")
+        self.assertEqual(self.窗口.光条.状态, "已停止")
+        self.实例.当前状态 = "运行中"
+        self.窗口._每秒刷新()
+        self.assertEqual(self.窗口.指示灯.状态, "运行中")
+        self.assertEqual(self.窗口.光条.状态, "运行中")
+        self.assertEqual(self.窗口.光条.height(), 3)
+        self.assertFalse(self.窗口.主按钮.icon().isNull())
+        self.实例.当前状态 = "暂停中"
+        self.窗口._每秒刷新()
+        self.assertEqual(self.窗口.指示灯.状态, "暂停中")
+
+    def test_运行中高亮当前任务行(self):
+        self.实例.当前状态 = "运行中"
+        self.队列.put({"内容": "按任务计划执行：wall", "机器人ID": "robot_1", "记录时间": time.time()})
+        self.窗口._消费日志()
+        self.窗口._每秒刷新()
+        计划 = self.运行页.计划
+        self.assertEqual(计划.运行任务键, "wall")
+        文本 = [计划.任务列表.item(行).text() for 行 in range(计划.任务列表.count())]
+        self.assertTrue(any("刷墙" in 项 and "执行中" in 项 for 项 in 文本), 文本)
+        self.实例.当前状态 = "已停止"
+        self.窗口._每秒刷新()
+        self.assertIsNone(计划.运行任务键)
+        self.assertFalse(any("执行中" in 计划.任务列表.item(行).text() for 行 in range(计划.任务列表.count())))
+
+    def test_布尔参数使用滑动开关(self):
+        from 界面.高级主题 import 滑动开关
+
+        设置窗 = self._打开高级页("adv_general")
+        开关 = 设置窗.页面["adv_general"].表单.编辑器["非人工停止后自动重启"]
+        self.assertIsInstance(开关, 滑动开关)
+
+    def test_日志胶囊分类与异常行现场图(self):
+        import cv2
+        import numpy as np
+        from 应用.现场图服务 import 现场图服务
+        from 界面.方案A部件 import 现场图索引
+
+        根 = tempfile.mkdtemp()
+        os.makedirs(os.path.join(根, "待命现场"))
+        现在 = time.time()
+        名称 = time.strftime("%Y%m%d_%H%M%S", time.localtime(现在))
+        cv2.imencode(".png", np.zeros((40, 60, 3), np.uint8))[1].tofile(
+            os.path.join(根, "待命现场", f"未知页面_{名称}.png"))
+        索引 = 现场图索引(现场图服务(根))
+        索引.刷新(同步=True)
+        self.运行页.现场图 = 索引
+        self.运行页.视图.现场图查找 = 索引.查找
+        self.队列.put({"内容": "[警告] 未知页面，进入待命", "机器人ID": "robot_1", "记录时间": 现在 + 5})
+        self.队列.put({"内容": "部落竞赛：接取任务", "机器人ID": "robot_1", "记录时间": 现在 + 6})
+        self.窗口._消费日志()
+        self.运行页.切换模式("全部")
+        文本 = self.运行页.视图.toPlainText()
+        self.assertIn("异常", 文本)
+        self.assertIn("竞赛", 文本)
+        self.assertIn("现场图", 文本)
+        self.assertEqual(len(self.运行页.视图._链接), 1)
+        时间戳, 日志 = next(iter(self.运行页.视图._链接.values()))
+        弹窗 = self.运行页.打开现场图(时间戳, 日志)
+        self.assertIsNotNone(弹窗)
+        self.assertTrue(弹窗.是否加载成功)
+        弹窗.close()
+
+    def test_战报窗口显示今日与昨日(self):
+        from 应用.战报服务 import 战报服务
+
+        with mock.patch("界面.方案A部件.后台执行"):
+            战报 = self.窗口.打开战报()
+        战报.显示(战报服务(self.数据库).生成战报("robot_1"))
+        self.assertIn("对比昨日", 战报.副标题.text())
+        self.assertEqual(set(战报.单元), {键 for 键, *_ in 战报.指标})
+        战报.曲线.grab()
+        战报.close()
+
+    def test_配置方案预览应用并撤销(self):
+        方案窗 = self.窗口.打开方案()
+        名称 = [方案窗.列表.item(行).data(Qt.UserRole) for 行 in range(方案窗.列表.count())]
+        self.assertTrue({"隐哥冲黑油", "冲部落竞赛", "日常均衡刷墙"} <= set(名称))
+        方案窗.列表.setCurrentRow(名称.index("隐哥冲黑油"))
+        self.assertGreater(方案窗.差异表.rowCount(), 0)
+        原值 = self.数据库.获取机器人设置("robot_1").战利品优先级
+        方案窗._应用()
+        self.assertEqual(self.数据库.获取机器人设置("robot_1").战利品优先级, "黑水")
+        self.assertEqual(self.运行页.计划.设置.战利品优先级, "黑水")
+        self.assertTrue(方案窗.撤销按钮.isEnabled())
+        方案窗._撤销()
+        self.assertEqual(self.数据库.获取机器人设置("robot_1").战利品优先级, 原值)
+        self.assertEqual(self.运行页.计划.设置.战利品优先级, 原值)
+        路径 = os.path.join(tempfile.mkdtemp(), "方案.json")
+        self.assertTrue(方案窗.导出文件("隐哥冲黑油", 路径))
+        self.assertTrue(方案窗.导入文件(路径))
+        # 内置方案不会被导入覆盖，而是另存为「…（导入）」并选中等待确认。
+        self.assertEqual(方案窗.当前方案名, "隐哥冲黑油（导入）")
+        self.assertTrue(方案窗.服务.获取预设("隐哥冲黑油").内置)
+        方案窗.close()
+
+    def test_托盘不可用时关闭窗口照常退出(self):
+        self.assertFalse(self.窗口.托盘.是否可用)
+        self.窗口.close()
+        self.assertFalse(self.窗口.isVisible())
+        self.窗口._关闭中 = True
+
+    def test_托盘可用时关窗隐藏到托盘(self):
+        with mock.patch.object(type(self.窗口.托盘), "是否可用", new_callable=mock.PropertyMock, return_value=True),                 mock.patch.object(self.窗口.托盘, "发送提示") as 提示:
+            self.窗口.close()
+            self.assertFalse(self.窗口.isVisible())
+            self.assertFalse(self.窗口._关闭中)
+            提示.assert_called_once()
+            self.窗口._托盘显隐()
+            self.assertTrue(self.窗口.isVisible())
+
 
 if __name__ == "__main__":
     unittest.main()

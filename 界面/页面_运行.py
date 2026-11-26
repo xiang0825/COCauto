@@ -53,6 +53,17 @@ class 运行页(页面基类):
         self.视图.自动跟随 = True
         self.视图.setContextMenuPolicy(Qt.CustomContextMenu)
         self.视图.customContextMenuRequested.connect(self._右键菜单)
+        # 异常行“现场图”链接：按日志时间就近匹配 数据集/待命现场、低星复盘 的截图。
+        self.现场图 = None
+        try:
+            from 界面.方案A部件 import 现场图索引
+
+            self.现场图 = 现场图索引()
+            self.视图.现场图查找 = self.现场图.查找
+        except Exception:
+            self.现场图 = None
+        self.视图.请求现场图.connect(self.打开现场图)
+        self._现场图数量 = 0
         日志卡.布局.addWidget(self.视图, 1)
         主体.addWidget(日志卡, 5)
         self.布局.addLayout(主体, 1)
@@ -69,10 +80,27 @@ class 运行页(页面基类):
 
     def 应用配色(self, 色):
         self.视图.应用配色(色)
+        self.计划._刷新运行标记()
         self.刷新日志(强制=True)
 
     def 定时刷新(self):
+        if self.现场图 is not None:
+            self.现场图.刷新()
+            数量 = len(self.现场图._条目)
+            if 数量 != self._现场图数量:
+                self._现场图数量 = 数量
+                self.视图.现场图版本 += 1
         self.刷新日志()
+
+    def 打开现场图(self, 时间戳: float, 日志文本: str):
+        if self.现场图 is None:
+            return None
+        条目 = self.现场图.查找(时间戳)
+        if 条目 is None:
+            return None
+        from 界面.方案A部件 import 打开现场图
+
+        return 打开现场图(条目, 日志文本, self)
 
     # ------------------------------------------------------------ 日志
     @property
