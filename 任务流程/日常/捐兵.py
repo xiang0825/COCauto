@@ -122,6 +122,9 @@ class 捐兵任务(日常公共.日常面板任务基类):
             self.日志(f"异常：{异常}")
             self.上下文.页面恢复失败 = True
             return False
+        if self.已停止():
+            # 停止后不再发任何点击（包括关闭聊天），也不记完成，保留画面。
+            return True
         if 结果:
             self.记录完成()
         return 结果
@@ -141,13 +144,15 @@ class 捐兵任务(日常公共.日常面板任务基类):
             return False
         已处理 = []
         for _ in range(int(getattr(self.上下文.设置, "捐兵每轮最多请求数", 5) or 5)):
-            if self._已停止():
-                break
+            if self.已停止():
+                return True
             结果 = self._处理一个请求(已处理)
             if 结果 is None:
                 break
             if 结果 is False:
                 return False
+        if self.已停止():
+            return True
         return self._关闭聊天()
 
     def _处理一个请求(self, 已处理: list) -> bool | None:
@@ -172,7 +177,7 @@ class 捐兵任务(日常公共.日常面板任务基类):
 
     def _找增援按钮(self, 图, 已处理: list):
         关键词 = [日常公共.规范文本(词) for 词 in self.参数["增援按钮关键词"]]
-        for 文本, 中心 in self.OCR(图, self.参数["请求列表区域"]):
+        for 文本, 中心 in self.OCR或空(图, self.参数["请求列表区域"]):
             if 中心 is None or 日常公共.含危险词(文本):
                 continue
             if not any(词 in 文本 for 词 in 关键词):
@@ -186,7 +191,7 @@ class 捐兵任务(日常公共.日常面板任务基类):
         设置 = self.上下文.设置
         剩余点击 = int(self.参数["每个请求最多点击"])
         for 名称 in self.捐赠目标():
-            while 剩余点击 > 0 and not self._已停止():
+            while 剩余点击 > 0 and not self.已停止():
                 图 = self.截图()
                 格子 = self._找格子(图, 名称)
                 if 格子 is None:
@@ -228,20 +233,30 @@ class 捐兵任务(日常公共.日常面板任务基类):
         区域 = (max(0, 格子[0] + dx1), max(0, 格子[1] + dy1), min(800, 格子[0] + dx2), min(600, 格子[1] + dy2))
         if 区域[2] <= 区域[0] or 区域[3] <= 区域[1]:
             return None
-        for 文本, _ in self.OCR(图, 区域):
+        for 文本, _ in self.OCR或空(图, 区域):
             数量 = 日常公共.解析数量(文本)
             if 数量 is not None:
                 return 数量
         return None
 
+    def _聊天面板在(self, 图) -> bool:
+        return self.区域有关键词(图, self.参数["聊天面板确认区域"], self.参数["聊天面板关键词"]) is not None
+
     def _关闭弹窗(self) -> bool:
-        x, y = self.参数["关闭捐兵弹窗点"]
-        return self.点击(x, y, "关闭捐兵弹窗") or self._标记失败("关闭捐兵弹窗失败")
+        """捐满后游戏会自动收起弹窗：此时只要确认回到聊天面板就不点。"""
+        if self.安全关闭(
+            self.参数["关闭捐兵弹窗点"], self.参数["捐兵弹窗确认区域"],
+            self.参数["捐兵弹窗关键词"], "关闭捐兵弹窗", 已关闭判定=self._聊天面板在,
+        ):
+            return True
+        return self._标记失败("关闭捐兵弹窗前未确认页面或关闭点不安全")
 
     def _关闭聊天(self) -> bool:
-        x, y = self.参数["关闭聊天点"]
-        if not self.点击(x, y, "关闭聊天"):
-            return self._标记失败("关闭聊天失败")
+        if not self.安全关闭(
+            self.参数["关闭聊天点"], self.参数["聊天面板确认区域"],
+            self.参数["聊天面板关键词"], "关闭聊天",
+        ):
+            return self._标记失败("关闭聊天前未确认聊天面板或关闭点不安全")
         self.已开聊天 = False
         return True
 
@@ -249,10 +264,6 @@ class 捐兵任务(日常公共.日常面板任务基类):
         self.日志(原因)
         self.上下文.页面恢复失败 = True
         return False
-
-    def _已停止(self) -> bool:
-        停止 = getattr(self.上下文, "停止事件", None)
-        return bool(停止 is not None and 停止.is_set())
 
     def 记录完成(self) -> None:
         间隔 = max(5, int(getattr(self.上下文.设置, "捐兵检查间隔分钟", 15) or 15)) * 60

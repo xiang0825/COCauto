@@ -91,6 +91,9 @@ class 都城捐金币任务(日常公共.日常面板任务基类):
         except Exception as 异常:
             self.日志(f"异常：{异常}")
             结果 = False
+        if self.已停止():
+            # 停止后不再发任何点击，也不记完成，保留画面。
+            return True
         if not 结果:
             self.上下文.页面恢复失败 = True
             return False
@@ -126,7 +129,7 @@ class 都城捐金币任务(日常公共.日常面板任务基类):
         return self._返回()
 
     def _读余额(self, 图) -> int | None:
-        for 文本, _ in self.OCR(图, self.参数["都城金币余额区域"]):
+        for 文本, _ in self.OCR或空(图, self.参数["都城金币余额区域"]):
             数量 = 日常公共.解析数量(文本)
             if 数量 is not None:
                 return 数量
@@ -180,7 +183,9 @@ class 都城捐金币任务(日常公共.日常面板任务基类):
         if (x, y) == (0, 0):
             self.日志("未配置关闭捐献弹窗点，保留画面")
             return False
-        return self.点击(x, y, "关闭捐献弹窗")
+        return self.安全关闭(
+            (x, y), self.参数["捐献弹窗确认区域"], self.参数["捐献弹窗关键词"], "关闭捐献弹窗",
+        )
 
     def _返回(self) -> bool:
         图 = self.截图()

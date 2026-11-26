@@ -241,6 +241,10 @@ def 解析数量(文本: Any) -> int | None:
     return int(匹配.group(1)) if 匹配 else None
 
 
+class OCR不可用(Exception):
+    """OCR 引擎缺失或识别异常：不能据此判定“没有危险文字”。"""
+
+
 class 日常面板任务基类:
     """B/C1 共用的截图、OCR、点击前护栏。子类需有 上下文 / 参数。"""
 
@@ -255,19 +259,24 @@ class 日常面板任务基类:
             return op.获取屏幕图像cv(0, 0, 800, 600)
 
     def OCR(self, 图像, 区域) -> list[tuple[str, tuple[float, float] | None]]:
-        """OCR 图像的一个区域，返回 [(规范文本, 800x600 中心)]。"""
+        """OCR 图像的一个区域，返回 [(规范文本, 800x600 中心)]。
+
+        引擎缺失或识别异常时抛 ``OCR不可用``：调用方不能把它当成“没有文字”。
+        """
         x1, y1, x2, y2 = [int(v) for v in 区域]
+        获取 = getattr(self.上下文, "获取OCR引擎", None)
         try:
-            获取 = getattr(self.上下文, "获取OCR引擎", None)
             引擎 = 获取() if callable(获取) else None
-            if 引擎 is None:
-                return []
+        except Exception as 异常:
+            raise OCR不可用(f"获取 OCR 引擎失败：{异常}") from 异常
+        if 引擎 is None:
+            raise OCR不可用("没有 OCR 引擎")
+        try:
             结果 = 引擎(图像[y1:y2, x1:x2])
             if isinstance(结果, tuple):
                 结果 = 结果[0]
         except Exception as 异常:
-            self.日志(f"OCR 失败：{异常}")
-            return []
+            raise OCR不可用(f"OCR 识别异常：{异常}") from 异常
         输出 = []
         for 文本, 中心 in OCR文本列表(结果):
             if 中心 is not None:
@@ -275,9 +284,20 @@ class 日常面板任务基类:
             输出.append((规范文本(文本), 中心))
         return 输出
 
+    def OCR或空(self, 图像, 区域) -> list[tuple[str, tuple[float, float] | None]]:
+        """用于“找按钮/确认页面/读数量”：OCR 不可用时返回空 → 找不到 → 不点。
+
+        绝不能用于“没有危险文字才点”的判定，那里用 ``点击前护栏``。
+        """
+        try:
+            return self.OCR(图像, 区域)
+        except OCR不可用 as 异常:
+            self.日志(f"{异常}，按未识别处理")
+            return []
+
     def 区域有关键词(self, 图像, 区域, 关键词) -> tuple[str, tuple[float, float] | None] | None:
         词表 = [规范文本(词) for 词 in 关键词 if str(词).strip()]
-        for 文本, 中心 in self.OCR(图像, 区域):
+        for 文本, 中心 in self.OCR或空(图像, 区域):
             if any(词 in 文本 for 词 in 词表):
                 return 文本, 中心
         return None
@@ -287,13 +307,45 @@ class 日常面板任务基类:
         if 区域含宝石图标(图像, 按钮区域):
             self.日志(f"{说明}：按钮区域有宝石图标，拒绝点击")
             return False
-        for 文本, _ in self.OCR(图像, 按钮区域):
+        try:
+            文字 = self.OCR(图像, 按钮区域)
+        except OCR不可用 as 异常:
+            self.日志(f"{说明}：{异常}，无法确认没有危险文字，拒绝点击")
+            return False
+        for 文本, _ in 文字:
             if 含危险词(文本):
                 self.日志(f"{说明}：按钮文字「{文本}」含危险词，拒绝点击")
                 return False
         return True
 
+    def 已停止(self) -> bool:
+        停止 = getattr(self.上下文, "停止事件", None)
+        return bool(停止 is not None and 停止.is_set())
+
+    def 安全关闭(self, 关闭点, 面板区域, 面板关键词, 说明: str, 已关闭判定=None) -> bool:
+        """关闭本任务打开的面板：停止时不点；先重新截图确认面板仍在、关闭点过护栏。
+
+        ``已关闭判定(图)`` 为真表示面板已被游戏自己关掉（例如捐满后弹窗自动
+        收起），此时不点击、返回 True。确认不了当前页面返回 False（页面不可信）。
+        """
+        if self.已停止():
+            self.日志(f"{说明}：已收到停止信号，不再点击")
+            return True
+        图 = self.截图()
+        if not self.区域有关键词(图, 面板区域, 面板关键词):
+            if callable(已关闭判定) and 已关闭判定(图):
+                return True
+            self.日志(f"{说明}：重新截图未确认面板仍在，不点击关闭点")
+            return False
+        x, y = 关闭点
+        if not self.点击前护栏(图, 扩展区域((x, y), 25, 25), 说明):
+            return False
+        return self.点击(x, y, 说明)
+
     def 点击(self, x, y, 说明: str) -> bool:
+        if self.已停止():
+            self.日志(f"{说明}：已收到停止信号，不再点击")
+            return False
         if self.上下文.点击(int(x), int(y), 是否精确点击=True) is False:
             self.日志(f"{说明}：点击被安全输入层拒绝")
             return False
