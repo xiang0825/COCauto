@@ -15,7 +15,7 @@ from 模块.检测.模板匹配器 import 模板匹配引擎
 from 任务流程.基础任务框架 import 任务上下文
 from 任务流程.更新主世界账号资源状态 import 更新家乡资源状态任务
 from 任务流程.主世界打鱼.等待战斗结束并回营 import 等待战斗结束并回营任务
-from 任务流程.活动.部落竞赛 import 部落竞赛任务, 加载配置, 识别任务类型
+from 任务流程.活动.部落竞赛 import 部落竞赛任务, 加载配置, 识别任务类型, 规范文本
 
 
 测试目录 = Path(__file__).resolve().parent
@@ -330,9 +330,13 @@ class 实机截图回放测试(unittest.TestCase):
                         self.页面识别器._升级详情弹窗关闭点(图像)
                     )
 
-    @unittest.expectedFailure
-    def test_部落竞赛实机详情OCR保留可见目标文本(self):
-        for 样本ID in ("clan_games_gold_task", "clan_walkthrough_black_oil"):
+    def test_部落竞赛实机详情存在且任务类型符合标注(self):
+        for 样本ID in (
+            "clan_games_gold_task",
+            "clan_walkthrough_black_oil",
+            "clan_walkthrough_builder_base",
+            "clan_walkthrough_start_pending",
+        ):
             样本 = 样本表[样本ID]
             预期 = 样本["expected"]
             图像 = 读取样本(样本ID)
@@ -345,8 +349,21 @@ class 实机截图回放测试(unittest.TestCase):
                     预期["clan_task_type"],
                     详情["文本"],
                 )
+
+    @unittest.expectedFailure
+    def test_部落竞赛实机详情OCR保留可见目标文本(self):
+        for 样本ID in ("clan_games_gold_task", "clan_walkthrough_black_oil"):
+            样本 = 样本表[样本ID]
+            预期 = 样本["expected"]
+            详情 = self._部落竞赛任务(读取样本(样本ID))._识别详情()
+            详情文本 = 详情["文本"] if 详情 is not None else ""
+            with self.subTest(样本=样本ID):
                 for 片段 in 预期["visible_text_fragments"]:
-                    self.assertIn(片段, 详情["文本"], 详情["文本"])
+                    self.assertIn(
+                        规范文本(片段),
+                        规范文本(详情文本),
+                        详情文本,
+                    )
 
     def test_实机灰卡识别区分当前任务和锁定卡(self):
         样本 = 样本表["clan_walkthrough_gray_cards"]
@@ -365,6 +382,7 @@ class 实机截图回放测试(unittest.TestCase):
         已接任务图 = 读取样本("clan_walkthrough_active_task")
         面板图 = 读取样本("clan_walkthrough_closed_reflow")
         第二页图 = 读取样本("clan_walkthrough_page_two")
+        第二页标注 = 样本表["clan_walkthrough_page_two"]["expected"]
 
         详情页 = self.页面识别器.识别(详情图, 战斗中=False)
         已接任务页 = self.页面识别器.识别(已接任务图, 战斗中=False)
@@ -373,7 +391,9 @@ class 实机截图回放测试(unittest.TestCase):
         self.assertEqual(详情页.页面, "部落竞赛任务详情", 详情页.摘要())
         self.assertEqual(已接任务页.页面, "部落竞赛任务详情", 已接任务页.摘要())
         self.assertEqual(面板页.页面, "部落竞赛面板", 面板页.摘要())
-        self.assertEqual(第二页.页面, "部落竞赛面板", 第二页.摘要())
+        self.assertEqual(第二页.页面, 第二页标注["page"], 第二页.摘要())
+        self.assertEqual(第二页.世界, 第二页标注["world"], 第二页.摘要())
+        self.assertEqual(第二页标注["page_index"], 2)
 
         详情 = self._部落竞赛任务(详情图)._识别详情()
         已接任务详情 = self._部落竞赛任务(已接任务图)._识别详情()
