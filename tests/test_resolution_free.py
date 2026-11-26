@@ -701,3 +701,51 @@ class 固定模板飞艇命中框测试(unittest.TestCase):
         self.assertIn("_入口候选安全", 源码["查找世界入口"])
         for 名 in ("_多尺度入口匹配", "_圣水车反推入口", "_入口候选安全"):
             self.assertIn("_命中框压HUD", 源码[名], 名)
+
+
+class 圣水车反推飞艇命中框测试(unittest.TestCase):
+    """复审反例：圣水车框与反推点击点都不在 HUD，但反推飞艇的船框压到资源栏。"""
+
+    def _任务(self, 圣水车中心, 圣水车框):
+        任务 = object.__new__(到主世界任务)
+        任务.状态文本 = "主世界"
+        任务.上下文 = SimpleNamespace(置脚本状态=Mock())
+        任务.船模板路径 = "船.bmp"
+        任务.模板识别 = SimpleNamespace(
+            执行原尺度优先匹配=Mock(return_value=(
+                True, 0.95, 圣水车中心, "夜世界圣水车_16比9.bmp", (1.0, 1.0), 圣水车框
+            )),
+            _安全加载模板=Mock(return_value=None),
+        )
+        return 任务
+
+    @staticmethod
+    def _红白帆画面(中心x, 中心y):
+        画面 = np.zeros((600, 800, 3), np.uint8)
+        画面[max(0, 中心y - 60):中心y + 60, max(0, 中心x - 60):中心x + 60] = (140, 60, 20)
+        for 偏移 in range(-20, 20, 8):
+            x = 中心x + 偏移
+            画面[max(0, 中心y - 20):中心y + 20, x:x + 4] = (30, 30, 220)
+            画面[max(0, 中心y - 20):中心y + 20, x + 4:x + 8] = (240, 240, 240)
+        return 画面
+
+    def test_反例_反推飞艇船框压资源栏即拒绝(self):
+        任务 = self._任务((551, 61), (539, 49, 563, 73))
+        飞艇x = 551 + 到主世界任务.圣水车到飞艇偏移[0]
+        飞艇y = 61 + 到主世界任务.圣水车到飞艇偏移[1]
+        self.assertEqual((飞艇x, 飞艇y), (688, 7))
+        # 前提：圣水车框、反推点击点都不触发旧检查；只有 24×24 船框重叠。
+        self.assertFalse(画面几何.区域与主页HUD重叠((539, 49, 563, 73)))
+        self.assertFalse(画面几何.点在主页HUD内(688, 7))
+        self.assertEqual(任务._船模板命中框(688, 7, None), (676, -5, 700, 19))
+        self.assertTrue(画面几何.区域与主页HUD重叠((676, -5, 700, 19)))
+        命中, 坐标, _ = 任务._圣水车反推入口(self._红白帆画面(688, 7))
+        self.assertFalse(命中)
+        self.assertEqual(坐标, (0, 0))
+        self.assertTrue(any("命中框" in c.args[0] for c in 任务.上下文.置脚本状态.call_args_list))
+
+    def test_对照_反推飞艇在地图中部允许(self):
+        任务 = self._任务((400 - 137, 300 + 54), (251, 323, 275, 385))
+        命中, 坐标, _ = 任务._圣水车反推入口(self._红白帆画面(400, 300))
+        self.assertTrue(命中)
+        self.assertEqual(坐标, (400, 300))
