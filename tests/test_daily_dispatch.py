@@ -99,5 +99,32 @@ class 夜世界星星调度测试(unittest.TestCase):
         任务.打一场.assert_not_called()
 
 
+class 面板日常调度测试(unittest.TestCase):
+    def _假任务(self, 可运行=True, 结果=True):
+        return SimpleNamespace(可以运行=Mock(return_value=可运行), 执行=Mock(return_value=结果))
+
+    def test_未校准或冷却时不确认页面不点击(self):
+        for 键, 路径 in (("donate_troops", "任务流程.日常.捐兵.捐兵任务"),
+                       ("capital_donate", "任务流程.日常.都城捐金币.都城捐金币任务")):
+            实例, 任务 = 机器人(), self._假任务(可运行=False)
+            with patch(路径, return_value=任务):
+                self.assertTrue(实例._执行主世界面板日常计划(键, 上下文(), object()))
+            实例._进入并确认主世界.assert_not_called()
+            任务.执行.assert_not_called()
+
+    def test_执行前后都确认主世界(self):
+        实例, 任务 = 机器人(), self._假任务()
+        with patch("任务流程.日常.捐兵.捐兵任务", return_value=任务):
+            self.assertTrue(实例._执行主世界面板日常计划("donate_troops", 上下文(), object()))
+        self.assertEqual(实例._进入并确认主世界.call_count, 2)
+        任务.执行.assert_called_once()
+
+    def test_任务失败不再确认直接返回失败(self):
+        实例, 任务 = 机器人(), self._假任务(结果=False)
+        with patch("任务流程.日常.都城捐金币.都城捐金币任务", return_value=任务):
+            self.assertFalse(实例._执行主世界面板日常计划("capital_donate", 上下文(), object()))
+        self.assertEqual(实例._进入并确认主世界.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

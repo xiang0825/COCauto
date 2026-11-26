@@ -158,3 +158,149 @@ def OCR文本列表(识别结果) -> list[tuple[str, tuple[float, float] | None]
             中心 = None
         输出.append((文本, 中心))
     return 输出
+
+
+# ---------------------------------------------------------------- 图像与护栏
+def 规范文本(文本: Any) -> str:
+    """去空白、繁转简、转小写（复用部落竞赛的繁简表）。"""
+    from 任务流程.活动.部落竞赛 import 规范文本 as _规范
+
+    return _规范(文本)
+
+
+def 查找资源图片(相对路径: str) -> Path | None:
+    """相对 资源/ 查找图片：EXE 同级优先。"""
+    for 目录 in 资源候选目录():
+        路径 = Path(目录) / "资源" / 相对路径
+        if 路径.is_file():
+            return 路径
+    return None
+
+
+_图片缓存: dict[str, Any] = {}
+
+
+def 读取图片(相对路径: str):
+    if 相对路径 in _图片缓存:
+        return _图片缓存[相对路径]
+    import cv2
+    import numpy as np
+
+    路径 = 查找资源图片(相对路径)
+    图 = None
+    if 路径 is not None:
+        图 = cv2.imdecode(np.fromfile(str(路径), dtype=np.uint8), cv2.IMREAD_COLOR)
+    _图片缓存[相对路径] = 图
+    return 图
+
+
+def 匹配模板(图像, 模板, 区域=None, 阈值: float = 0.85, 缩放=(1.0,)):
+    """返回 (中心x, 中心y, 分数)（800x600 坐标）；未命中返回 None。"""
+    import cv2
+
+    if 图像 is None or 模板 is None or not hasattr(图像, "shape"):
+        return None
+    高, 宽 = 图像.shape[:2]
+    x1, y1, x2, y2 = [int(v) for v in (区域 or (0, 0, 宽, 高))]
+    x1, y1, x2, y2 = max(0, x1), max(0, y1), min(宽, x2), min(高, y2)
+    子图 = 图像[y1:y2, x1:x2]
+    最佳 = None
+    for 比例 in 缩放:
+        当前 = 模板 if 比例 == 1.0 else cv2.resize(模板, None, fx=比例, fy=比例)
+        th, tw = 当前.shape[:2]
+        if th < 4 or tw < 4 or 子图.shape[0] < th or 子图.shape[1] < tw:
+            continue
+        结果 = cv2.matchTemplate(子图, 当前, cv2.TM_CCOEFF_NORMED)
+        _, 分数, _, 位置 = cv2.minMaxLoc(结果)
+        if 分数 >= 阈值 and (最佳 is None or 分数 > 最佳[2]):
+            最佳 = (x1 + 位置[0] + tw // 2, y1 + 位置[1] + th // 2, float(分数))
+    return 最佳
+
+
+宝石图标路径 = "活动/部落竞赛/宝石图标.png"
+
+
+def 区域含宝石图标(图像, 区域, 阈值: float = 0.80) -> bool:
+    """多尺度匹配宝石图标；模板缺失时按“有宝石”处理（宁可不点）。"""
+    模板 = 读取图片(宝石图标路径)
+    if 模板 is None:
+        return True
+    return 匹配模板(图像, 模板, 区域, 阈值, 缩放=(0.6, 0.8, 1.0, 1.2, 1.5)) is not None
+
+
+def 扩展区域(中心, 半宽: int, 半高: int) -> tuple[int, int, int, int]:
+    x, y = int(中心[0]), int(中心[1])
+    return (max(0, x - 半宽), max(0, y - 半高), min(800, x + 半宽), min(600, y + 半高))
+
+
+def 解析数量(文本: Any) -> int | None:
+    """从 "x5" / "×12" / "12" 等 OCR 文本取数量。"""
+    import re
+
+    匹配 = re.search(r"(\d+)", str(文本 or "").replace(",", "").replace(" ", ""))
+    return int(匹配.group(1)) if 匹配 else None
+
+
+class 日常面板任务基类:
+    """B/C1 共用的截图、OCR、点击前护栏。子类需有 上下文 / 参数。"""
+
+    上下文: Any
+    参数: dict
+
+    def 截图(self):
+        op = self.上下文.op
+        try:
+            return op.获取屏幕图像cv(0, 0, 800, 600, 强制刷新=True)
+        except TypeError:
+            return op.获取屏幕图像cv(0, 0, 800, 600)
+
+    def OCR(self, 图像, 区域) -> list[tuple[str, tuple[float, float] | None]]:
+        """OCR 图像的一个区域，返回 [(规范文本, 800x600 中心)]。"""
+        x1, y1, x2, y2 = [int(v) for v in 区域]
+        try:
+            获取 = getattr(self.上下文, "获取OCR引擎", None)
+            引擎 = 获取() if callable(获取) else None
+            if 引擎 is None:
+                return []
+            结果 = 引擎(图像[y1:y2, x1:x2])
+            if isinstance(结果, tuple):
+                结果 = 结果[0]
+        except Exception as 异常:
+            self.日志(f"OCR 失败：{异常}")
+            return []
+        输出 = []
+        for 文本, 中心 in OCR文本列表(结果):
+            if 中心 is not None:
+                中心 = (中心[0] + x1, 中心[1] + y1)
+            输出.append((规范文本(文本), 中心))
+        return 输出
+
+    def 区域有关键词(self, 图像, 区域, 关键词) -> tuple[str, tuple[float, float] | None] | None:
+        词表 = [规范文本(词) for 词 in 关键词 if str(词).strip()]
+        for 文本, 中心 in self.OCR(图像, 区域):
+            if any(词 in 文本 for 词 in 词表):
+                return 文本, 中心
+        return None
+
+    def 点击前护栏(self, 图像, 按钮区域, 说明: str) -> bool:
+        """按钮区域出现宝石图标或宝石/购买/跳过/重置/加速等文字一律拒绝。"""
+        if 区域含宝石图标(图像, 按钮区域):
+            self.日志(f"{说明}：按钮区域有宝石图标，拒绝点击")
+            return False
+        for 文本, _ in self.OCR(图像, 按钮区域):
+            if 含危险词(文本):
+                self.日志(f"{说明}：按钮文字「{文本}」含危险词，拒绝点击")
+                return False
+        return True
+
+    def 点击(self, x, y, 说明: str) -> bool:
+        if self.上下文.点击(int(x), int(y), 是否精确点击=True) is False:
+            self.日志(f"{说明}：点击被安全输入层拒绝")
+            return False
+        延时 = getattr(self.上下文, "脚本延时", None)
+        if callable(延时):
+            延时(int(self.参数.get("点击后等待毫秒", 700)))
+        return True
+
+    def 日志(self, 文本: str) -> None:
+        self.上下文.置脚本状态(f"{getattr(self, '日志前缀', '日常')}：{文本}")

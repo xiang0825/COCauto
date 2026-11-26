@@ -672,6 +672,7 @@ class 任务计划测试(unittest.TestCase):
         机器人._执行部落竞赛计划 = Mock(return_value=True)
         机器人._执行保持不闲计划 = Mock(return_value=True)
         机器人._执行夜世界星星计划 = Mock(return_value=True)
+        机器人._执行主世界面板日常计划 = Mock(return_value=True)
         上下文 = SimpleNamespace(
             _资源计划已打满=False,
             置脚本状态=Mock(),
@@ -734,6 +735,8 @@ class 任务计划测试(unittest.TestCase):
             "research": ("任务流程.兵种或法术升级", "兵种或法术升级任务"),
             "keep_busy": ("任务流程.日常.保持不闲", "保持不闲任务"),
             "night_star_bonus": ("任务流程.日常.夜世界星星", "夜世界星星任务"),
+            "donate_troops": ("任务流程.日常.捐兵", "捐兵任务"),
+            "capital_donate": ("任务流程.日常.都城捐金币", "都城捐金币任务"),
         }
         for 定义 in 任务计划定义列表:
             模块名, 对象名 = 入口[定义.键]

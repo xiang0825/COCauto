@@ -1669,7 +1669,10 @@ class 自动化机器人:
         任务循环只负责顺序、停止和失败策略；具体任务分派集中在这里，
         防止以后新增任务时把条件分支继续堆进主循环。
         """
-        if 任务键 in {"event", "main_resource", "wall", "building", "hero", "pet", "research", "keep_busy"}:
+        if 任务键 in {
+            "event", "main_resource", "wall", "building", "hero", "pet", "research",
+            "keep_busy", "donate_troops", "capital_donate",
+        }:
             上下文._待命恢复世界 = "主世界"
 
         if 任务键 == "event":
@@ -1697,6 +1700,9 @@ class 自动化机器人:
         elif 任务键 == "night_star_bonus":
             上下文.置脚本状态("按任务计划执行：night_star_bonus")
             结果 = self._执行夜世界星星计划(上下文, 检测登录)
+        elif 任务键 in {"donate_troops", "capital_donate"}:
+            上下文.置脚本状态(f"按任务计划执行：{任务键}")
+            结果 = self._执行主世界面板日常计划(任务键, 上下文, 检测登录)
         elif 任务键 == "keep_busy":
             上下文.置脚本状态("按任务计划执行：keep_busy")
             结果 = self._执行保持不闲计划(上下文, 检测登录)
@@ -1740,6 +1746,23 @@ class 自动化机器人:
             return False
         任务.记录完成()
         return True
+
+    def _执行主世界面板日常计划(self, 任务键: str, 上下文, 检测登录) -> bool:
+        """B 捐兵 / C1 都城捐金币：未校准/冷却在确认页面前就安全跳过。"""
+        if 任务键 == "donate_troops":
+            from 任务流程.日常.捐兵 import 捐兵任务 as 任务类
+        else:
+            from 任务流程.日常.都城捐金币 import 都城捐金币任务 as 任务类
+        任务 = 任务类(上下文)
+        if not 任务.可以运行():
+            return True
+        if not self._日常任务前确认主世界(上下文, 检测登录, f"{任务键}前"):
+            return False
+        任务.可以运行 = lambda: True  # 已检查过，避免重复写日志/等待
+        结果 = 任务.执行()
+        if not 结果:
+            return False
+        return self._日常任务前确认主世界(上下文, 检测登录, f"{任务键}后")
 
     def _执行夜世界星星计划(self, 上下文, 检测登录) -> bool:
         """A. 夜世界打满星星奖励：进夜世界后逐场打，今日领满或到上限即停。"""

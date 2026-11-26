@@ -43,6 +43,8 @@ class 任务计划定义:
     任务计划定义("pet", "战宠升级", "欲升级的战宠", "string", "升级已配置的战宠目标"),
     任务计划定义("research", "兵种或法术研究", "欲升级的兵种或法术", "string", "升级已配置的研究目标"),
     任务计划定义("night_star_bonus", "夜世界打满星星奖励", "是否夜世界星星奖励", "bool", "每天在夜世界打到星级奖励领满为止（有每日场次上限）"),
+    任务计划定义("donate_troops", "自动捐兵", "是否自动捐兵", "bool", "部落频道有请求时捐指定兵种/法术，主力兵保留数量；须先实机校准"),
+    任务计划定义("capital_donate", "捐都城金币", "是否捐都城金币", "bool", "进入都城把都城金币捐给正在升级的建筑；须先实机校准"),
     任务计划定义("keep_busy", "实验室和工人不闲", "是否保持实验室工人不闲", "bool", "资源够时按优先级排研究；空闲工人按优先级（可选游戏建议兜底）排升级"),
 )
 任务计划定义映射 = {定义.键: 定义 for 定义 in 任务计划定义列表}
@@ -445,6 +447,23 @@ class 机器人设置:
         default=12,
         metadata={"显示名称": "每日最多场次", "描述": "奖励弹窗漏识别时的保护上限", "UI类型": "hidden"},
     )
+
+    是否自动捐兵: bool = field(
+        default=False,
+        metadata={"显示名称": "自动捐兵", "描述": "部落频道有请求时捐指定兵种/法术（需实机校准）", "UI类型": "bool"},
+    )
+    捐兵兵种: List[str] = field(default_factory=list, metadata={"显示名称": "捐兵兵种", "描述": "", "UI类型": "hidden"})
+    捐兵法术: List[str] = field(default_factory=list, metadata={"显示名称": "捐兵法术", "描述": "", "UI类型": "hidden"})
+    捐兵主力保留数量: int = field(default=5, metadata={"显示名称": "主力兵保留数量", "描述": "", "UI类型": "hidden"})
+    捐兵每轮最多请求数: int = field(default=5, metadata={"显示名称": "每轮最多处理请求数", "描述": "", "UI类型": "hidden"})
+    捐兵检查间隔分钟: int = field(default=15, metadata={"显示名称": "捐兵检查间隔（分钟）", "描述": "", "UI类型": "hidden"})
+
+    是否捐都城金币: bool = field(
+        default=False,
+        metadata={"显示名称": "捐都城金币", "描述": "把都城金币捐到都城（需实机校准）", "UI类型": "bool"},
+    )
+    都城金币捐献起点: int = field(default=0, metadata={"显示名称": "都城金币达到多少才捐", "描述": "", "UI类型": "hidden"})
+    都城捐献检查间隔分钟: int = field(default=360, metadata={"显示名称": "都城捐献检查间隔（分钟）", "描述": "", "UI类型": "hidden"})
 
     是否采集进攻界面图像: bool = field(
         default=False,
@@ -970,6 +989,14 @@ class 机器人设置:
         self.配兵兵种 = [名 for 名 in dict.fromkeys(map(str, 已选)) if 名 in 可选兵种名称]
         已选法术 = self.配兵法术 if isinstance(self.配兵法术, list) else []
         self.配兵法术 = [名 for 名 in dict.fromkeys(map(str, 已选法术)) if 名 in 可选法术名称]
+        self.捐兵兵种 = [
+            名 for 名 in dict.fromkeys(map(str, self.捐兵兵种 if isinstance(self.捐兵兵种, list) else []))
+            if 名 in 可选兵种名称
+        ]
+        self.捐兵法术 = [
+            名 for 名 in dict.fromkeys(map(str, self.捐兵法术 if isinstance(self.捐兵法术, list) else []))
+            if 名 in 可选法术名称
+        ]
         if self.配兵攻城 not in 攻城列表:
             self.配兵攻城 = ""
         if self.阵容预设 not in 预设选项:
@@ -995,6 +1022,11 @@ class 机器人设置:
             ("不闲检查间隔分钟", 60, 10, 720),
             ("夜世界每日星级奖励次数", 1, 1, 5),
             ("夜世界星星每日最多场次", 12, 1, 40),
+            ("捐兵主力保留数量", 5, 0, 300),
+            ("捐兵每轮最多请求数", 5, 1, 20),
+            ("捐兵检查间隔分钟", 15, 5, 240),
+            ("都城金币捐献起点", 0, 0, 10_000_000),
+            ("都城捐献检查间隔分钟", 360, 30, 1440),
         ):
             数值 = self._安全整型(getattr(self, 字段名), 默认值)
             setattr(self, 字段名, max(最小值, min(最大值, 数值)))
