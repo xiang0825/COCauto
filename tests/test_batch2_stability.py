@@ -208,43 +208,56 @@ class 第二批稳定性优化测试(unittest.TestCase):
         self.assertEqual([项["类别名称"] for 项 in yolo去重], ["金库", "圣水瓶"])
 
     # ------------------------------------------------------------------ P1-7
-    def test_P1_7_非4比3分辨率输出明确中文警告但不阻断(self):
+    def test_P1_7_未验证长宽比输出明确中文提示但不阻断(self):
+        # 任意 16:9 与 800×600 参考尺寸都是已验证配置，不再提示拉伸。
         self.assertIsNone(检查分辨率比例告警(800, 600))
-        self.assertIsNone(检查分辨率比例告警(1600, 1200))
+        self.assertIsNone(检查分辨率比例告警(1280, 720))
+        self.assertIsNone(检查分辨率比例告警(1920, 1080))
 
-        告警 = 检查分辨率比例告警(1280, 720)
+        告警 = 检查分辨率比例告警(1600, 1200)
         self.assertIsNotNone(告警)
-        self.assertIn("800×600", 告警)
-        self.assertIn("4:3", 告警)
-        self.assertIn("横向拉伸", 告警)
+        self.assertIn("1600×1200", 告警)
+        self.assertIn("16:9", 告警)
+        self.assertIn("实验性", 告警)
 
         日志 = []
-        宽屏图 = np.zeros((720, 1280, 3), dtype=np.uint8)
+        四比三图 = np.zeros((1200, 1600, 3), dtype=np.uint8)
         设备 = SimpleNamespace(
             参考宽度=800,
             参考高度=600,
-            获取屏幕图像cv=Mock(return_value=宽屏图),
+            获取屏幕图像cv=Mock(return_value=四比三图),
         )
         屏幕 = ADB屏幕(设备, 日志回调=日志.append)
         返回图 = 屏幕.获取屏幕图像cv(0, 0, 800, 600)
         self.assertEqual(返回图.shape, (600, 800, 3))
         self.assertEqual(len(日志), 1)
-        self.assertIn("1280×720", 日志[0])
+        self.assertIn("1600×1200", 日志[0])
         # 同一分辨率不重复刷屏
         屏幕.获取屏幕图像cv(0, 0, 800, 600, 强制刷新=True)
         self.assertEqual(len(日志), 1)
 
+        宽屏日志 = []
+        宽屏设备 = SimpleNamespace(
+            参考宽度=800,
+            参考高度=600,
+            获取屏幕图像cv=Mock(return_value=np.zeros((720, 1280, 3), dtype=np.uint8)),
+        )
+        ADB屏幕(宽屏设备, 日志回调=宽屏日志.append).获取屏幕图像cv(0, 0, 800, 600)
+        self.assertEqual(宽屏日志, [])
+
         检查日志 = []
         检查上下文 = SimpleNamespace(
-            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=宽屏图)),
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=四比三图)),
             置脚本状态=检查日志.append,
         )
         检查任务 = 检查图像任务.__new__(检查图像任务)
         检查任务.上下文 = 检查上下文
         self.assertTrue(检查任务.执行())
         self.assertEqual(len(检查日志), 2)
-        self.assertIn("1280×720", 检查日志[0])
-        self.assertIn("横向拉伸", 检查日志[1])
+        self.assertIn("1600×1200", 检查日志[0])
+        self.assertIn("实验性", 检查日志[1])
+        from 模块.画面几何 import 清除设备尺寸
+        清除设备尺寸()
 
     # --------------------------------------------------------- 夜世界 P1 补丁
     def test_夜世界打开进攻页面等待超时与停止事件安全返回失败(self):

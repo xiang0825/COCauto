@@ -11,6 +11,7 @@ from 任务流程.世界跳转.新版界面坐标 import (
     主世界建造菜单,
     新版建造面板OCR区域,
     建造面板外侧安全点,
+    锚定,
 )
 
 
@@ -202,7 +203,7 @@ class 寻找建筑(夜世界基础任务):
 
                 if not self.打开建筑页面(划到底部=False):
                     return False
-                ocr结果 = self.执行OCR识别(self.建造面板OCR区域)
+                ocr结果 = self.执行OCR识别(锚定(self.建造面板OCR区域))
 
                 # MuMu 当前繁体中文建筑名（如“頭號殺手”“攻城載車”）
                 # 的 OCR 置信度约 0.75~0.79，标题和金额反而更高。
@@ -381,7 +382,7 @@ class 寻找建筑(夜世界基础任务):
         self.建筑列表 = 英雄列表
         for 轮次 in range(10):
             self.上下文.脚本延时(700)
-            ocr结果 = self.执行OCR识别(self.英雄列表OCR区域)
+            ocr结果 = self.执行OCR识别(锚定(self.英雄列表OCR区域))
             可见名称 = []
             for 项 in ocr结果:
                 if isinstance(项, (list, tuple)) and len(项) > 1:
@@ -464,7 +465,7 @@ class 寻找建筑(夜世界基础任务):
     def _英雄殿堂已打开(self) -> bool:
         """仅用英雄殿堂标题/英雄卡片确认页面，避免主世界误判。"""
         try:
-            ocr结果 = self.执行OCR识别(self.英雄列表OCR区域)
+            ocr结果 = self.执行OCR识别(锚定(self.英雄列表OCR区域))
         except Exception:
             return False
         文本 = "".join(
@@ -540,7 +541,7 @@ class 寻找建筑(夜世界基础任务):
         # 新版右侧面板覆盖建造入口及其旧坐标；在外侧海面安全收起，
         # 不能再追加一次落入建筑卡片区域的“清浮层”点击。
         if self.上下文.点击(
-            *建造面板外侧安全点, 延时=700, 是否精确点击=True
+            *锚定(建造面板外侧安全点), 延时=700, 是否精确点击=True
         ) is False:
             self.上下文.页面恢复失败 = True
             self.上下文.置脚本状态("英雄列表外侧安全收起点击被拒绝，停止后续操作")
@@ -619,7 +620,7 @@ class 寻找建筑(夜世界基础任务):
                     "建筑扫描延时结束时收到停止请求，禁止继续读取当前页面"
                 )
                 return False
-            ocr结果 = self.执行OCR识别(self.建造面板OCR区域)
+            ocr结果 = self.执行OCR识别(锚定(self.建造面板OCR区域))
 
             当前OCR文本 = tuple(
                 str(项[1] or "").replace(" ", "").replace("\n", "")
@@ -709,7 +710,7 @@ class 寻找建筑(夜世界基础任务):
         # 建筑升级任务在机器人调度器中已经先确认回到主世界。
         # ``是否刷主世界`` 只是资源任务开关，不代表当前所在世界；
         # 关闭刷资源但单独启用建筑升级时，仍必须点击主世界的工人/建筑入口。
-        x, y = self.建筑入口参考坐标
+        x, y = 锚定(self.建筑入口参考坐标)
         扫描监控超时秒 = getattr(self, "_建筑扫描监控超时秒", 180)
         置脚本状态 = getattr(self.上下文, "置脚本状态", None)
         if not self._建筑升级面板已打开():
@@ -760,7 +761,7 @@ class 寻找建筑(夜世界基础任务):
         面板 OCR 特征做预检，识别失败时才按正常流程打开。
         """
         try:
-            OCR结果 = self.执行OCR识别(self.建造面板OCR区域)
+            OCR结果 = self.执行OCR识别(锚定(self.建造面板OCR区域))
         except Exception:
             return False
         文本 = " ".join(str(项[1]) for 项 in OCR结果 if isinstance(项, (list, tuple)) and len(项) > 1)
@@ -791,7 +792,7 @@ class 寻找建筑(夜世界基础任务):
     def 关闭建筑页面(self):
         """点已实机确认的面板外海面收起侧栏，不点被面板覆盖的旧入口。"""
         try:
-            if self.上下文.点击(*建造面板外侧安全点, 延时=700, 是否精确点击=True) is False:
+            if self.上下文.点击(*锚定(建造面板外侧安全点), 延时=700, 是否精确点击=True) is False:
                 self.上下文.页面恢复失败 = True
                 self.上下文.置脚本状态(
                     "建造面板外侧安全收起点击被安全层拒绝，停止后续建筑操作"
@@ -939,7 +940,7 @@ class 寻找建筑(夜世界基础任务):
             raise ValueError("OCR坐标为空或格式无效")
         所有x = [点[0] for 点 in 坐标列表]
         所有y = [点[1] for 点 in 坐标列表]
-        区域左, 区域上, _, _ = self.建造面板OCR区域
+        区域左, 区域上, _, _ = 锚定(self.建造面板OCR区域)
         左上x = int(min(所有x)) + 区域左
         左上y = int(min(所有y)) + 区域上
         # 右边界必须跟随 OCR 框的实际位置。写死为 595 会把屏幕右侧

@@ -33,7 +33,8 @@ class 进入世界任务基类(基础任务):
     # 多尺度回退只给夜世界入口启用，并且限制在飞艇可能出现的海岸带；
     # 不能把整屏小图模板匹配结果直接当成可点击坐标。
     世界入口多尺度比例 = (0.50, 0.60, 0.70, 0.80, 0.90, 1.00, 1.20, 1.40)
-    世界入口多尺度最低分数 = 0.70
+    # 多尺度回退不得降低阈值：与固定模板同为 0.78，召回靠颜色复核补足。
+    世界入口多尺度最低分数 = 0.78
     世界入口多尺度安全区域 = (120, 400, 340, 545)
 
     def __init__(self, 上下文: 任务上下文, 判断图标路径: str, 船模板路径: str, 状态文本: str,滑动参数: 滑动配置):
@@ -411,20 +412,27 @@ class 进入世界任务基类(基础任务):
             最高分数 = 0.0
             for 候选区域, 候选左, 候选上 in 区域列表:
                 try:
-                    分数, 中心, _ = 最佳匹配(候选区域, self.船模板路径)
+                    分数, 中心, 命中路径 = 最佳匹配(候选区域, self.船模板路径)
                     分数 = float(分数)
                     最高分数 = max(最高分数, 分数)
                     if 分数 >= self.世界入口最低分数:
-                        点击x, 点击y = self._固定模板点击坐标(
-                            int(中心[0]) + 候选左,
-                            int(中心[1]) + 候选上,
-                        )
+                        中心x = int(中心[0]) + 候选左
+                        中心y = int(中心[1]) + 候选上
+                        点击x, 点击y = self._固定模板点击坐标(中心x, 中心y)
+                        命中框 = self._船模板命中框(中心x, 中心y, 命中路径)
+                        if not self._入口候选安全(
+                            屏幕图像, 中心x, 中心y, 点击x, 点击y, 命中框
+                        ):
+                            continue
                         return True, (点击x, 点击y), 分数
                 except Exception:
                     continue
             多尺度命中, 多尺度坐标, 多尺度分数 = self._多尺度入口匹配(屏幕图像)
             if 多尺度命中:
                 return 多尺度命中, 多尺度坐标, 多尺度分数
+            反推命中, 反推坐标, 反推分数 = self._圣水车反推入口(屏幕图像)
+            if 反推命中:
+                return 反推命中, 反推坐标, 反推分数
             return False, (0, 0), max(最高分数, 多尺度分数)
 
         # 兼容旧测试替身/旧识图引擎，没有最佳分数接口时仍使用安全区域。
@@ -433,17 +441,197 @@ class 进入世界任务基类(基础任务):
                 区域, self.船模板路径, 相似度阈值=self.世界入口最低分数
             )
             if 命中:
-                点击x, 点击y = self._固定模板点击坐标(
-                    int(中心[0]) + 左,
-                    int(中心[1]) + 上,
-                )
-                return True, (点击x, 点击y), 1.0
+                中心x = int(中心[0]) + 左
+                中心y = int(中心[1]) + 上
+                点击x, 点击y = self._固定模板点击坐标(中心x, 中心y)
+                # 旧接口不返回命中模板，按模板集中最大的尺寸保守估计命中框。
+                命中框 = self._船模板命中框(中心x, 中心y, None)
+                if self._入口候选安全(屏幕图像, 中心x, 中心y, 点击x, 点击y, 命中框):
+                    return True, (点击x, 点击y), 1.0
         except Exception:
             pass
         多尺度命中, 多尺度坐标, 多尺度分数 = self._多尺度入口匹配(屏幕图像)
         if 多尺度命中:
             return 多尺度命中, 多尺度坐标, 多尺度分数
         return False, (0, 0), 多尺度分数
+
+    # ------------------------------------------------------------------
+    # 入口候选安全复核：飞艇误中 HUD 会把输入送到 HUD 按钮，属于安全问题；
+    # 宁可不点，交给地图拖动搜索。
+    # ------------------------------------------------------------------
+    def _入口点击点不在HUD(self, x, y, 中心=None) -> bool:
+        from 模块.画面几何 import 点在主页HUD内
+
+        if 点在主页HUD内(int(x), int(y)):
+            return False
+        if 中心 is not None and 点在主页HUD内(int(中心[0]), int(中心[1]), 边距=0):
+            return False
+        return True
+
+    # 无法加载命中模板时使用的保守命中框尺寸（现有船模板最大 24×22）。
+    船模板默认命中框尺寸 = (24, 24)
+
+    def _船模板命中框(self, 中心x: int, 中心y: int, 模板路径=None):
+        """返回模板命中框 (左, 上, 右, 下)。
+
+        已知命中模板时用其实际尺寸；未知时取船模板集中最大尺寸，且不小于
+        默认尺寸，宁可多拒绝也不漏判与 HUD 的重叠。
+        """
+        加载 = getattr(getattr(self, "模板识别", None), "_安全加载模板", None)
+        if 模板路径:
+            路径列表 = [模板路径]
+        else:
+            原路径 = getattr(self, "船模板路径", "") or ""
+            路径列表 = 原路径.split("|") if isinstance(原路径, str) else list(原路径)
+        宽, 高 = 0, 0
+        for 路径 in 路径列表:
+            try:
+                模板 = 加载(str(路径).strip()) if callable(加载) else None
+                模板高, 模板宽 = (int(v) for v in 模板.shape[:2])
+            except Exception:
+                continue
+            宽, 高 = max(宽, 模板宽), max(高, 模板高)
+        if not 模板路径 or 宽 <= 0 or 高 <= 0:
+            宽 = max(宽, self.船模板默认命中框尺寸[0])
+            高 = max(高, self.船模板默认命中框尺寸[1])
+        左 = int(中心x) - 宽 // 2
+        上 = int(中心y) - 高 // 2
+        return 左, 上, 左 + 宽, 上 + 高
+
+    @staticmethod
+    def _命中框压HUD(命中框) -> bool:
+        """所有飞艇命中路径共用：命中框与任一主页 HUD 排除区重叠即为 True。"""
+        from 模块.画面几何 import 区域与主页HUD重叠
+
+        if 命中框 is None:
+            return True
+        return 区域与主页HUD重叠(命中框)
+
+    def _入口候选安全(self, 屏幕图像, 中心x, 中心y, 点击x, 点击y, 命中框=None) -> bool:
+        """固定模板命中必须避开 HUD；回主世界飞艇还需红白船体颜色证据。"""
+        if 命中框 is None:
+            命中框 = self._船模板命中框(中心x, 中心y, None)
+        if self._命中框压HUD(命中框):
+            self._记录入口拒绝(
+                f"入口候选命中框{tuple(int(v) for v in 命中框)}与固定 HUD 区域重叠，拒绝点击"
+            )
+            return False
+        if not self._入口点击点不在HUD(点击x, 点击y, (中心x, 中心y)):
+            self._记录入口拒绝(f"入口候选{点击x},{点击y}落在固定 HUD 区域，拒绝点击")
+            return False
+        if getattr(self, "状态文本", "") != "主世界":
+            return True
+        try:
+            import cv2
+
+            hsv = cv2.cvtColor(屏幕图像, cv2.COLOR_BGR2HSV)
+        except Exception:
+            return False
+        if self._主世界飞艇候选颜色可信(hsv, 中心x, 中心y) or self._红白帆颜色可信(
+            hsv, 中心x, 中心y
+        ):
+            return True
+        self._记录入口拒绝(f"入口候选{点击x},{点击y}缺少红白船体颜色证据，拒绝点击")
+        return False
+
+    def _记录入口拒绝(self, 文本: str) -> None:
+        上下文 = getattr(self, "上下文", None)
+        置状态 = getattr(上下文, "置脚本状态", None)
+        if not callable(置状态):
+            return
+        上次 = getattr(self, "_上次入口拒绝日志", None)
+        if 上次 == 文本:
+            return
+        self._上次入口拒绝日志 = 文本
+        try:
+            置状态(文本)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _红白帆颜色可信(hsv, 中心x: int, 中心y: int) -> bool:
+        """新版回主世界飞艇：红白竖条纹帆 + 周围深色水面。"""
+        try:
+            高, 宽 = hsv.shape[:2]
+            局部 = hsv[max(0, 中心y - 30):min(高, 中心y + 30),
+                      max(0, 中心x - 26):min(宽, 中心x + 26)]
+            if 局部.size == 0:
+                return False
+            红色 = (
+                ((局部[:, :, 0] <= 12) | (局部[:, :, 0] >= 168))
+                & (局部[:, :, 1] >= 90)
+                & (局部[:, :, 2] >= 80)
+            )
+            白色 = (局部[:, :, 1] <= 70) & (局部[:, :, 2] >= 170)
+            红覆盖率 = float(红色.mean())
+            白覆盖率 = float(白色.mean())
+            if not (0.05 <= 红覆盖率 <= 0.55 and 白覆盖率 >= 0.04):
+                return False
+            # 红白条纹：同一行内红/白交替，排除纯红按钮或白色文字。
+            交替行 = 0
+            for 行 in range(0, 局部.shape[0], 3):
+                标记 = np.where(红色[行], 1, np.where(白色[行], 2, 0))
+                标记 = 标记[标记 > 0]
+                if 标记.size >= 4 and int(np.count_nonzero(np.diff(标记))) >= 2:
+                    交替行 += 1
+            if 交替行 < 3:
+                return False
+            周边 = hsv[max(0, 中心y - 60):min(高, 中心y + 60),
+                      max(0, 中心x - 60):min(宽, 中心x + 60)]
+            水面 = (
+                (周边[:, :, 0] >= 90) & (周边[:, :, 0] <= 130)
+                & (周边[:, :, 1] >= 40) & (周边[:, :, 2] >= 25) & (周边[:, :, 2] <= 160)
+            )
+            return float(水面.mean()) >= 0.12
+        except (AttributeError, TypeError, ValueError, IndexError):
+            return False
+
+    # 新版夜世界：回主世界飞艇停在码头旁，圣水车在码头陆地一侧。
+    # 1280×720 实拍（tests/回放样本/16比9/night_home_boat_cart_*）中
+    # 圣水车模板中心约 (551,117)，飞艇船体约 (688,63)（逻辑画布）。
+    圣水车到飞艇偏移 = (137, -54)
+
+    def _圣水车反推入口(self, 屏幕图像):
+        """回主世界：由圣水车模板反推飞艇；必须避开 HUD 且通过红白帆颜色复核。"""
+        if getattr(self, "状态文本", "") != "主世界":
+            return False, (0, 0), 0.0
+        匹配 = getattr(self.模板识别, "执行原尺度优先匹配", None)
+        if not callable(匹配):
+            return False, (0, 0), 0.0
+        try:
+            import cv2
+            from 模块.画面几何 import 区域与主页HUD重叠
+
+            # 原尺度优先，未达阈值才按几何尺度回退；阈值不降。
+            命中, 分数, 中心, _, (sx, sy), 命中框 = 匹配(
+                屏幕图像, "夜世界圣水车_16比9.bmp", 0.78
+            )
+            分数 = float(分数)
+            if not 命中 or self._命中框压HUD(命中框):
+                return False, (0, 0), 0.0
+            # 偏移随 UI/地图缩放与模板尺度同比例变化。
+            飞艇x = int(round(int(中心[0]) + self.圣水车到飞艇偏移[0] * float(sx)))
+            飞艇y = int(round(int(中心[1]) + self.圣水车到飞艇偏移[1] * float(sy)))
+            if not (0 <= 飞艇x < 800 and 0 <= 飞艇y < 600):
+                return False, (0, 0), 0.0
+            # 反推得到的飞艇没有自己的模板命中，按船模板集最大尺寸（≥24×24）
+            # 生成命中框，与其它飞艇路径共用同一重叠检查，任何重叠即拒绝。
+            飞艇命中框 = self._船模板命中框(飞艇x, 飞艇y, None)
+            if self._命中框压HUD(飞艇命中框) or not self._入口点击点不在HUD(飞艇x, 飞艇y):
+                self._记录入口拒绝(
+                    f"由圣水车推得的飞艇{飞艇x},{飞艇y}（命中框{飞艇命中框}）被 HUD 遮挡，"
+                    "拒绝点击，改为拖动地图"
+                )
+                return False, (0, 0), 0.0
+            hsv = cv2.cvtColor(屏幕图像, cv2.COLOR_BGR2HSV)
+            if not self._红白帆颜色可信(hsv, 飞艇x, 飞艇y):
+                self._记录入口拒绝(
+                    f"由圣水车推得的飞艇{飞艇x},{飞艇y}缺少红白帆证据，拒绝点击"
+                )
+                return False, (0, 0), 0.0
+            return True, (飞艇x, 飞艇y), 分数
+        except Exception:
+            return False, (0, 0), 0.0
 
     def _固定模板点击坐标(self, 中心x: int, 中心y: int) -> tuple[int, int]:
         """把固定船帆模板中心换算为当前版本的可点击船体坐标。"""
@@ -480,6 +668,7 @@ class 进入世界任务基类(基础任务):
             return False, (0, 0), 0.0
         try:
             import cv2
+            from 模块.画面几何 import 区域与主页HUD重叠
 
             if 屏幕图像.shape[1] != 800 or 屏幕图像.shape[0] != 600:
                 屏幕图像 = cv2.resize(
@@ -523,6 +712,13 @@ class 进入世界任务基类(基础任务):
                         continue
                     中心x = 左 + int(位置[0]) + 模板宽度 // 2
                     中心y = 上 + int(位置[1]) + 模板高度 // 2
+                    命中框 = (
+                        左 + int(位置[0]), 上 + int(位置[1]),
+                        左 + int(位置[0]) + 模板宽度, 上 + int(位置[1]) + 模板高度,
+                    )
+                    # 命中框与任一 HUD 排除区重叠即拒绝，不只看点击点。
+                    if self._命中框压HUD(命中框):
+                        continue
                     if 目标夜世界:
                         # 左下任务/活动按钮在同一海岸带会产生相近的红色
                         # 模板分数，但它的匹配中心更靠下；实机复现为
@@ -561,8 +757,14 @@ class 进入世界任务基类(基础任务):
                         max(0, min(799, int(中心x) + 8)),
                         max(0, min(599, int(中心y) + 20)),
                     )
-                return True, 点击坐标, float(分数)
-            return True, (int(中心x) - 8, int(中心y) + 16), float(分数)
+            else:
+                点击坐标 = (int(中心x) - 8, int(中心y) + 16)
+            if not self._入口点击点不在HUD(*点击坐标):
+                self._记录入口拒绝(
+                    f"多尺度入口点击点{点击坐标[0]},{点击坐标[1]}落在固定 HUD 区域，拒绝点击"
+                )
+                return False, (0, 0), float(分数)
+            return True, 点击坐标, float(分数)
         except (AttributeError, TypeError, ValueError, cv2.error):
             return False, (0, 0), 0.0
 

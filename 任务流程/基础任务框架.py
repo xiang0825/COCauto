@@ -1509,8 +1509,8 @@ class 任务上下文:
                 if 图像 is None or not hasattr(图像, "shape"):
                     return ""
                 高, 宽 = 图像.shape[:2]
-                from 任务流程.世界跳转.新版界面坐标 import 新版建造面板OCR区域
-                区域左, 区域上, 区域右, 区域下 = 新版建造面板OCR区域
+                from 任务流程.世界跳转.新版界面坐标 import 新版建造面板OCR区域, 锚定
+                区域左, 区域上, 区域右, 区域下 = 锚定(新版建造面板OCR区域)
                 左 = int(宽 * 区域左 / 800)
                 上 = int(高 * 区域上 / 600)
                 右 = int(宽 * 区域右 / 800)
@@ -1545,8 +1545,8 @@ class 任务上下文:
                     "检测到新版英雄侧栏，使用面板外安全点收起；"
                     "禁止点击右上角相似控件、立即完成和宝石"
                 )
-                from 任务流程.世界跳转.新版界面坐标 import 建造面板外侧安全点
-                if not self.点击已确认安全按钮(*建造面板外侧安全点, 延时=700):
+                from 任务流程.世界跳转.新版界面坐标 import 建造面板外侧安全点, 锚定
+                if not self.点击已确认安全按钮(*锚定(建造面板外侧安全点), 延时=700):
                     self.页面恢复失败 = True
                     self.置脚本状态(
                         "英雄侧栏外侧安全收起未通过复核，禁止继续点击"
@@ -2704,6 +2704,9 @@ class 任务上下文:
 
     def 输入前安全检查(self) -> bool:
         """供原始鼠标路径使用；返回 True 表示必须阻断本次输入。"""
+        停止事件 = getattr(self, "停止事件", None)
+        if 停止事件 is not None and 停止事件.is_set():
+            return True
         if getattr(self, "_内存保护已触发", False):
             return True
         if getattr(self, "_正在开启奖励宝箱", False):
@@ -2713,6 +2716,10 @@ class 任务上下文:
         结果 = getattr(self, "_最近点击页面结果", None)
         if 结果 is None:
             结果 = self.识别点击画面()
+        # 匹配等待页只有一个“取消”按钮：任何输入都只可能取消匹配，
+        # 一律阻断，等待游戏端自行进入战斗。
+        if 结果 is not None and getattr(结果, "页面", "") == "搜索对手中":
+            return True
         # 城墙任务已经通过 OCR 定位到二次确认按钮时，确认点击拥有更高
         # 优先级。升级确认页的几何特征与普通“升级详情”面板相同；如果
         # 先进入下面的通用关闭器，它会点击右上角 X，随后原确认坐标必然
@@ -3999,6 +4006,9 @@ class 任务上下文:
                 self.停止事件.wait(timeout=等待秒数)
 
     def 点击(self,x,y,延时=None,是否精确点击=False):
+        停止事件 = getattr(self, "停止事件", None)
+        if 停止事件 is not None and 停止事件.is_set():
+            return False
         if getattr(self, "_正在开启奖励宝箱", False):
             return False
         # 所有任务共用这一入口；危险页面一旦被识别，ESC 并确认主页，
@@ -4307,14 +4317,17 @@ class 基础任务(ABC):
         """统一异常处理 - 委托给上下文处理"""
         self.上下文.处理异常(self.__class__.__name__, 异常, 是否重启游戏, 是否重启机器人)
 
-    def 是否出现图片(self, 模板路径: str, 区域: Tuple[int, int, int, int] = (0, 0, 800, 600), 相似度阈值=0.9) -> Tuple[
-        bool, Tuple[int, int]]:
+    def 是否出现图片(self, 模板路径: str, 区域: Tuple[int, int, int, int] = (0, 0, 800, 600), 相似度阈值=0.9,
+                     几何多尺度: bool = False) -> Tuple[bool, Tuple[int, int]]:
         """
         当前机器人操作的模拟器是否出现指定图片，并返回坐标。
 
         参数:
             模板路径: 模板图路径（可为多个路径用 | 分隔）
             区域: 指定识别区域，格式为 (x1, y1, x2, y2)
+            几何多尺度: 原尺度未达阈值时，再按设备几何推导的 (sx, sy)
+                尺度重试（阈值不变）。800×600 参考尺寸下没有候选尺度，
+                行为与旧版完全相同。
 
         返回:
             是否匹配, (x, y) 坐标
@@ -4322,6 +4335,15 @@ class 基础任务(ABC):
         x1, y1, x2, y2 = 区域
         屏幕图像 = self.上下文.op.获取屏幕图像cv(x1, y1, x2, y2)
         是否匹配, (x, y), _ = self.模板识别.执行匹配(屏幕图像, 模板路径, 相似度阈值)
+        if not 是否匹配 and 几何多尺度:
+            多尺度 = getattr(self.模板识别, "执行多尺度最佳匹配", None)
+            if callable(多尺度):
+                try:
+                    分数, (多x, 多y), _, _ = 多尺度(屏幕图像, 模板路径)
+                    if float(分数) >= float(相似度阈值):
+                        是否匹配, x, y = True, int(多x), int(多y)
+                except Exception:
+                    pass
 
         # 注意坐标需要加上区域偏移量
         if 是否匹配:
