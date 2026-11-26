@@ -284,14 +284,14 @@ class 预设窗口(QDialog):
         self.列表.setFixedWidth(220)
         self.列表.currentItemChanged.connect(lambda *_: self._预览())
         左.addWidget(self.列表, 1)
-        保存当前 = QPushButton("保存当前为方案…")
-        保存当前.clicked.connect(self._保存当前)
-        导入 = QPushButton("导入 JSON…")
-        导入.clicked.connect(self._导入)
-        导出 = QPushButton("导出 JSON…")
-        导出.clicked.connect(self._导出)
-        左.addWidget(保存当前)
-        左.addLayout(横排(导入, 导出, 间距=6))
+        self.保存当前按钮 = QPushButton("保存当前为方案…")
+        self.保存当前按钮.clicked.connect(self._保存当前)
+        self.导入按钮 = QPushButton("导入 JSON…")
+        self.导入按钮.clicked.connect(self._导入)
+        self.导出按钮 = QPushButton("导出 JSON…")
+        self.导出按钮.clicked.connect(self._导出)
+        左.addWidget(self.保存当前按钮)
+        左.addLayout(横排(self.导入按钮, self.导出按钮, 间距=6))
         横.addLayout(左)
 
         右 = QVBoxLayout()
@@ -321,6 +321,7 @@ class 预设窗口(QDialog):
         self._可应用 = False
         self._可撤销 = False
         self._已关闭 = False
+        self._代次 = 0
         self.载入()
 
     # ------------------------------------------------------------ 后台
@@ -328,16 +329,37 @@ class 预设窗口(QDialog):
     def 忙(self) -> bool:
         return self._进行中 > 0
 
-    def _后台(self, 函数, 成功, 失败=None):
-        """数据库/文件读写放到线程池，结果排队回到界面线程；窗口关掉后结果丢弃。"""
+    @property
+    def 代次(self) -> int:
+        return self._代次
+
+    def 开始会话(self):
+        """每次打开窗口调用：代次递增，之前会话的迟到回调全部作废，然后重新载入。"""
+        self._代次 += 1
+        self._已关闭 = False
+        self.载入()
+
+    def _结束会话(self):
+        self._已关闭 = True
+        self._代次 += 1
+
+    def _后台(self, 函数, 成功, 失败=None, 总是=None):
+        """数据库/文件读写放到线程池，结果排队回到界面线程。
+
+        ``成功``/``失败`` 只在提交时的代次仍有效（窗口没关、没重开）时执行；
+        ``总是`` 在成功后无论代次都执行，用于已经写进数据库、必须通知主界面的结果。
+        """
+        代次 = self._代次
         self._进行中 += 1
         self._刷新按钮()
 
-        def 包装(回调):
+        def 包装(回调, 附加=None):
             def 执行(值):
                 self._进行中 = max(0, self._进行中 - 1)
-                if self._已关闭:
-                    return
+                if 附加 is not None:
+                    附加(值)
+                if self._已关闭 or 代次 != self._代次:
+                    return  # 过期回调：窗口已关闭或已重新打开
                 try:
                     if 回调 is not None:
                         回调(值)
@@ -347,7 +369,7 @@ class 预设窗口(QDialog):
             return 执行
 
         默认失败 = lambda 信息: self.状态.setText(f"操作失败：{信息}")
-        后台执行(函数, 包装(成功), 包装(失败 or 默认失败))
+        后台执行(函数, 包装(成功, 总是), 包装(失败 or 默认失败))
 
     def 等待空闲(self, 超时毫秒: int = 5000) -> bool:
         """处理事件直到后台读写全部完成（测试用）。"""
@@ -366,22 +388,19 @@ class 预设窗口(QDialog):
         空闲 = not self.忙
         self.应用按钮.setEnabled(空闲 and self._可应用)
         self.撤销按钮.setEnabled(空闲 and self._可撤销)
+        for 按钮 in (self.保存当前按钮, self.导入按钮, self.导出按钮):
+            按钮.setEnabled(空闲)
 
     def done(self, 结果: int) -> None:
-        self._已关闭 = True
+        self._结束会话()
         super().done(结果)
 
     def closeEvent(self, 事件) -> None:
-        self._已关闭 = True
+        self._结束会话()
         super().closeEvent(事件)
-
-    def showEvent(self, 事件) -> None:
-        self._已关闭 = False
-        super().showEvent(事件)
 
     # ------------------------------------------------------------ 列表
     def 载入(self, 选中: str | None = None):
-        self._已关闭 = False
         当前 = 选中 or self.当前方案名
         self._后台(self.服务.获取预设列表, lambda 列表: self._填充列表(列表, 当前))
 
@@ -449,10 +468,10 @@ class 预设窗口(QDialog):
 
         def 完成(结果):
             self.状态.setText(f"已切换到「{名称}」，修改 {len(结果.变更项)} 项；可随时撤销")
-            self._应用后(f"切换配置方案：{名称}（{len(结果.变更项)} 项）")
             self._预览()
 
-        self._后台(lambda: self.服务.应用预设(self._机器人ID, 名称), 完成)
+        self._后台(lambda: self.服务.应用预设(self._机器人ID, 名称), 完成,
+                 总是=lambda 结果: self._应用后(f"切换配置方案：{名称}（{len(结果.变更项)} 项）"))
 
     def _撤销(self):
         if self.忙:
@@ -461,13 +480,17 @@ class 预设窗口(QDialog):
 
         def 完成(结果):
             self.状态.setText(结果.说明)
-            if 结果.成功:
-                self._应用后(结果.说明)
             self._预览()
 
-        self._后台(lambda: self.服务.回退预设(self._机器人ID), 完成)
+        def 通知主界面(结果):
+            if 结果.成功:
+                self._应用后(结果.说明)
+
+        self._后台(lambda: self.服务.回退预设(self._机器人ID), 完成, 总是=通知主界面)
 
     def _保存当前(self):
+        if self.忙:
+            return
         名称, 确定 = QInputDialog.getText(self, "保存当前为方案", "方案名称：")
         名称 = (名称 or "").strip()
         if not 确定 or not 名称:
@@ -475,6 +498,8 @@ class 预设窗口(QDialog):
         self.保存当前为方案(名称)
 
     def 保存当前为方案(self, 名称: str):
+        if self.忙:
+            return
         self._应用前()
 
         def 完成(_方案):
@@ -485,6 +510,8 @@ class 预设窗口(QDialog):
                  lambda 信息: self.状态.setText(f"保存失败：{信息}"))
 
     def _导入(self):
+        if self.忙:
+            return
         路径, _ = QFileDialog.getOpenFileName(self, "导入配置方案", "", "JSON (*.json)")
         if not 路径:
             return
@@ -492,6 +519,8 @@ class 预设窗口(QDialog):
 
     def 导入文件(self, 路径: str) -> None:
         """后台读文件、解析并保存；完成后选中导入的方案等待确认。"""
+        if self.忙:
+            return
         self.状态.setText("正在导入…")
 
         def 读取():
@@ -520,6 +549,8 @@ class 预设窗口(QDialog):
         return f"{名称}（导入）" if 名称 in 内置 else 名称
 
     def _导出(self):
+        if self.忙:
+            return
         名称 = self.当前方案名
         if not 名称:
             return
@@ -528,6 +559,8 @@ class 预设窗口(QDialog):
             self.导出文件(名称, 路径)
 
     def 导出文件(self, 名称: str, 路径: str) -> None:
+        if self.忙:
+            return
         self._后台(
             lambda: self.服务.写入预设JSON文件(名称, 路径),
             lambda _: self.状态.setText(f"已导出到 {路径}"),

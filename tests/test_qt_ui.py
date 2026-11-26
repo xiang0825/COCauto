@@ -515,6 +515,7 @@ class 主窗口测试(unittest.TestCase):
             路径 = os.path.join(tempfile.mkdtemp(), "x.json")
             with open(路径, "w", encoding="utf-8") as 文件:
                 文件.write("{}")
+            方案窗._进行中 = 0  # 只验证导入本身不在界面线程读文件
             with mock.patch("builtins.open", side_effect=AssertionError("界面线程读文件")):
                 方案窗.导入文件(路径)
             self.assertEqual(方案窗.状态.text(), "正在导入…")
@@ -530,6 +531,71 @@ class 主窗口测试(unittest.TestCase):
         self.assertTrue(方案窗.等待空闲())
         self.assertGreater(方案窗.列表.count(), 0)
         方案窗.close()
+
+    def _捕获后台(self):
+        任务 = []
+        return mock.patch("界面.方案A部件.后台执行",
+                          side_effect=lambda 函数, 成功, 失败: 任务.append((函数, 成功, 失败))), 任务
+
+    def test_配置方案忙时所有操作都禁用(self):
+        补丁, 任务 = self._捕获后台()
+        with 补丁:
+            方案窗 = self.窗口.打开方案()
+            self.assertTrue(方案窗.忙)
+            for 按钮 in (方案窗.应用按钮, 方案窗.撤销按钮, 方案窗.保存当前按钮, 方案窗.导入按钮, 方案窗.导出按钮):
+                self.assertFalse(按钮.isEnabled(), 按钮.text())
+            数量 = len(任务)
+            方案窗.保存当前为方案("新方案")
+            方案窗.导入文件(os.path.join(tempfile.mkdtemp(), "a.json"))
+            方案窗.导出文件("隐哥冲黑油", os.path.join(tempfile.mkdtemp(), "b.json"))
+            方案窗._应用()
+            方案窗._撤销()
+            self.assertEqual(len(任务), 数量)
+            # 载入（及随后的差异预览）完成后恢复可用
+            while 任务:
+                函数, 成功, _ = 任务.pop(0)
+                成功(函数())
+        self.assertFalse(方案窗.忙)
+        for 按钮 in (方案窗.保存当前按钮, 方案窗.导入按钮, 方案窗.导出按钮):
+            self.assertTrue(按钮.isEnabled(), 按钮.text())
+        方案窗.close()
+
+    def test_配置方案关闭后马上重开旧回调不更新新窗口(self):
+        from 应用.预设服务 import 方案预设
+
+        补丁, 任务 = self._捕获后台()
+        with 补丁:
+            方案窗 = self.窗口.打开方案()
+            旧载入 = 任务[-1]
+            方案窗.close()
+            self.assertIs(self.窗口.打开方案(), 方案窗)
+            新载入 = 任务[-1]
+            self.assertIsNot(新载入, 旧载入)
+            旧列表 = [方案预设(名称="旧会话的方案", 说明="", 参数={"战利品优先级": "黑水"}, 内置=False)]
+            旧载入[1](旧列表)  # 上一次打开的迟到结果
+            self.assertEqual(方案窗.列表.count(), 0)
+            新载入[1](新载入[0]())
+            名称 = [方案窗.列表.item(行).data(Qt.UserRole) for 行 in range(方案窗.列表.count())]
+            self.assertNotIn("旧会话的方案", 名称)
+            self.assertIn("隐哥冲黑油", 名称)
+        方案窗.close()
+
+    def test_关闭窗口后应用结果仍通知主界面(self):
+        方案窗 = self.窗口.打开方案()
+        方案窗.等待空闲()
+        方案窗.列表.setCurrentRow(0)
+        方案窗.等待空闲()
+        while 方案窗.当前方案名 != "隐哥冲黑油":
+            方案窗.列表.setCurrentRow(方案窗.列表.currentRow() + 1)
+            方案窗.等待空闲()
+        补丁, 任务 = self._捕获后台()
+        with 补丁:
+            方案窗._应用()
+            方案窗.close()
+            函数, 成功, _ = 任务[-1]
+            成功(函数())
+        self.assertEqual(self.运行页.计划.设置.战利品优先级, "黑水")
+        self.assertNotIn("已切换", 方案窗.状态.text())
 
     def test_常规页可设置内存保护阈值(self):
         设置窗 = self._打开高级页("adv_general")

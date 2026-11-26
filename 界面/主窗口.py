@@ -309,7 +309,7 @@ class 主窗口(QMainWindow):
             )
         else:
             self._保存未提交设置()
-            self._方案窗.载入()
+            self._方案窗.开始会话()
         self._方案窗.show()
         self._方案窗.raise_()
         self._方案窗.activateWindow()
