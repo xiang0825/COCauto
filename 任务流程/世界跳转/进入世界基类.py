@@ -412,14 +412,17 @@ class 进入世界任务基类(基础任务):
             最高分数 = 0.0
             for 候选区域, 候选左, 候选上 in 区域列表:
                 try:
-                    分数, 中心, _ = 最佳匹配(候选区域, self.船模板路径)
+                    分数, 中心, 命中路径 = 最佳匹配(候选区域, self.船模板路径)
                     分数 = float(分数)
                     最高分数 = max(最高分数, 分数)
                     if 分数 >= self.世界入口最低分数:
                         中心x = int(中心[0]) + 候选左
                         中心y = int(中心[1]) + 候选上
                         点击x, 点击y = self._固定模板点击坐标(中心x, 中心y)
-                        if not self._入口候选安全(屏幕图像, 中心x, 中心y, 点击x, 点击y):
+                        命中框 = self._船模板命中框(中心x, 中心y, 命中路径)
+                        if not self._入口候选安全(
+                            屏幕图像, 中心x, 中心y, 点击x, 点击y, 命中框
+                        ):
                             continue
                         return True, (点击x, 点击y), 分数
                 except Exception:
@@ -441,7 +444,9 @@ class 进入世界任务基类(基础任务):
                 中心x = int(中心[0]) + 左
                 中心y = int(中心[1]) + 上
                 点击x, 点击y = self._固定模板点击坐标(中心x, 中心y)
-                if self._入口候选安全(屏幕图像, 中心x, 中心y, 点击x, 点击y):
+                # 旧接口不返回命中模板，按模板集中最大的尺寸保守估计命中框。
+                命中框 = self._船模板命中框(中心x, 中心y, None)
+                if self._入口候选安全(屏幕图像, 中心x, 中心y, 点击x, 点击y, 命中框):
                     return True, (点击x, 点击y), 1.0
         except Exception:
             pass
@@ -463,8 +468,54 @@ class 进入世界任务基类(基础任务):
             return False
         return True
 
-    def _入口候选安全(self, 屏幕图像, 中心x, 中心y, 点击x, 点击y) -> bool:
+    # 无法加载命中模板时使用的保守命中框尺寸（现有船模板最大 24×22）。
+    船模板默认命中框尺寸 = (24, 24)
+
+    def _船模板命中框(self, 中心x: int, 中心y: int, 模板路径=None):
+        """返回模板命中框 (左, 上, 右, 下)。
+
+        已知命中模板时用其实际尺寸；未知时取船模板集中最大尺寸，且不小于
+        默认尺寸，宁可多拒绝也不漏判与 HUD 的重叠。
+        """
+        加载 = getattr(getattr(self, "模板识别", None), "_安全加载模板", None)
+        if 模板路径:
+            路径列表 = [模板路径]
+        else:
+            原路径 = getattr(self, "船模板路径", "") or ""
+            路径列表 = 原路径.split("|") if isinstance(原路径, str) else list(原路径)
+        宽, 高 = 0, 0
+        for 路径 in 路径列表:
+            try:
+                模板 = 加载(str(路径).strip()) if callable(加载) else None
+                模板高, 模板宽 = (int(v) for v in 模板.shape[:2])
+            except Exception:
+                continue
+            宽, 高 = max(宽, 模板宽), max(高, 模板高)
+        if not 模板路径 or 宽 <= 0 or 高 <= 0:
+            宽 = max(宽, self.船模板默认命中框尺寸[0])
+            高 = max(高, self.船模板默认命中框尺寸[1])
+        左 = int(中心x) - 宽 // 2
+        上 = int(中心y) - 高 // 2
+        return 左, 上, 左 + 宽, 上 + 高
+
+    @staticmethod
+    def _命中框压HUD(命中框) -> bool:
+        """所有飞艇命中路径共用：命中框与任一主页 HUD 排除区重叠即为 True。"""
+        from 模块.画面几何 import 区域与主页HUD重叠
+
+        if 命中框 is None:
+            return True
+        return 区域与主页HUD重叠(命中框)
+
+    def _入口候选安全(self, 屏幕图像, 中心x, 中心y, 点击x, 点击y, 命中框=None) -> bool:
         """固定模板命中必须避开 HUD；回主世界飞艇还需红白船体颜色证据。"""
+        if 命中框 is None:
+            命中框 = self._船模板命中框(中心x, 中心y, None)
+        if self._命中框压HUD(命中框):
+            self._记录入口拒绝(
+                f"入口候选命中框{tuple(int(v) for v in 命中框)}与固定 HUD 区域重叠，拒绝点击"
+            )
+            return False
         if not self._入口点击点不在HUD(点击x, 点击y, (中心x, 中心y)):
             self._记录入口拒绝(f"入口候选{点击x},{点击y}落在固定 HUD 区域，拒绝点击")
             return False
@@ -556,7 +607,7 @@ class 进入世界任务基类(基础任务):
                 屏幕图像, "夜世界圣水车_16比9.bmp", 0.78
             )
             分数 = float(分数)
-            if not 命中 or 命中框 is None or 区域与主页HUD重叠(命中框):
+            if not 命中 or self._命中框压HUD(命中框):
                 return False, (0, 0), 0.0
             # 偏移随 UI/地图缩放与模板尺度同比例变化。
             飞艇x = int(round(int(中心[0]) + self.圣水车到飞艇偏移[0] * float(sx)))
@@ -662,7 +713,7 @@ class 进入世界任务基类(基础任务):
                         左 + int(位置[0]) + 模板宽度, 上 + int(位置[1]) + 模板高度,
                     )
                     # 命中框与任一 HUD 排除区重叠即拒绝，不只看点击点。
-                    if 区域与主页HUD重叠(命中框):
+                    if self._命中框压HUD(命中框):
                         continue
                     if 目标夜世界:
                         # 左下任务/活动按钮在同一海岸带会产生相近的红色

@@ -612,3 +612,92 @@ class 主世界云层回放测试(unittest.TestCase):
                 for 图 in (原图, 逻辑画布(原图)):
                     self.assertEqual(识别器._搜索对手页分数(图), 0.0)
                     self.assertNotEqual(识别器.识别(图).页面, "搜索对手中")
+
+
+class 固定模板飞艇命中框测试(unittest.TestCase):
+    """复审：固定模板与兼容分支也必须做命中框与 HUD 重叠检查。"""
+
+    # 中心 (108,340) 与点击点都在 HUD 外，但 24×24 命中框左缘伸进左侧 HUD。
+    中心 = (108, 340)
+
+    def _任务(self, 模板尺寸=(24, 24)):
+        任务 = object.__new__(到主世界任务)
+        任务.上下文 = SimpleNamespace(置脚本状态=Mock())
+        任务.船模板路径 = "船.bmp"
+        任务.世界入口搜索区域 = (80, 0, 760, 590)
+        任务.世界入口备用搜索区域 = None
+        任务._多尺度入口匹配 = Mock(return_value=(False, (0, 0), 0.0))
+        任务._圣水车反推入口 = Mock(return_value=(False, (0, 0), 0.0))
+        任务._固定模板点击坐标 = lambda x, y: (x + 8, y + 20)
+        return 任务
+
+    def test_前提_中心与点击点不在HUD但命中框重叠(self):
+        x, y = self.中心
+        self.assertFalse(画面几何.点在主页HUD内(x, y))
+        self.assertFalse(画面几何.点在主页HUD内(x + 8, y + 20))
+        self.assertTrue(画面几何.区域与主页HUD重叠((x - 12, y - 12, x + 12, y + 12)))
+
+    def test_固定模板路径命中框压HUD即拒绝(self):
+        任务 = self._任务()
+        模板 = np.zeros((24, 24, 3), np.uint8)
+        任务.模板识别 = SimpleNamespace(
+            执行最佳匹配=Mock(return_value=(0.95, (self.中心[0] - 80, self.中心[1]), "船.bmp")),
+            _安全加载模板=Mock(return_value=模板),
+        )
+        命中, 坐标, _ = 任务.查找世界入口(np.zeros((600, 800, 3), np.uint8))
+        self.assertFalse(命中)
+        self.assertEqual(坐标, (0, 0))
+        self.assertTrue(any("命中框" in c.args[0] for c in 任务.上下文.置脚本状态.call_args_list))
+
+    def test_固定模板路径对照_地图中部允许(self):
+        任务 = self._任务()
+        模板 = np.zeros((24, 24, 3), np.uint8)
+        任务.模板识别 = SimpleNamespace(
+            执行最佳匹配=Mock(return_value=(0.95, (400 - 80, 300), "船.bmp")),
+            _安全加载模板=Mock(return_value=模板),
+        )
+        命中, 坐标, _ = 任务.查找世界入口(np.zeros((600, 800, 3), np.uint8))
+        self.assertTrue(命中)
+        self.assertEqual(坐标, (408, 320))
+
+    def test_兼容分支命中框压HUD即拒绝(self):
+        任务 = self._任务()
+        # 旧识图引擎：只有 执行匹配，没有 执行最佳匹配，也不返回模板路径。
+        旧引擎 = SimpleNamespace(
+            执行匹配=Mock(return_value=(True, (self.中心[0] - 80, self.中心[1]), None)),
+        )
+        任务.模板识别 = 旧引擎
+        命中, 坐标, _ = 任务.查找世界入口(np.zeros((600, 800, 3), np.uint8))
+        self.assertFalse(命中)
+        self.assertEqual(坐标, (0, 0))
+
+    def test_兼容分支对照_地图中部允许(self):
+        任务 = self._任务()
+        任务.模板识别 = SimpleNamespace(
+            执行匹配=Mock(return_value=(True, (400 - 80, 300), None)),
+        )
+        命中, 坐标, _ = 任务.查找世界入口(np.zeros((600, 800, 3), np.uint8))
+        self.assertTrue(命中)
+        self.assertEqual(坐标, (408, 320))
+
+    def test_未知模板时用最大模板尺寸保守估计(self):
+        任务 = self._任务()
+        任务.船模板路径 = "小.bmp|大.bmp"
+        尺寸 = {"小.bmp": (8, 14), "大.bmp": (30, 40)}
+        任务.模板识别 = SimpleNamespace(
+            _安全加载模板=lambda 路径: np.zeros((*尺寸[路径], 3), np.uint8)
+        )
+        self.assertEqual(任务._船模板命中框(400, 300, None), (380, 285, 420, 315))
+        self.assertEqual(任务._船模板命中框(400, 300, "小.bmp"), (393, 296, 407, 304))
+
+    def test_四条命中路径共用同一重叠检查(self):
+        import inspect
+        from 任务流程.世界跳转.进入世界基类 import 进入世界任务基类 as 基类
+
+        源码 = {
+            名: inspect.getsource(getattr(基类, 名))
+            for 名 in ("查找世界入口", "_多尺度入口匹配", "_圣水车反推入口", "_入口候选安全")
+        }
+        self.assertIn("_入口候选安全", 源码["查找世界入口"])
+        for 名 in ("_多尺度入口匹配", "_圣水车反推入口", "_入口候选安全"):
+            self.assertIn("_命中框压HUD", 源码[名], 名)

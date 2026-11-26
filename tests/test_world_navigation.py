@@ -229,18 +229,22 @@ class 世界跳转测试(unittest.TestCase):
         区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
         self.assertEqual(区域.shape[:2], (240, 300))
 
-    def test_回主世界顶部飞艇使用顶部可点击坐标(self):
+    def test_回主世界顶部飞艇命中框压到资源栏时拒绝点击(self):
+        # 顶边飞艇帆的模板命中框会伸入右上资源栏排除区 (y≥14)。审查要求
+        # 任何命中框与 HUD 重叠都拒绝，宁可不点，交给地图拖动把飞艇带出。
         任务 = object.__new__(到主世界任务)
         任务.状态文本 = "主世界"
         任务.船模板路径 = "船.bmp"
+        任务.上下文 = SimpleNamespace(置脚本状态=Mock())
         任务.模板识别 = Mock()
         任务.模板识别.执行最佳匹配.return_value = (0.90, (594, 13), "船.bmp")
+        任务.模板识别.执行原尺度优先匹配.return_value = (False, 0.0, (0, 0), None, (1.0, 1.0), None)
+        任务.模板识别._安全加载模板 = Mock(return_value=np.zeros((15, 18, 3), np.uint8))
 
-        命中, 坐标, 分数 = 任务.查找世界入口(_画红白飞艇(674, 13))
+        命中, 坐标, _ = 任务.查找世界入口(_画红白飞艇(674, 13))
 
-        self.assertTrue(命中)
-        self.assertEqual(坐标, (674, 2))
-        self.assertAlmostEqual(分数, 0.90)
+        self.assertFalse(命中)
+        self.assertEqual(坐标, (0, 0))
         区域 = 任务.模板识别.执行最佳匹配.call_args.args[0]
         self.assertEqual(区域.shape[:2], (590, 680))
 
