@@ -517,6 +517,40 @@ class 点击前最后一刻停止测试(unittest.TestCase):
         设备.触控.assert_not_called()
         self.assertIs(鼠标._安全点击检查回调, 原回调)
 
+    def test_与鼠标最底层停止拦截叠加(self):
+        # main 在 鼠标控制器 最底层加了 _停止事件 拦截；与日常点击的临时回调共用同一个
+        # 机器人停止事件，两层都在时：中途停止 → 零触控，回调还原，未停止时正常点击。
+        import threading
+
+        from 核心.鼠标操作 import 鼠标控制器
+
+        设备 = SimpleNamespace(触控=Mock(return_value=True), 滑动=Mock())
+        鼠标 = 鼠标控制器(设备)
+        停止 = threading.Event()
+        鼠标._停止事件 = 停止
+        原回调 = Mock(return_value=False)
+        鼠标._安全点击检查回调 = 原回调
+        任务, ctx, _ = 构造()
+        ctx.停止事件 = 停止
+        ctx.鼠标 = 鼠标
+
+        def 框架点击(x, y, **k):
+            鼠标.移动到(x, y)
+            return 鼠标.左键点击()
+
+        ctx.点击 = Mock(side_effect=框架点击)
+        self.assertTrue(任务.点击(100, 560, "下兵"))
+        self.assertEqual(设备.触控.call_count, 1)
+
+        原回调.side_effect = lambda: (停止.set(), False)[1]
+        self.assertFalse(任务.点击(100, 560, "下兵"))
+        self.assertEqual(设备.触控.call_count, 1)
+        self.assertIs(鼠标._安全点击检查回调, 原回调)
+
+        # 即使绕过日常这一层直接点，最底层也拦住。
+        self.assertFalse(鼠标.左键点击())
+        self.assertEqual(设备.触控.call_count, 1)
+
     def test_多线程并发日常点击后回调正确还原(self):
         import threading
 
