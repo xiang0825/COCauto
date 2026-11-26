@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +19,9 @@ from 工具包.识别参数 import 资源候选目录
 
 资源子目录 = Path("资源") / "日常"
 记录状态类型 = "日常任务记录"
+
+# 日常点击临时替换鼠标安全回调时使用；可重入，保证“换→点→还原”整段串行。
+_鼠标回调替换锁 = threading.RLock()
 
 # 任何日常任务都绝不点击含这些字的按钮：花宝石、购买、跳过、重置、加速。
 危险词 = (
@@ -351,25 +355,34 @@ class 日常面板任务基类:
         # 最后一刻再判一次，停止即阻断。点完立即还原原回调。
         鼠标 = getattr(self.上下文, "鼠标", None)
         可挂钩 = 鼠标 is not None and hasattr(鼠标, "_安全点击检查回调")
-        原回调 = getattr(鼠标, "_安全点击检查回调", None) if 可挂钩 else None
+        原回调 = None  # 必须在锁内读取，否则可能读到别的线程临时换上的包装
         最后一刻停止 = []
 
         def 停止或原回调() -> bool:
             if self.已停止():
                 最后一刻停止.append(True)
                 return True
-            return bool(原回调()) if callable(原回调) else False
-
-        if 可挂钩:
-            鼠标._安全点击检查回调 = 停止或原回调
-        try:
+            阻断 = bool(原回调()) if callable(原回调) else False
+            # 原回调（页面识别）可能阻塞较久，期间到达的停止信号也要拦住。
             if self.已停止():
-                self.日志(f"{说明}：已收到停止信号，不再点击")
-                return False
-            结果 = self.上下文.点击(int(x), int(y), 是否精确点击=True)
-        finally:
+                最后一刻停止.append(True)
+                return True
+            return 阻断
+
+        # 换回调→点击→还原 整段串行：同一进程里若有别的线程也走日常点击，
+        # 不会互相把对方的原回调还原错（可重入，嵌套调用安全）。
+        with _鼠标回调替换锁:
             if 可挂钩:
-                鼠标._安全点击检查回调 = 原回调
+                原回调 = 鼠标._安全点击检查回调
+                鼠标._安全点击检查回调 = 停止或原回调
+            try:
+                if self.已停止():
+                    self.日志(f"{说明}：已收到停止信号，不再点击")
+                    return False
+                结果 = self.上下文.点击(int(x), int(y), 是否精确点击=True)
+            finally:
+                if 可挂钩:
+                    鼠标._安全点击检查回调 = 原回调
         if 最后一刻停止 or (结果 is False and self.已停止()):
             self.日志(f"{说明}：发送触控前收到停止信号，已阻断")
             return False

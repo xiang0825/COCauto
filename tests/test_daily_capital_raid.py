@@ -493,6 +493,64 @@ class 点击前最后一刻停止测试(unittest.TestCase):
         self.assertIs(鼠标._安全点击检查回调, 原回调)
         self.assertTrue(any("停止信号" in str(c.args[0]) for c in ctx.置脚本状态.call_args_list))
 
+    def test_原回调执行中途停止_设备零触控(self):
+        # 原回调（页面识别）放行了但执行期间停止信号到达 → 回调返回后再判一次，仍不点。
+        from 核心.鼠标操作 import 鼠标控制器
+
+        设备 = SimpleNamespace(触控=Mock(return_value=True), 滑动=Mock())
+        鼠标 = 鼠标控制器(设备)
+        任务, ctx, _ = 构造()
+
+        def 原回调():
+            ctx.停止事件 = SimpleNamespace(is_set=lambda: True)
+            return False  # 识别结果本身放行
+
+        鼠标._安全点击检查回调 = 原回调
+        ctx.鼠标 = 鼠标
+
+        def 框架点击(x, y, **k):
+            鼠标.移动到(x, y)
+            return 鼠标.左键点击()
+
+        ctx.点击 = Mock(side_effect=框架点击)
+        self.assertFalse(任务.点击(100, 560, "下兵"))
+        设备.触控.assert_not_called()
+        self.assertIs(鼠标._安全点击检查回调, 原回调)
+
+    def test_多线程并发日常点击后回调正确还原(self):
+        import threading
+
+        from 核心.鼠标操作 import 鼠标控制器
+
+        设备 = SimpleNamespace(触控=Mock(return_value=True), 滑动=Mock())
+        鼠标 = 鼠标控制器(设备)
+        原回调 = Mock(return_value=False)
+        鼠标._安全点击检查回调 = 原回调
+        任务列表 = []
+        for _ in range(4):
+            任务, ctx, _ = 构造()
+            ctx.鼠标 = 鼠标
+
+            def 框架点击(x, y, **k):
+                time.sleep(0.002)  # 让线程交错
+                鼠标.移动到(x, y)
+                return 鼠标.左键点击()
+
+            ctx.点击 = Mock(side_effect=框架点击)
+            任务列表.append(任务)
+
+        def 跑(任务):
+            for _ in range(10):
+                任务.点击(100, 560, "下兵")
+
+        线程 = [threading.Thread(target=跑, args=(t,)) for t in 任务列表]
+        for t in 线程:
+            t.start()
+        for t in 线程:
+            t.join(10)
+        self.assertIs(鼠标._安全点击检查回调, 原回调)
+        self.assertEqual(设备.触控.call_count, 40)
+
     def test_未停止时原安全回调仍生效且正常触控(self):
         from 核心.鼠标操作 import 鼠标控制器
 
