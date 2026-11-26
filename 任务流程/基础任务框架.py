@@ -4058,6 +4058,11 @@ class 任务上下文:
         if self.鼠标 is None:
             raise RuntimeError("鼠标控制器未初始化")
 
+        # 上面的页面复核、日志回调都可能耗时；期间收到停止就不再发送这次点击。
+        停止事件 = getattr(self, "停止事件", None)
+        if 停止事件 is not None and 停止事件.is_set():
+            return False
+
         self.鼠标.移动到(x, y)
         点击成功 = self.鼠标.左键点击()
         if 点击成功 is False:

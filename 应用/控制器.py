@@ -24,6 +24,28 @@ from 应用.任务计划 import 已启用任务名称
 默认实例ID = "robot_1"
 
 
+class 日志清理中错误(RuntimeError):
+    """停止后的日志导出/清空正在进行，暂不允许启动新会话。"""
+
+
+@dataclass(frozen=True)
+class 日志清理结果:
+    """停止后清空日志的结果。只有 ``已清空`` 时界面才能清空日志显示。
+
+    状态：已清空 / 失败（导出或归档出错，数据库日志保留）/ 跳过（有机器人在运行或
+    清理期间被重新启动）/ 线程未退出（任务线程超时仍存活，线程退出后再清）。
+    """
+
+    状态: str
+    条数: int = 0
+    截止: float = 0.0
+    原因: str = ""
+
+    @property
+    def 成功(self) -> bool:
+        return self.状态 == "已清空"
+
+
 def 选择主实例ID(数据库) -> str:
     """从已有配置中选出要控制的那一份；没有配置时返回默认 ID。
 
@@ -105,6 +127,12 @@ class 应用控制器:
         self._概况缓存: tuple[float, 今日概况] | None = None
         self._上次状态 = 状态已停止
         self._日志清理中 = False
+        # 启动与“停止后清空日志”的同步：清理的最后检查+导出+删除在锁内完成，
+        # 启动也要拿这把锁；启动代数变化说明清理等待期间又开始了，清理放弃。
+        self._清理锁 = threading.Lock()
+        self._启动代数 = 0
+        self._清理代数 = 0
+        self._待清理 = False
 
     # ---------------------------------------------------------- 初始化
     def 准备(self) -> str:
@@ -171,8 +199,15 @@ class 应用控制器:
     def 启动(self) -> None:
         if self._实例 is None:
             raise RuntimeError("控制台尚未初始化完成")
-        self.监控中心.启动机器人(self.实例ID)
-        self._开始时间 = time.time()
+        if not self._清理锁.acquire(blocking=False):
+            raise 日志清理中错误("正在导出并清空上次的运行日志，请几秒后再开始")
+        try:
+            self._启动代数 += 1
+            self._待清理 = False
+            self.监控中心.启动机器人(self.实例ID)
+            self._开始时间 = time.time()
+        finally:
+            self._清理锁.release()
 
     def 暂停(self) -> None:
         if self._实例 is not None:
@@ -211,10 +246,31 @@ class 应用控制器:
         """
         状态 = self.状态
         上次, self._上次状态 = self._上次状态, 状态
-        if 上次 in (状态运行中, 状态暂停中) and 状态 == 状态已停止 and not self._日志清理中:
+        if 状态 != 状态已停止 or self._日志清理中:
+            return False
+        刚停止 = 上次 in (状态运行中, 状态暂停中)
+        # 上次因线程超时未退出而没清：线程真正退出后再触发一次。
+        补清 = self._待清理 and not self._任务线程存活()
+        if 刚停止 or 补清:
             self._日志清理中 = True
+            self._待清理 = False
+            self._清理代数 = self._启动代数
             return True
         return False
+
+    def _任务线程存活(self) -> bool:
+        主线程 = getattr(self._实例, "主线程", None)
+        try:
+            return bool(主线程 is not None and 主线程.is_alive())
+        except Exception:
+            return False
+
+    def _记录控制器日志(self, 文本: str) -> None:
+        print(f"[控制器] {文本}")
+        try:
+            self.数据库.记录日志(self.实例ID, 文本, time.time() + 60)
+        except Exception:
+            pass
 
     def _有机器人在运行(self) -> bool:
         for 机器人 in list(getattr(self.监控中心, "机器人池", {}).values()):
@@ -222,30 +278,43 @@ class 应用控制器:
                 return True
         return False
 
-    def 停止后清空日志(self, 睡眠=time.sleep) -> tuple[int, float] | None:
-        """后台线程执行：等任务线程退出后导出备份（只留上一份）并清空任务日志。
+    def 停止后清空日志(self, 睡眠=time.sleep) -> 日志清理结果:
+        """后台线程执行：确认任务线程已退出后导出备份（只留上一份）并清空任务日志。
 
-        返回 ``(导出条数, 清空截止时间戳)``；有机器人仍在运行或刚被重新启动时
-        返回 None，什么都不删。只动 任务日志 表，运行时状态等其它表不碰。
+        - “已停止”只表示停止事件已置位，线程可能还在收尾：必须 join 并核验
+          ``is_alive() == False`` 才清；超时仍存活就不清、写日志，线程退出后由
+          ``检测到停止`` 补一次。
+        - 最后的运行检查、导出和删除都在清理锁内；期间点“开始”会被拒绝，
+          等待期间已经重新开始（启动代数变化）则放弃本次清理。
+        - 只动 任务日志 表（导出前先归档统计行），运行时状态等其它表不碰。
         """
         try:
-            实例 = self._实例
-            主线程 = getattr(实例, "主线程", None)
+            主线程 = getattr(self._实例, "主线程", None)
             if 主线程 is not None and 主线程 is not threading.current_thread():
                 try:
                     主线程.join(timeout=self.等待线程退出秒)
                 except RuntimeError:
                     pass
+            if self._任务线程存活():
+                self._待清理 = True
+                原因 = f"任务线程 {int(self.等待线程退出秒)} 秒内未退出，暂不清空日志，线程退出后再清"
+                self._记录控制器日志(原因)
+                return 日志清理结果("线程未退出", 原因=原因)
             # 留一点时间给停止前最后几条日志落库、异常留证读取日志摘要。
             睡眠(self.停止后清空等待秒)
-            if self._有机器人在运行():
-                print("[控制器] 有任务仍在运行，本次不清空日志")
-                return None
-            from 数据库.日志轮转 import 停止后导出并清空
+            with self._清理锁:
+                if self._启动代数 != self._清理代数:
+                    return 日志清理结果("跳过", 原因="清理等待期间已重新开始")
+                if self._有机器人在运行() or self._任务线程存活():
+                    print("[控制器] 有任务仍在运行，本次不清空日志")
+                    return 日志清理结果("跳过", 原因="有任务仍在运行")
+                from 数据库.日志轮转 import 停止后导出并清空
 
-            截止 = time.time()
-            条数 = 停止后导出并清空(getattr(self.数据库, "文件路径", 任务数据库.默认数据库路径()))
-            return 条数, 截止
+                截止 = time.time()
+                条数 = 停止后导出并清空(getattr(self.数据库, "文件路径", 任务数据库.默认数据库路径()))
+                if 条数 is None:
+                    return 日志清理结果("失败", 截止=截止, 原因="导出/归档失败，日志已保留")
+                return 日志清理结果("已清空", 条数=int(条数), 截止=截止)
         finally:
             self._日志清理中 = False
 

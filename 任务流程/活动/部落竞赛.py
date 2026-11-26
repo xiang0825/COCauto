@@ -560,6 +560,8 @@ class 部落竞赛任务(基础任务):
     def _点击(self, 点: tuple[int, int], 说明: str) -> bool:
         self._检查总超时()
         self._日志(f"点击{说明} {点}")
+        # 写日志（心跳/通知回调）期间可能刚好收到停止：发送点击前再查一次。
+        self._检查总超时()
         结果 = self.上下文.点击(int(点[0]), int(点[1]), 是否精确点击=True)
         if 结果 is False:
             self._日志(f"点击{说明}被点击护栏拒绝")
@@ -627,8 +629,8 @@ class 部落竞赛任务(基础任务):
     def 执行(self, 进攻前: bool = False) -> bool:
         设置 = self.上下文.设置
         if not getattr(设置, "是否部落竞赛接任务", False):
-            if not 进攻前:
-                self._日志("本轮跳过：设置里未开启“部落竞赛接任务”")
+            来源 = "打鱼间隙" if 进攻前 else "任务计划"
+            self._日志(f"本轮跳过（{来源}）：设置里未开启“部落竞赛接任务”")
             return True
         记录 = self._读状态()
         self._本次进攻前 = bool(进攻前)
@@ -1001,12 +1003,16 @@ class 部落竞赛任务(基础任务):
             self._延时(800)
         return self._是主世界主页()
 
+    def _卡片区(self, 扩展: int = 0) -> tuple[int, int, int, int]:
+        x1, y1, x2, y2 = self.配置.get("面板", {}).get("卡片区ROI") or (0, 0, 800, 600)
+        return (max(0, x1 - 扩展), max(0, y1 - 扩展), min(800, x2 + 扩展), min(600, y2 + 扩展))
+
     def _关闭X附近禁点(self, 图像, 点: tuple[int, int]) -> str | None:
         """红 X 附近出现宝石/购买/跳过/重置/立即等字样或宝石图标时返回原因。"""
         x, y = int(点[0]), int(点[1])
-        附近 = (x - 160, max(0, y - 40), min(800, x + 60), y + 120)
+        附近 = (max(0, x - 160), max(0, y - 40), min(800, x + 60), y + 120)
         try:
-            项列表 = self._OCR(图像)
+            项列表 = self._OCR(图像, 附近)
         except 部落竞赛超时 as 异常:
             if "OCR" not in str(异常):
                 raise
@@ -1128,16 +1134,21 @@ class 部落竞赛任务(基础任务):
         return min(命中, key=lambda 项: 项.框[1]) if 命中 else None
 
     def _识别竞赛面板(self):
+        """先用面板标题/关闭 X 模板和标题小区域 OCR 确认，确认后才整帧 OCR 一次面板内容。
+
+        内容 OCR 保留整帧：个人积分、进度、进行中、以及位置不固定的“已满分/可领奖”
+        横幅都要从同一份文字里判断；每次开面板只做这一次（实机 1~4 秒），仍受 OCR 限时保护。
+        """
         图像 = self._截图()
         面板 = self.配置.get("面板", {})
-        项列表 = self._OCR(图像)
-        if 查找关键词(项列表, 面板.get("标题关键词", ["部落竞赛"]), 面板.get("标题ROI")) is None:
-            return None
         if self._匹配模板(图像, "面板标题") is None:
             return None
         if self._匹配模板(图像, "关闭按钮") is None:
             return None
-        return {"图像": 图像, "文字": 项列表}
+        标题区 = 面板.get("标题ROI")
+        if 查找关键词(self._OCR(图像, 标题区), 面板.get("标题关键词", ["部落竞赛"]), 标题区) is None:
+            return None
+        return {"图像": 图像, "文字": self._OCR(图像)}
 
     def _处理面板(self, 面板: dict) -> str:
         配置 = self.配置
@@ -1358,7 +1369,8 @@ class 部落竞赛任务(基础任务):
         if not 详情:
             # 没有开始按钮：可能是冷却中的卡或识别不清，都不接。
             图像 = self._截图()
-            文本 = 拼接文本(区域文字(self._OCR(图像), self.配置.get("面板", {}).get("卡片区ROI", (0, 0, 800, 600))))
+            卡片区 = self._卡片区()
+            文本 = 拼接文本(区域文字(self._OCR(图像, 卡片区), 卡片区))
             候选.冷却 = True
             候选.详情超时 = True
             候选.文本 = 文本
@@ -1379,8 +1391,9 @@ class 部落竞赛任务(基础任务):
 
     def _识别详情(self):
         图像 = self._截图()
-        项列表 = self._OCR(图像)
-        卡片区 = self.配置.get("面板", {}).get("卡片区ROI", (0, 0, 800, 600))
+        卡片区 = self._卡片区()
+        # 详情框相对『开始』最多下探约 50 像素，OCR 区域在卡片区外多留一圈。
+        项列表 = self._OCR(图像, self._卡片区(扩展=60))
         开始 = 查找关键词(项列表, self.配置.get("OCR", {}).get("开始关键词", ["开始"]), 卡片区)
         if 开始 is None:
             return None
@@ -1441,7 +1454,7 @@ class 部落竞赛任务(基础任务):
                 break
             if 本页指纹 is not None:
                 上页指纹 = 本页指纹
-            位置列表 = 识别卡片位置(self._OCR(页面图像), self.配置) or [
+            位置列表 = 识别卡片位置(self._OCR(页面图像, self._卡片区()), self.配置) or [
                 tuple(位置) for 位置 in 页.get("卡片", [])
             ]
             for 位置 in 位置列表:
@@ -1568,8 +1581,8 @@ class 部落竞赛任务(基础任务):
     def _任务已开始(self, 允许弹窗: bool = True):
         """开始后确认任务已接：放弃按钮 / 0/N 进度 / 其余卡片全部变灰。"""
         图像 = self._截图()
-        项列表 = self._OCR(图像)
         卡片区 = self.配置.get("面板", {}).get("卡片区ROI")
+        项列表 = self._OCR(图像, 卡片区)
         放弃词 = self.配置.get("OCR", {}).get("已接确认关键词", ["放弃"])
         if 查找关键词(项列表, 放弃词, 卡片区):
             return True
@@ -1601,9 +1614,10 @@ class 部落竞赛任务(基础任务):
             关闭点 = self._匹配模板(图像, "关闭按钮") or self._匹配模板(图像, "活动列表关闭")
             if 关闭点 is None:
                 # 详情弹窗挡住了 X 之外没有别的情况；先点空白处，再找 X。
-                项列表 = self._OCR(图像)
+                标题区 = self.配置.get("面板", {}).get("标题ROI")
+                项列表 = self._OCR(图像, 标题区)
                 if 查找关键词(项列表, self.配置.get("面板", {}).get("标题关键词", ["部落竞赛"]),
-                         self.配置.get("面板", {}).get("标题ROI")) is not None:
+                         标题区) is not None:
                     self._关闭详情()
                     continue
                 self._日志("没有找到可确认的关闭按钮，不盲点")

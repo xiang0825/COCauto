@@ -9,6 +9,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from 应用.日志模型 import 解析任务边界, 日志聚合器
 from 数据库.日志轮转 import 停止后导出并清空, 读取最近日志, 备份文件名
@@ -186,26 +187,34 @@ class 停止后清空测试(unittest.TestCase):
 
 
 class 控制器停止清空测试(unittest.TestCase):
-    def _控制器(self, 状态序列):
+    def _控制器(self, 状态序列=None):
         from 应用.控制器 import 应用控制器
 
         机器人 = SimpleNamespace(当前状态="运行中", 主线程=None)
-        监控 = SimpleNamespace(机器人池={"robot_1": 机器人})
+        监控 = SimpleNamespace(机器人池={"robot_1": 机器人}, 启动机器人=lambda 标志: None)
         目录 = Path(tempfile.mkdtemp(prefix="ctl_clear_"))
         库 = 目录 / "任务系统.db"
         建库(库, [("robot_1", "开始任务：主世界刷资源", time.time() - 5)])
-        控制器 = 应用控制器(监控, 数据库=SimpleNamespace(文件路径=str(库)))
+        假库 = SimpleNamespace(文件路径=str(库), 记录日志=lambda *a, **k: None)
+        控制器 = 应用控制器(监控, 数据库=假库)
         return 控制器, 机器人, 库
 
+    def _日志条数(self, 库):
+        连接 = sqlite3.connect(str(库))
+        try:
+            return 连接.execute("SELECT COUNT(*) FROM 任务日志").fetchone()[0]
+        finally:
+            连接.close()
+
     def test_只在运行变停止那一次触发(self):
-        控制器, 机器人, _ = self._控制器(None)
+        控制器, 机器人, _ = self._控制器()
         self.assertFalse(控制器.检测到停止())  # 初始已停止 → 运行中
         机器人.当前状态 = "已停止"
         self.assertTrue(控制器.检测到停止())
         self.assertFalse(控制器.检测到停止())
 
     def test_暂停后停止也触发且清理中不重复(self):
-        控制器, 机器人, _ = self._控制器(None)
+        控制器, 机器人, _ = self._控制器()
         机器人.当前状态 = "暂停中"
         控制器.检测到停止()
         机器人.当前状态 = "已停止"
@@ -216,7 +225,7 @@ class 控制器停止清空测试(unittest.TestCase):
         self.assertFalse(控制器.检测到停止())  # 上一次清理还没结束
 
     def test_停止后清空日志等线程退出后导出并清空(self):
-        控制器, 机器人, 库 = self._控制器(None)
+        控制器, 机器人, 库 = self._控制器()
         退出 = threading.Event()
         机器人.主线程 = threading.Thread(target=退出.wait, args=(5,), daemon=True)
         机器人.主线程.start()
@@ -225,21 +234,122 @@ class 控制器停止清空测试(unittest.TestCase):
         threading.Timer(0.05, 退出.set).start()
         结果 = 控制器.停止后清空日志(睡眠=lambda 秒: None)
         self.assertFalse(机器人.主线程.is_alive())
-        self.assertEqual(结果[0], 1)
-        self.assertLessEqual(结果[1], time.time())
+        self.assertTrue(结果.成功)
+        self.assertEqual(结果.条数, 1)
+        self.assertLessEqual(结果.截止, time.time())
         self.assertTrue((库.parent / 备份文件名).is_file())
         self.assertFalse(控制器._日志清理中)
 
+    def test_线程超时仍存活时不清空且退出后补清(self):
+        控制器, 机器人, 库 = self._控制器()
+        控制器.等待线程退出秒 = 0.05
+        退出 = threading.Event()
+        机器人.主线程 = threading.Thread(target=退出.wait, args=(5,), daemon=True)
+        机器人.主线程.start()
+        控制器.检测到停止()  # 先看到运行中
+        机器人.当前状态 = "已停止"  # 停止事件已置位，但线程还在收尾
+        日志 = []
+        控制器.数据库.记录日志 = lambda 标志, 文本, 超时: 日志.append(文本)
+        self.assertTrue(控制器.检测到停止())
+        结果 = 控制器.停止后清空日志(睡眠=lambda 秒: None)
+        self.assertEqual(结果.状态, "线程未退出")
+        self.assertFalse(结果.成功)
+        self.assertEqual(self._日志条数(库), 1)
+        self.assertTrue(any("未退出" in 行 for 行 in 日志))
+        self.assertFalse(控制器.检测到停止())  # 线程还活着，不补清
+        退出.set()
+        机器人.主线程.join(2)
+        self.assertTrue(控制器.检测到停止())  # 线程退出后补一次
+        self.assertTrue(控制器.停止后清空日志(睡眠=lambda 秒: None).成功)
+        self.assertEqual(self._日志条数(库), 0)
+
     def test_有机器人重新运行时不清空(self):
-        控制器, 机器人, 库 = self._控制器(None)
+        控制器, 机器人, 库 = self._控制器()
         机器人.当前状态 = "已停止"
         控制器.检测到停止()
-        机器人.当前状态 = "运行中"  # 等待期间被重新启动
-        self.assertIsNone(控制器.停止后清空日志(睡眠=lambda 秒: None))
-        连接 = sqlite3.connect(str(库))
-        self.assertEqual(连接.execute("SELECT COUNT(*) FROM 任务日志").fetchone()[0], 1)
-        连接.close()
+        机器人.当前状态 = "运行中"  # 等待期间被重新启动（如自动重启）
+        结果 = 控制器.停止后清空日志(睡眠=lambda 秒: None)
+        self.assertEqual(结果.状态, "跳过")
+        self.assertEqual(self._日志条数(库), 1)
         self.assertFalse(控制器._日志清理中)
+
+    def test_等待期间点开始则放弃清理(self):
+        控制器, 机器人, 库 = self._控制器()
+        机器人.当前状态 = "已停止"
+        控制器.检测到停止()
+
+        def 等待期间开始(秒):
+            控制器.启动()  # 还没进锁：允许启动，启动代数变化
+
+        结果 = 控制器.停止后清空日志(睡眠=等待期间开始)
+        self.assertEqual(结果.状态, "跳过")
+        self.assertEqual(self._日志条数(库), 1)
+
+    def test_导出清空进行中禁止启动(self):
+        from 应用.控制器 import 日志清理中错误
+        import 数据库.日志轮转 as 轮转
+
+        控制器, 机器人, 库 = self._控制器()
+        机器人.当前状态 = "已停止"
+        控制器.检测到停止()
+        已进入 = threading.Event()
+        放行 = threading.Event()
+        原函数 = 轮转.停止后导出并清空
+
+        def 慢导出(路径, 记录=print):
+            已进入.set()
+            放行.wait(5)
+            return 原函数(路径, 记录=记录)
+
+        结果 = {}
+        with patch.object(轮转, "停止后导出并清空", 慢导出):
+            线程 = threading.Thread(target=lambda: 结果.setdefault("值", 控制器.停止后清空日志(睡眠=lambda 秒: None)))
+            线程.start()
+            self.assertTrue(已进入.wait(5))
+            with self.assertRaises(日志清理中错误):
+                控制器.启动()
+            放行.set()
+            线程.join(5)
+        self.assertTrue(结果["值"].成功)
+        控制器.启动()  # 清理结束后可以正常启动
+
+    def test_导出失败返回失败且不算成功(self):
+        import 数据库.日志轮转 as 轮转
+
+        控制器, 机器人, 库 = self._控制器()
+        机器人.当前状态 = "已停止"
+        控制器.检测到停止()
+        with patch.object(轮转, "导出并清空任务日志", side_effect=RuntimeError("归档失败")):
+            结果 = 控制器.停止后清空日志(睡眠=lambda 秒: None)
+        self.assertEqual(结果.状态, "失败")
+        self.assertFalse(结果.成功)
+        self.assertEqual(self._日志条数(库), 1)
+
+
+class 界面清空判定测试(unittest.TestCase):
+    def test_只有已清空时界面才清(self):
+        from 应用.控制器 import 日志清理结果
+        from 界面.主窗口 import 停止清理后应清空界面
+
+        self.assertTrue(停止清理后应清空界面(日志清理结果("已清空", 条数=3, 截止=1.0)))
+        for 状态 in ("失败", "跳过", "线程未退出"):
+            with self.subTest(状态=状态):
+                self.assertFalse(停止清理后应清空界面(日志清理结果(状态)))
+        self.assertFalse(停止清理后应清空界面(None))
+        self.assertFalse(停止清理后应清空界面((5, 1.0)))  # 旧的元组返回值不再被当成成功
+
+
+class 停止后导出返回值测试(unittest.TestCase):
+    def test_失败返回None成功返回条数(self):
+        import 数据库.日志轮转 as 轮转
+
+        目录 = Path(tempfile.mkdtemp(prefix="ret_"))
+        库 = 目录 / "任务系统.db"
+        建库(库, [("r", "a", 1.0)])
+        with patch.object(轮转, "导出并清空任务日志", side_effect=RuntimeError("坏")):
+            self.assertIsNone(停止后导出并清空(库, 记录=lambda *_: None))
+        self.assertEqual(停止后导出并清空(库), 1)
+        self.assertEqual(停止后导出并清空(库), 0)
 
 
 if __name__ == "__main__":

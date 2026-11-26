@@ -354,6 +354,70 @@ class 活动列表快速确认测试(unittest.TestCase):
         self.assertFalse([记录 for 记录 in 状态记录 if 记录 == ("events", None)])
 
 
+class 审查修订测试(unittest.TestCase):
+    def test_写点击日志期间收到停止不再发送点击(self):
+        import threading
+        from 任务流程.活动.部落竞赛 import 部落竞赛超时
+
+        游戏 = 模拟游戏(卡片=标准卡片())
+        任务, 上下文, _, _, _ = 构造任务(游戏)
+        停止 = threading.Event()
+        上下文.停止事件 = 停止
+        原日志 = 上下文.置脚本状态
+
+        def 日志时停止(文本, *参数):
+            原日志(文本, *参数)
+            if 文本.startswith("部落竞赛：点击"):
+                停止.set()
+
+        上下文.置脚本状态 = 日志时停止
+        任务._截止 = 1e9
+        with self.assertRaises(部落竞赛超时):
+            任务._点击((196, 556), "活动按钮")
+        self.assertEqual(游戏.点击记录, [])
+
+    def test_框架点击在发送前再查停止事件(self):
+        import threading
+        from 任务流程.基础任务框架 import 任务上下文
+
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.停止事件 = threading.Event()
+        上下文.停止事件.set()
+        上下文.检查宝石商店危险页面 = lambda 强制=False: False
+        上下文._最近点击页面结果 = SimpleNamespace(页面="主世界主页")
+        上下文.鼠标 = Mock()
+        self.assertFalse(上下文.点击(100, 100))
+        上下文.鼠标.移动到.assert_not_called()
+        上下文.鼠标.左键点击.assert_not_called()
+
+    def test_关闭设置时打鱼间隙也写来源和原因(self):
+        游戏 = 模拟游戏()
+        任务, _, 日志, _, _ = 构造任务(游戏, 设置=SimpleNamespace(是否部落竞赛接任务=False))
+        self.assertTrue(任务.执行(进攻前=True))
+        self.assertTrue(any("本轮跳过（打鱼间隙）" in 行 and "未开启" in 行 for 行 in 日志))
+
+    def test_面板详情关闭等步骤只OCR小区域_仅面板内容整帧一次(self):
+        游戏 = 模拟游戏(卡片=标准卡片())
+        任务, _, _, _, _ = 构造任务(游戏)
+        记录 = []
+        原OCR = 任务._OCR
+        任务._OCR = lambda 图像, 区域=None: 记录.append((游戏.状态, 游戏.详情, 区域)) or 原OCR(图像, 区域)
+        self.assertTrue(任务.执行())
+        self.assertEqual(任务.结果, "已接任务")
+        整帧 = [项 for 项 in 记录 if 项[2] is None]
+        # 唯一的整帧 OCR 是确认面板后读面板内容那一次（没有打开详情）
+        self.assertEqual(len(整帧), 1)
+        self.assertEqual(整帧[0][:2], ("panel", None))
+
+    def test_面板模板不在时不做OCR(self):
+        游戏 = 模拟游戏()
+        游戏.状态 = "events"
+        任务, _, _, _, _ = 构造任务(游戏)
+        任务._OCR = Mock(return_value=[])
+        self.assertIsNone(任务._识别竞赛面板())
+        任务._OCR.assert_not_called()
+
+
 class 引擎注入回主世界测试(unittest.TestCase):
     def _机器人(self):
         from 线程.自动化机器人 import 自动化机器人
