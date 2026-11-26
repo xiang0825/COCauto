@@ -415,16 +415,20 @@ class 进入世界任务基类(基础任务):
                     分数 = float(分数)
                     最高分数 = max(最高分数, 分数)
                     if 分数 >= self.世界入口最低分数:
-                        点击x, 点击y = self._固定模板点击坐标(
-                            int(中心[0]) + 候选左,
-                            int(中心[1]) + 候选上,
-                        )
+                        中心x = int(中心[0]) + 候选左
+                        中心y = int(中心[1]) + 候选上
+                        点击x, 点击y = self._固定模板点击坐标(中心x, 中心y)
+                        if not self._入口候选安全(屏幕图像, 中心x, 中心y, 点击x, 点击y):
+                            continue
                         return True, (点击x, 点击y), 分数
                 except Exception:
                     continue
             多尺度命中, 多尺度坐标, 多尺度分数 = self._多尺度入口匹配(屏幕图像)
-            if 多尺度命中:
+            if 多尺度命中 and self._入口点击点不在HUD(*多尺度坐标):
                 return 多尺度命中, 多尺度坐标, 多尺度分数
+            反推命中, 反推坐标, 反推分数 = self._圣水车反推入口(屏幕图像)
+            if 反推命中:
+                return 反推命中, 反推坐标, 反推分数
             return False, (0, 0), max(最高分数, 多尺度分数)
 
         # 兼容旧测试替身/旧识图引擎，没有最佳分数接口时仍使用安全区域。
@@ -433,17 +437,141 @@ class 进入世界任务基类(基础任务):
                 区域, self.船模板路径, 相似度阈值=self.世界入口最低分数
             )
             if 命中:
-                点击x, 点击y = self._固定模板点击坐标(
-                    int(中心[0]) + 左,
-                    int(中心[1]) + 上,
-                )
-                return True, (点击x, 点击y), 1.0
+                中心x = int(中心[0]) + 左
+                中心y = int(中心[1]) + 上
+                点击x, 点击y = self._固定模板点击坐标(中心x, 中心y)
+                if self._入口候选安全(屏幕图像, 中心x, 中心y, 点击x, 点击y):
+                    return True, (点击x, 点击y), 1.0
         except Exception:
             pass
         多尺度命中, 多尺度坐标, 多尺度分数 = self._多尺度入口匹配(屏幕图像)
-        if 多尺度命中:
+        if 多尺度命中 and self._入口点击点不在HUD(*多尺度坐标):
             return 多尺度命中, 多尺度坐标, 多尺度分数
         return False, (0, 0), 多尺度分数
+
+    # ------------------------------------------------------------------
+    # 入口候选安全复核：飞艇误中 HUD 会把输入送到 HUD 按钮，属于安全问题；
+    # 宁可不点，交给地图拖动搜索。
+    # ------------------------------------------------------------------
+    def _入口点击点不在HUD(self, x, y, 中心=None) -> bool:
+        from 模块.画面几何 import 点在主页HUD内
+
+        if 点在主页HUD内(int(x), int(y)):
+            return False
+        if 中心 is not None and 点在主页HUD内(int(中心[0]), int(中心[1]), 边距=0):
+            return False
+        return True
+
+    def _入口候选安全(self, 屏幕图像, 中心x, 中心y, 点击x, 点击y) -> bool:
+        """固定模板命中必须避开 HUD；回主世界飞艇还需红白船体颜色证据。"""
+        if not self._入口点击点不在HUD(点击x, 点击y, (中心x, 中心y)):
+            self._记录入口拒绝(f"入口候选{点击x},{点击y}落在固定 HUD 区域，拒绝点击")
+            return False
+        if getattr(self, "状态文本", "") != "主世界":
+            return True
+        try:
+            import cv2
+
+            hsv = cv2.cvtColor(屏幕图像, cv2.COLOR_BGR2HSV)
+        except Exception:
+            return False
+        if self._主世界飞艇候选颜色可信(hsv, 中心x, 中心y) or self._红白帆颜色可信(
+            hsv, 中心x, 中心y
+        ):
+            return True
+        self._记录入口拒绝(f"入口候选{点击x},{点击y}缺少红白船体颜色证据，拒绝点击")
+        return False
+
+    def _记录入口拒绝(self, 文本: str) -> None:
+        上下文 = getattr(self, "上下文", None)
+        置状态 = getattr(上下文, "置脚本状态", None)
+        if not callable(置状态):
+            return
+        上次 = getattr(self, "_上次入口拒绝日志", None)
+        if 上次 == 文本:
+            return
+        self._上次入口拒绝日志 = 文本
+        try:
+            置状态(文本)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _红白帆颜色可信(hsv, 中心x: int, 中心y: int) -> bool:
+        """新版回主世界飞艇：红白竖条纹帆 + 周围深色水面。"""
+        try:
+            高, 宽 = hsv.shape[:2]
+            局部 = hsv[max(0, 中心y - 30):min(高, 中心y + 30),
+                      max(0, 中心x - 26):min(宽, 中心x + 26)]
+            if 局部.size == 0:
+                return False
+            红色 = (
+                ((局部[:, :, 0] <= 12) | (局部[:, :, 0] >= 168))
+                & (局部[:, :, 1] >= 90)
+                & (局部[:, :, 2] >= 80)
+            )
+            白色 = (局部[:, :, 1] <= 70) & (局部[:, :, 2] >= 170)
+            红覆盖率 = float(红色.mean())
+            白覆盖率 = float(白色.mean())
+            if not (0.05 <= 红覆盖率 <= 0.55 and 白覆盖率 >= 0.04):
+                return False
+            # 红白条纹：同一行内红/白交替，排除纯红按钮或白色文字。
+            交替行 = 0
+            for 行 in range(0, 局部.shape[0], 3):
+                标记 = np.where(红色[行], 1, np.where(白色[行], 2, 0))
+                标记 = 标记[标记 > 0]
+                if 标记.size >= 4 and int(np.count_nonzero(np.diff(标记))) >= 2:
+                    交替行 += 1
+            if 交替行 < 3:
+                return False
+            周边 = hsv[max(0, 中心y - 60):min(高, 中心y + 60),
+                      max(0, 中心x - 60):min(宽, 中心x + 60)]
+            水面 = (
+                (周边[:, :, 0] >= 90) & (周边[:, :, 0] <= 130)
+                & (周边[:, :, 1] >= 40) & (周边[:, :, 2] >= 25) & (周边[:, :, 2] <= 160)
+            )
+            return float(水面.mean()) >= 0.12
+        except (AttributeError, TypeError, ValueError, IndexError):
+            return False
+
+    # 新版夜世界：回主世界飞艇停在码头旁，圣水车在码头陆地一侧。
+    # 1280×720 实拍（tests/回放样本/16比9/night_home_boat_cart_*）中
+    # 圣水车模板中心约 (551,117)，飞艇船体约 (688,63)（逻辑画布）。
+    圣水车到飞艇偏移 = (137, -54)
+
+    def _圣水车反推入口(self, 屏幕图像):
+        """回主世界：由圣水车模板反推飞艇；必须避开 HUD 且通过红白帆颜色复核。"""
+        if getattr(self, "状态文本", "") != "主世界":
+            return False, (0, 0), 0.0
+        多尺度 = getattr(self.模板识别, "执行多尺度最佳匹配", None)
+        if not callable(多尺度):
+            return False, (0, 0), 0.0
+        try:
+            import cv2
+
+            分数, 中心, 路径, (sx, sy) = 多尺度(屏幕图像, "夜世界圣水车_16比9.bmp")
+            分数 = float(分数)
+            if 路径 is None or 分数 < 0.78:
+                return False, (0, 0), 0.0
+            # 偏移随 UI/地图缩放与模板尺度同比例变化。
+            飞艇x = int(round(int(中心[0]) + self.圣水车到飞艇偏移[0] * float(sx)))
+            飞艇y = int(round(int(中心[1]) + self.圣水车到飞艇偏移[1] * float(sy)))
+            if not (0 <= 飞艇x < 800 and 0 <= 飞艇y < 600):
+                return False, (0, 0), 0.0
+            if not self._入口点击点不在HUD(飞艇x, 飞艇y):
+                self._记录入口拒绝(
+                    f"由圣水车推得的飞艇{飞艇x},{飞艇y}被 HUD 遮挡，拒绝点击，改为拖动地图"
+                )
+                return False, (0, 0), 0.0
+            hsv = cv2.cvtColor(屏幕图像, cv2.COLOR_BGR2HSV)
+            if not self._红白帆颜色可信(hsv, 飞艇x, 飞艇y):
+                self._记录入口拒绝(
+                    f"由圣水车推得的飞艇{飞艇x},{飞艇y}缺少红白帆证据，拒绝点击"
+                )
+                return False, (0, 0), 0.0
+            return True, (飞艇x, 飞艇y), 分数
+        except Exception:
+            return False, (0, 0), 0.0
 
     def _固定模板点击坐标(self, 中心x: int, 中心y: int) -> tuple[int, int]:
         """把固定船帆模板中心换算为当前版本的可点击船体坐标。"""

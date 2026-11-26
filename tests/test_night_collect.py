@@ -172,19 +172,26 @@ class 夜世界圣水车测试(unittest.TestCase):
         任务.上下文.点击.assert_called_once_with(200, 200)
         self.assertTrue(any("回到主世界" in c.args[0] for c in 任务.上下文.置脚本状态.call_args_list))
 
-    def test_未定位圣水车达到上限后不再拖动地图(self):
-        """现代夜世界画面未命中船时必须有界退出，不能把拖动卡住任务线程。"""
+    def test_未定位圣水车最多四次边缘拖动后有界退出(self):
+        """未命中时只允许最多 4 次边缘拖动，之后有界退出，不卡住任务线程。"""
         屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
         任务 = self._任务(屏幕)
         任务._夜世界仍在前台 = Mock(return_value=True)
+        任务._查找圣水车模板 = Mock(return_value=(False, (0, 0), 0.0))
         任务._查找海岸船锚点 = Mock(return_value=(False, (0, 0), 0.0))
         任务._生成动态紫色候选点 = Mock(return_value=[])
+        任务._边缘拖动 = Mock(return_value=True)
         任务.上下文.脚本延时 = Mock()
         任务.上下文.滑动屏幕 = Mock()
+        任务.上下文.点击 = Mock()
 
         self.assertFalse(任务.执行())
         self.assertEqual(任务._查找海岸船锚点.call_count, 5)
+        self.assertEqual(任务._边缘拖动.call_count, 4)
+        for 调用 in 任务._边缘拖动.call_args_list:
+            self.assertIn(调用.args[0], 收集圣水车任务.圣水车搜索拖动路径)
         任务.上下文.滑动屏幕.assert_not_called()
+        任务.上下文.点击.assert_not_called()
         self.assertTrue(任务._本轮未发现可收集圣水车)
         self.assertTrue(any("有限扫描" in c.args[0] for c in 任务.上下文.置脚本状态.call_args_list))
 

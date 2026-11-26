@@ -13,6 +13,18 @@ from 任务流程.世界跳转.到夜世界任务 import 到夜世界任务
 from 任务流程.世界跳转.世界识别器 import 世界识别器
 
 
+def _画红白飞艇(中心x, 中心y, 画面=None):
+    """构造带红白竖条纹帆和周围水面的逻辑画布，用于入口颜色复核。"""
+    if 画面 is None:
+        画面 = np.zeros((600, 800, 3), dtype=np.uint8)
+    画面[max(0, 中心y - 60):中心y + 60, max(0, 中心x - 60):中心x + 60] = (140, 60, 20)
+    for 偏移 in range(-20, 20, 8):
+        x = 中心x + 偏移
+        画面[max(0, 中心y - 20):中心y + 20, max(0, x):x + 4] = (30, 30, 220)
+        画面[max(0, 中心y - 20):中心y + 20, max(0, x + 4):x + 8] = (240, 240, 240)
+    return 画面
+
+
 class 世界跳转测试(unittest.TestCase):
     def test_通用世界跳转不把战斗模式选择页当作主世界主页(self):
         任务 = object.__new__(进入世界任务基类)
@@ -224,7 +236,7 @@ class 世界跳转测试(unittest.TestCase):
         任务.模板识别 = Mock()
         任务.模板识别.执行最佳匹配.return_value = (0.90, (594, 13), "船.bmp")
 
-        命中, 坐标, 分数 = 任务.查找世界入口(np.zeros((600, 800, 3), dtype=np.uint8))
+        命中, 坐标, 分数 = 任务.查找世界入口(_画红白飞艇(674, 13))
 
         self.assertTrue(命中)
         self.assertEqual(坐标, (674, 2))
@@ -240,9 +252,7 @@ class 世界跳转测试(unittest.TestCase):
         # 查找器返回的是安全区域 (80,0,760,590) 内的局部坐标。
         任务.模板识别.执行最佳匹配.return_value = (0.93, (540, 250), "船.bmp")
 
-        命中, 坐标, 分数 = 任务.查找世界入口(
-            np.zeros((600, 800, 3), dtype=np.uint8)
-        )
+        命中, 坐标, 分数 = 任务.查找世界入口(_画红白飞艇(620, 250))
 
         self.assertTrue(命中)
         self.assertEqual(坐标, (628, 270))
@@ -464,9 +474,7 @@ class 世界跳转测试(unittest.TestCase):
         任务.模板识别 = Mock()
         任务.模板识别.执行最佳匹配.return_value = (0.925, (96, 46), "船.bmp")
 
-        命中, 坐标, 分数 = 任务.查找世界入口(
-            np.zeros((600, 800, 3), dtype=np.uint8)
-        )
+        命中, 坐标, 分数 = 任务.查找世界入口(_画红白飞艇(176, 46))
 
         self.assertTrue(命中)
         self.assertEqual(坐标, (151, 72))
@@ -509,7 +517,7 @@ class 世界跳转测试(unittest.TestCase):
         任务.模板识别.执行最佳匹配.return_value = (0.925, (96, 46), "船.bmp")
 
         命中, 坐标, 分数 = 任务.查找世界入口(
-            np.zeros((720, 1280, 3), dtype=np.uint8)
+            cv2.resize(_画红白飞艇(176, 46), (1280, 720), interpolation=cv2.INTER_NEAREST)
         )
 
         self.assertTrue(命中)
