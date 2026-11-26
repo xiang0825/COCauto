@@ -607,6 +607,16 @@ class 部落竞赛任务(基础任务):
         except AttributeError:
             pass
 
+    def _点击已确认关闭X(self, 点: tuple[int, int], 说明: str) -> bool:
+        """对已通过模板与邻近禁点复核的关闭 X 临时放行点击护栏。"""
+        标记 = "_部落竞赛安全关闭X点击中"
+        原标记 = getattr(self.上下文, 标记, False)
+        setattr(self.上下文, 标记, True)
+        try:
+            return self._点击(点, 说明)
+        finally:
+            setattr(self.上下文, 标记, 原标记)
+
     def _是主世界主页(self) -> bool:
         识别 = getattr(self.上下文, "识别点击画面", None)
         if not callable(识别):
@@ -1044,7 +1054,7 @@ class 部落竞赛任务(基础任务):
                 self._日志(f"{原因}：关闭 X 附近出现『{禁点}』，不点击")
                 return False
             try:
-                if not self._点击((x, y), "关闭异常面板"):
+                if not self._点击已确认关闭X((x, y), "关闭异常面板"):
                     return False
             except 部落竞赛超时:
                 return False
@@ -1680,7 +1690,7 @@ class 部落竞赛任务(基础任务):
                 self._日志(f"关闭 X 附近出现『{禁点}』，不点击")
                 return False
             try:
-                self._点击(关闭点, "关闭")
+                self._点击已确认关闭X(关闭点, "关闭")
             except 部落竞赛超时:
                 return False
             self._延时(800)

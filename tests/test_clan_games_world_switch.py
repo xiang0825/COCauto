@@ -2,7 +2,7 @@
 import time
 from pathlib import Path
 import unittest
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import Mock, patch
 
 from tests.test_clan_games import (
@@ -587,6 +587,44 @@ class 活动列表不卡主循环测试(unittest.TestCase):
         self.assertTrue(任务.执行())
         self.assertEqual(任务.结果, "超时")
         self.assertNotIn("活动列表标题OCR异常", "|".join(日志))
+
+    def test_已确认的关闭X在升级页误判时仍可安全回主页(self):
+        from 任务流程.基础任务框架 import 任务上下文 as 任务上下文类型
+
+        游戏 = 模拟游戏(卡片=标准卡片())
+        游戏.状态 = "events"
+        任务, 上下文, _, _, _ = 构造任务(游戏)
+        上下文._部落竞赛流程中 = True
+        上下文._部落竞赛面板已确认 = False
+        上下文._最近点击页面结果 = SimpleNamespace(页面="升级详情弹窗")
+        上下文._点击识别截图 = None
+        上下文.检查宝石商店危险页面 = Mock(return_value=False)
+        上下文.关闭升级详情弹窗 = Mock(return_value=False)
+        上下文.清理主世界活动弹窗 = Mock(return_value=False)
+        上下文.页面恢复失败 = False
+        上下文.置脚本状态 = Mock()
+        上下文.输入前安全检查 = MethodType(
+            任务上下文类型.输入前安全检查, 上下文
+        )
+        原点击 = 上下文.点击
+        点击期间关闭标记 = []
+
+        def 带护栏的点击(x, y, *参数, **关键字参数):
+            点击期间关闭标记.append(
+                getattr(上下文, "_部落竞赛安全关闭X点击中", False)
+            )
+            if 上下文.输入前安全检查():
+                return False
+            return 原点击(x, y, *参数, **关键字参数)
+
+        上下文.点击 = 带护栏的点击
+        任务._关闭X附近禁点 = Mock(return_value=None)
+
+        self.assertTrue(任务._安全关闭异常面板("活动列表未确认"))
+        self.assertEqual(游戏.状态, "home")
+        self.assertEqual(点击期间关闭标记, [True])
+        self.assertFalse(上下文._部落竞赛安全关闭X点击中)
+        上下文.关闭升级详情弹窗.assert_not_called()
 
     def test_停止事件时零点击(self):
         import threading
