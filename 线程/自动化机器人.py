@@ -2285,52 +2285,55 @@ class 自动化机器人:
 
         return False
 
-    def 保存异常现场(self, 类别: str, 原因: str, 当前图像=None):
-        """把当前画面、前几帧和最近日志存到 EXE 同级 异常现场/；绝不抛异常。
+    def 保存异常现场(self, 类别: str, 原因: str, 当前图像=None) -> bool:
+        """安排一份异常现场（当前画面、前几帧、最近日志）到 EXE 同级 异常现场/。
 
-        只读缓存帧和数据库，不调用 ADB：触发时线程可能已卡住或截图已失败。
+        不阻塞调用方（心跳停止、任务退出、待命路径）：这里只取最后一帧的
+        引用和前序帧快照后入队；判断正式数据库、读设置、读日志、编码、写盘
+        和写“已保存”日志都在后台写盘线程里做。不调用 ADB。返回是否已入队。
         只在使用正式数据库时留证；测试/临时数据库不往程序目录写现场。
         """
         try:
             from 应用 import 异常留证
 
-            文件路径 = getattr(getattr(self, "数据库", None), "文件路径", None)
-            if not isinstance(文件路径, str) or os.path.normcase(
-                os.path.abspath(文件路径)
-            ) != os.path.normcase(os.path.abspath(任务数据库.默认数据库路径())):
-                return None
-
-            try:
-                保留份数 = int(getattr(self.设置, "异常现场保留份数", 异常留证.默认保留份数))
-            except Exception:
-                保留份数 = 异常留证.默认保留份数
-            if 保留份数 <= 0:
-                return None
+            数据库 = getattr(self, "数据库", None)
+            文件路径 = getattr(数据库, "文件路径", None)
+            if not isinstance(文件路径, str):
+                return False
             if 当前图像 is None:
                 # 截图提供器里最后一张真实帧（不触发新的 screencap）。
                 当前图像 = getattr(getattr(self, "op", None), "_原始截图缓存", None)
-            try:
-                日志摘要 = 异常留证.格式化日志摘要(
-                    self.数据库.查询日志历史(self.机器人标志, 最大条数=40), 40
+            标志 = self.机器人标志
+
+            def 是正式数据库() -> bool:
+                return os.path.normcase(os.path.abspath(文件路径)) == os.path.normcase(
+                    os.path.abspath(任务数据库.默认数据库路径())
                 )
-            except Exception:
-                日志摘要 = []
-            路径 = 异常留证.保存异常现场(
-                类别,
-                原因,
-                机器人标志=self.机器人标志,
-                当前图像=当前图像,
-                日志摘要=日志摘要,
-                保留份数=保留份数,
-            )
-            if 路径 is not None:
+
+            def 保留份数() -> int:
+                return int(getattr(数据库.获取机器人设置(标志), "异常现场保留份数", 异常留证.默认保留份数))
+
+            def 日志摘要() -> list[str]:
+                return 异常留证.格式化日志摘要(数据库.查询日志历史(标志, 最大条数=40), 40)
+
+            def 已保存(路径) -> None:
                 try:
                     self.记录日志(f"[异常留证] 已保存{类别}现场：{路径}", 300, "警告")
                 except Exception:
                     pass
-            return 路径
+
+            return 异常留证.保存异常现场(
+                类别,
+                原因,
+                机器人标志=标志,
+                当前图像=当前图像,
+                日志摘要=日志摘要,
+                保留份数=保留份数,
+                前置检查=是正式数据库,
+                完成回调=已保存,
+            )
         except Exception:
-            return None
+            return False
 
     def _处理待命超时通知(self, 上下文, 原因: str) -> None:
         """待命超阈值后触发一次现场留图与多渠道通知，绝不抛出异常。"""

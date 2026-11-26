@@ -267,8 +267,31 @@ class 机器人监控中心:
             self._检查每日通知()
             time.sleep(1)
 
+    每日通知检查间隔秒 = 30.0
+
     def _检查每日通知(self) -> None:
-        """到点发每日完成汇总（调度器自身 30 秒节流、每天只发一次）。"""
+        """到点发每日完成汇总（每天只发一次）。
+
+        读库、统计和弹窗都在后台线程里做，监控循环只做时间判断；上一次
+        检查还没结束时不再启动新的检查。
+        """
+        try:
+            现在 = time.monotonic()
+            上次 = getattr(self, "_每日通知上次启动", None)
+            if 上次 is not None and 现在 - 上次 < self.每日通知检查间隔秒:
+                return
+            线程 = getattr(self, "_每日通知线程", None)
+            if 线程 is not None and 线程.is_alive():
+                return
+            self._每日通知上次启动 = 现在
+            self._每日通知线程 = threading.Thread(
+                target=self._执行每日通知检查, name="每日通知检查", daemon=True
+            )
+            self._每日通知线程.start()
+        except Exception as 异常:
+            print(f"[监控中心] 每日通知检查失败：{异常}")
+
+    def _执行每日通知检查(self) -> None:
         try:
             调度器 = getattr(self, "_每日通知调度器", None)
             if 调度器 is None:
@@ -276,7 +299,7 @@ class 机器人监控中心:
 
                 调度器 = 每日通知调度器(self.数据库, lambda: list(self.机器人池.keys()))
                 self._每日通知调度器 = 调度器
-            调度器.检查()
+            调度器.检查(强制=True)
         except Exception as 异常:
             print(f"[监控中心] 每日通知检查失败：{异常}")
 
