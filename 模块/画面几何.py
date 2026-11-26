@@ -229,5 +229,17 @@ def 主页HUD矩形(尺寸=None) -> list[tuple[int, int, int, int]]:
     return [锚点区域(区域, 锚, 尺寸) for 区域, 锚 in 主页HUD区域]
 
 
+def 区域与主页HUD重叠(区域, 边距: int = 0, 尺寸=None) -> bool:
+    """命中框 (左, 上, 右, 下) 与任一主页 HUD 排除区有重叠即返回 True。"""
+    try:
+        左, 上, 右, 下 = [int(v) for v in 区域]
+    except (TypeError, ValueError):
+        return True
+    for 区左, 区上, 区右, 区下 in 主页HUD矩形(尺寸):
+        if 左 <= 区右 + 边距 and 右 >= 区左 - 边距 and 上 <= 区下 + 边距 and 下 >= 区上 - 边距:
+            return True
+    return False
+
+
 def 点在主页HUD内(x, y, 边距: int = 6, 尺寸=None) -> bool:
     return any(点在区域内(x, y, 区域, 边距) for 区域 in 主页HUD矩形(尺寸))

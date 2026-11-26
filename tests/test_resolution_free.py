@@ -383,3 +383,232 @@ class 圣水车与飞艇实拍回放测试(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class 审查修订测试(unittest.TestCase):
+    """3c930ca 审查意见：原尺度优先、阈值不降、命中框 HUD、OCR 置信度、停止事件。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.引擎 = 模板匹配引擎(图片库路径=图片库)
+
+    def tearDown(self):
+        画面几何.清除设备尺寸()
+
+    def test_原尺度达标时不尝试其它尺度(self):
+        图 = 逻辑画布(宽屏样本("night_home_boat_cart"))
+        引擎 = self.引擎
+        原多尺度 = 引擎.执行多尺度最佳匹配
+        引擎.执行多尺度最佳匹配 = Mock(side_effect=AssertionError("不应进入多尺度"))
+        try:
+            命中, 分数, 中心, 路径, 尺度, 框 = 引擎.执行原尺度优先匹配(
+                图, "夜世界圣水车_16比9.bmp", 0.78, 尺度列表=[(0.9, 1.2)]
+            )
+        finally:
+            引擎.执行多尺度最佳匹配 = 原多尺度
+        self.assertTrue(命中)
+        self.assertEqual(尺度, (1.0, 1.0))
+        self.assertGreaterEqual(分数, 0.78)
+        左, 上, 右, 下 = 框
+        self.assertTrue(左 < 中心[0] < 右 and 上 < 中心[1] < 下)
+
+    def test_原尺度未达标才回退且阈值不降(self):
+        图 = 逻辑画布(宽屏样本("night_battle2_start"))[495:600, 163:800]
+        路径 = "|".join(f"更换兵种箭头[{i}].bmp" for i in range(1, 6))
+        命中, 分数, _, _, 尺度, 框 = self.引擎.执行原尺度优先匹配(
+            图, 路径, 0.90, 尺度列表=画面几何.模板尺度候选((1280, 720))
+        )
+        self.assertTrue(命中)
+        self.assertNotEqual(尺度, (1.0, 1.0))
+        self.assertGreaterEqual(分数, 0.90)
+        self.assertIsNotNone(框)
+        # 阈值高于最佳分数时不命中。
+        命中, _, 中心, 路径结果, _, 框 = self.引擎.执行原尺度优先匹配(
+            图, 路径, 0.995, 尺度列表=画面几何.模板尺度候选((1280, 720))
+        )
+        self.assertFalse(命中)
+        self.assertEqual(中心, (0, 0))
+        self.assertIsNone(框)
+
+    def test_圣水车与飞艇反推都走原尺度优先接口(self):
+        任务 = object.__new__(收集圣水车任务)
+        任务.上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), np.uint8))),
+            置脚本状态=Mock(),
+        )
+        任务.模板识别 = Mock()
+        任务.模板识别.执行原尺度优先匹配.return_value = (False, 0.5, (0, 0), None, (1.0, 1.0), None)
+        self.assertFalse(任务._查找圣水车模板()[0])
+        任务.模板识别.执行原尺度优先匹配.assert_called_once()
+        self.assertEqual(任务.模板识别.执行原尺度优先匹配.call_args.args[2], 0.78)
+        任务.模板识别.执行多尺度最佳匹配.assert_not_called()
+
+        飞艇 = object.__new__(到主世界任务)
+        飞艇.状态文本 = "主世界"
+        飞艇.上下文 = SimpleNamespace(置脚本状态=Mock())
+        飞艇.模板识别 = Mock()
+        飞艇.模板识别.执行原尺度优先匹配.return_value = (False, 0.5, (0, 0), None, (1.0, 1.0), None)
+        self.assertFalse(飞艇._圣水车反推入口(np.zeros((600, 800, 3), np.uint8))[0])
+        self.assertGreaterEqual(飞艇.模板识别.执行原尺度优先匹配.call_args.args[2], 0.78)
+        飞艇.模板识别.执行多尺度最佳匹配.assert_not_called()
+
+    def test_圣水车命中框压到HUD即拒绝(self):
+        任务 = object.__new__(收集圣水车任务)
+        任务.上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), np.uint8))),
+            置脚本状态=Mock(),
+        )
+        任务.模板识别 = Mock()
+        # 中心与点击点都在地图区，但命中框上沿压进右上资源栏 (x≥600, y≤118)。
+        任务.模板识别.执行原尺度优先匹配.return_value = (
+            True, 0.95, (605, 135), "夜世界圣水车_16比9.bmp", (1.0, 1.0), (586, 104, 624, 166)
+        )
+        self.assertFalse(画面几何.点在主页HUD内(605, 135))
+        self.assertFalse(画面几何.点在主页HUD内(607, 153))
+        self.assertTrue(画面几何.区域与主页HUD重叠((586, 104, 624, 166)))
+        self.assertFalse(任务._查找圣水车模板()[0])
+        # 对照：同样的命中放在地图中部则允许。
+        任务.模板识别.执行原尺度优先匹配.return_value = (
+            True, 0.95, (400, 300), "夜世界圣水车_16比9.bmp", (1.0, 1.0), (381, 269, 419, 331)
+        )
+        self.assertTrue(任务._查找圣水车模板()[0])
+
+    def test_飞艇阈值不低于固定模板(self):
+        from 任务流程.世界跳转.进入世界基类 import 进入世界任务基类
+
+        self.assertGreaterEqual(进入世界任务基类.世界入口多尺度最低分数, 0.78)
+        self.assertGreaterEqual(
+            进入世界任务基类.世界入口多尺度最低分数, 进入世界任务基类.世界入口最低分数
+        )
+
+    def test_多尺度飞艇命中框与HUD重叠即拒绝(self):
+        模板 = np.zeros((30, 30, 3), np.uint8)
+        模板[:, 0::8] = (30, 30, 220)
+        模板[:, 1::8] = (30, 30, 220)
+        模板[:, 2::8] = (30, 30, 220)
+        模板[:, 3::8] = (30, 30, 220)
+        模板[:, 4::8] = (240, 240, 240)
+        模板[:, 5::8] = (240, 240, 240)
+        模板[:, 6::8] = (240, 240, 240)
+        模板[:, 7::8] = (240, 240, 240)
+
+        def 构造(中心x, 中心y):
+            画面 = np.zeros((600, 800, 3), np.uint8)
+            画面[中心y - 60:中心y + 60, max(0, 中心x - 70):中心x + 60] = (140, 60, 20)
+            画面[中心y - 15:中心y + 15, 中心x - 15:中心x + 15] = 模板
+            return 画面
+
+        def 任务():
+            对象 = object.__new__(到主世界任务)
+            对象.状态文本 = "主世界"
+            对象.上下文 = SimpleNamespace(置脚本状态=Mock())
+            对象.船模板路径 = "船.bmp"
+            对象.模板识别 = SimpleNamespace(_安全加载模板=lambda 路径: 模板)
+            对象.世界入口多尺度比例 = (1.0,)
+            return 对象
+
+        # 对照：地图中部的同一“飞艇”能命中。
+        命中, _, 分数 = 任务()._多尺度入口匹配(构造(400, 300))
+        self.assertTrue(命中)
+        self.assertGreaterEqual(分数, 0.78)
+        # 中心 (108,340) 在 HUD 外（含 6 像素边距），但命中框左缘伸进左侧 HUD。
+        self.assertFalse(画面几何.点在主页HUD内(108, 340))
+        self.assertTrue(画面几何.区域与主页HUD重叠((93, 325, 123, 355)))
+        命中, _, _ = 任务()._多尺度入口匹配(构造(108, 340))
+        self.assertFalse(命中)
+
+    def test_圣水车标题OCR低置信度视为未认出(self):
+        判定 = 收集圣水车任务._是否圣水车标题
+        self.assertTrue(判定([([], "聖水車", 0.93)]))
+        self.assertFalse(判定([([], "聖水車", 0.41)]))
+        self.assertFalse(判定([([], "聖水車")]))
+        任务 = object.__new__(收集圣水车任务)
+        任务.上下文 = SimpleNamespace(点击=Mock(), 置脚本状态=Mock())
+        任务.执行OCR识别 = Mock(return_value=[([], "聖水車", 0.30)])
+        self.assertFalse(任务.尝试收集圣水())
+        任务.上下文.点击.assert_not_called()
+
+
+class 停止事件输入拦截测试(unittest.TestCase):
+    def _鼠标(self):
+        import threading
+        from 核心.鼠标操作 import 鼠标控制器
+
+        设备 = SimpleNamespace(
+            触控=Mock(return_value=True), 滑动=Mock(return_value=True),
+            连续触控=Mock(return_value=True), 长按触控=Mock(return_value=True),
+        )
+        鼠标 = 鼠标控制器(设备)
+        鼠标._停止事件 = threading.Event()
+        return 鼠标, 设备
+
+    def test_停止后点击按下长按连点全部不发送(self):
+        鼠标, 设备 = self._鼠标()
+        鼠标._停止事件.set()
+        鼠标.移动到(100, 100)
+        self.assertFalse(鼠标.左键点击())
+        self.assertFalse(鼠标.左键按下())
+        self.assertFalse(鼠标.长按(100, 100))
+        self.assertFalse(鼠标.连续点击(100, 100, 3))
+        self.assertFalse(鼠标.连续点击多点([(1, 2), (3, 4)]))
+        设备.触控.assert_not_called()
+        设备.滑动.assert_not_called()
+        设备.连续触控.assert_not_called()
+        设备.长按触控.assert_not_called()
+
+    def test_拖动途中停止则放弃手势且不留按住状态(self):
+        鼠标, 设备 = self._鼠标()
+        鼠标.移动到(100, 100)
+        self.assertTrue(鼠标.左键按下())
+        鼠标.移动到(200, 200)
+        鼠标._停止事件.set()
+        self.assertFalse(鼠标.左键抬起())
+        设备.滑动.assert_not_called()
+        设备.触控.assert_not_called()
+        self.assertIsNone(鼠标._按下起点)
+        # 再次抬起是空操作。
+        self.assertEqual(鼠标.左键抬起(), 1)
+
+    def test_安全按钮清空回调也绕不过停止事件(self):
+        鼠标, 设备 = self._鼠标()
+        鼠标._安全点击检查回调 = None
+        鼠标._停止事件.set()
+        鼠标.移动到(5, 5)
+        self.assertFalse(鼠标.左键点击())
+        设备.触控.assert_not_called()
+
+    def test_未停止时行为不变(self):
+        鼠标, 设备 = self._鼠标()
+        鼠标.移动到(10, 20)
+        self.assertTrue(鼠标.左键点击())
+        设备.触控.assert_called_once_with(10, 20)
+        鼠标.左键按下()
+        鼠标.移动到(30, 40)
+        鼠标.左键抬起()
+        设备.滑动.assert_called_once()
+
+    def test_上下文点击与输入前检查在停止后阻断(self):
+        import threading
+        from 任务流程.基础任务框架 import 任务上下文
+
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.停止事件 = threading.Event()
+        上下文.停止事件.set()
+        上下文.鼠标 = Mock()
+        上下文.检查宝石商店危险页面 = Mock(return_value=False)
+        self.assertFalse(上下文.点击(100, 100))
+        上下文.鼠标.左键点击.assert_not_called()
+        self.assertTrue(上下文.输入前安全检查())
+
+
+class 主世界云层回放测试(unittest.TestCase):
+    def test_主世界搜敌云层不误判为搜索对手中(self):
+        识别器 = 页面识别器(模板匹配引擎(图片库路径=图片库))
+        文件列表 = sorted(宽屏样本目录.glob("main_search_clouds_*.jpg"))
+        self.assertGreaterEqual(len(文件列表), 2)
+        for 文件 in 文件列表:
+            with self.subTest(文件=文件.name):
+                原图 = 读取(文件)
+                for 图 in (原图, 逻辑画布(原图)):
+                    self.assertEqual(识别器._搜索对手页分数(图), 0.0)
+                    self.assertNotEqual(识别器.识别(图).页面, "搜索对手中")

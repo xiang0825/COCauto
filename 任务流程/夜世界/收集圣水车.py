@@ -266,22 +266,25 @@ class 收集圣水车任务(夜世界基础任务):
         主页 HUD（资源栏、商店、战斗/建造入口等）内一律拒绝。
         """
         try:
-            from 模块.画面几何 import 点在主页HUD内
+            from 模块.画面几何 import 点在主页HUD内, 区域与主页HUD重叠
 
             屏幕 = self.上下文.op.获取屏幕图像cv(0, 0, 800, 600)
             if not isinstance(屏幕, np.ndarray) or 屏幕.ndim < 3 or not 屏幕.size:
                 return False, (0, 0), 0.0
-            多尺度 = getattr(self.模板识别, "执行多尺度最佳匹配", None)
-            if not callable(多尺度):
+            # 原尺度优先；原尺度未达阈值才按设备几何尺度回退，阈值不变。
+            匹配 = getattr(self.模板识别, "执行原尺度优先匹配", None)
+            if not callable(匹配):
                 return False, (0, 0), 0.0
-            分数, 中心, 路径, _ = 多尺度(屏幕, self.圣水车模板路径)
+            命中, 分数, 中心, _, _, 命中框 = 匹配(
+                屏幕, self.圣水车模板路径, self.圣水车模板最低分数
+            )
             分数 = float(分数)
-            if 路径 is None or 分数 < self.圣水车模板最低分数:
+            if not 命中 or 命中框 is None:
                 return False, (0, 0), 分数
             中心x, 中心y = int(中心[0]), int(中心[1])
             点击x = max(12, min(788, 中心x + self.圣水车点击偏移[0]))
             点击y = max(12, min(588, 中心y + self.圣水车点击偏移[1]))
-            if 点在主页HUD内(中心x, 中心y) or 点在主页HUD内(点击x, 点击y):
+            if 区域与主页HUD重叠(命中框) or 点在主页HUD内(点击x, 点击y):
                 self.上下文.置脚本状态(
                     f"圣水车候选{点击x},{点击y}与 HUD 重叠，禁止点击，改为拖动地图"
                 )
@@ -543,10 +546,21 @@ class 收集圣水车任务(夜世界基础任务):
         self.收集圣水连续出错次数 = 0
         return True
 
+    # 标题 OCR 低于该置信度视为“没认出”，不点击收集按钮。
+    标题OCR最低置信度 = 0.60
+
     @staticmethod
     def _是否圣水车标题(识别结果) -> bool:
+        可信结果 = []
+        for 项 in 识别结果 or []:
+            try:
+                置信度 = float(项[2]) if len(项) > 2 else 0.0
+            except (TypeError, ValueError):
+                置信度 = 0.0
+            if 置信度 >= 收集圣水车任务.标题OCR最低置信度:
+                可信结果.append(项)
         return 收集圣水车任务._是否包含任一文本(
-            识别结果, ("圣水车", "聖水車")
+            可信结果, ("圣水车", "聖水車")
         )
 
     @staticmethod

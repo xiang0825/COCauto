@@ -2662,6 +2662,9 @@ class 任务上下文:
 
     def 输入前安全检查(self) -> bool:
         """供原始鼠标路径使用；返回 True 表示必须阻断本次输入。"""
+        停止事件 = getattr(self, "停止事件", None)
+        if 停止事件 is not None and 停止事件.is_set():
+            return True
         if getattr(self, "_内存保护已触发", False):
             return True
         if getattr(self, "_正在开启奖励宝箱", False):
@@ -3961,6 +3964,9 @@ class 任务上下文:
                 self.停止事件.wait(timeout=等待秒数)
 
     def 点击(self,x,y,延时=None,是否精确点击=False):
+        停止事件 = getattr(self, "停止事件", None)
+        if 停止事件 is not None and 停止事件.is_set():
+            return False
         if getattr(self, "_正在开启奖励宝箱", False):
             return False
         # 所有任务共用这一入口；危险页面一旦被识别，ESC 并确认主页，
