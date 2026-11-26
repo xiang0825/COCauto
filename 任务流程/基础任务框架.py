@@ -1232,6 +1232,173 @@ class 任务上下文:
         except (AttributeError, TypeError, ValueError, cv2.error):
             return None
 
+    部落竞赛页面集合 = frozenset({"部落竞赛面板", "部落竞赛任务详情"})
+    部落竞赛标题词 = ("部落竞赛", "部落競賽", "部落競赛", "部落竞賽")
+    部落竞赛关闭危险词 = (
+        "宝石", "寶石", "购买", "購買", "跳过", "跳過",
+        "重置", "加速",
+    )
+
+    def _刷新部落竞赛复核截图(self):
+        try:
+            return self.op.获取屏幕图像cv(0, 0, 800, 600, 强制刷新=True)
+        except TypeError:
+            return self.op.获取屏幕图像cv(0, 0, 800, 600)
+
+    @staticmethod
+    def _部落竞赛关闭点转800坐标(关闭点, 图像) -> tuple[int, int] | None:
+        """把识别器返回的原图坐标换算到 800x600 点击坐标并限定在右上角。"""
+        if not isinstance(关闭点, (tuple, list)) or len(关闭点) != 2:
+            return None
+        try:
+            x, y = float(关闭点[0]), float(关闭点[1])
+        except (TypeError, ValueError):
+            return None
+        if isinstance(图像, np.ndarray) and 图像.ndim >= 2:
+            高, 宽 = 图像.shape[:2]
+            if 宽 > 0 and 高 > 0 and (宽, 高) != (800, 600):
+                x = x * 800.0 / 宽
+                y = y * 600.0 / 高
+        坐标 = (int(round(x)), int(round(y)))
+        if not (640 <= 坐标[0] <= 780 and 5 <= 坐标[1] <= 110):
+            return None
+        return 坐标
+
+    def 清理部落竞赛面板(self, 屏幕图像=None) -> bool:
+        """非部落竞赛流程时安全关闭残留的部落竞赛面板/任务详情。
+
+        rc154 启动时游戏停在部落竞赛面板：页面识别器已确认面板，但
+        活动弹窗关闭器只认“活动”文案，于是直接安全停止。这里只做一件
+        事：两帧确认同一面板和同一右上角红 X，OCR 确认竞赛标题且画面
+        内没有宝石/购买/跳过/重置/加速字样、中央没有宝石模板，停止事件
+        未置位时才点一次 X；点后复核已离开面板才返回 True。绝不点任务
+        卡、开始、放弃或奖励。识别不清时返回 False 且不发送输入；点击后
+        仍在面板或命中危险字样时同时设置 ``页面恢复失败``。
+        """
+        if bool(getattr(self, "_战斗中", False)):
+            return False
+        if getattr(self, "_部落竞赛面板已确认", False):
+            # 部落竞赛任务自己正在操作面板，不能被通用清理器关掉。
+            return False
+        if getattr(self, "_内存保护已触发", False) or getattr(
+            self, "_宝石保护已触发", False
+        ):
+            return False
+        停止事件 = getattr(self, "停止事件", None)
+
+        def 已停止() -> bool:
+            return bool(
+                停止事件 is not None
+                and callable(getattr(停止事件, "is_set", None))
+                and 停止事件.is_set()
+            )
+
+        if 已停止():
+            return False
+        try:
+            识别器 = self._获取点击页面识别器()
+            第一帧 = 屏幕图像 if 屏幕图像 is not None else self._刷新部落竞赛复核截图()
+            第一结果 = 识别器.识别(第一帧, 战斗中=False)
+            当前页 = str(getattr(第一结果, "页面", "") or "")
+            if 当前页 not in self.部落竞赛页面集合:
+                return False
+            第一关闭点 = self._部落竞赛关闭点转800坐标(
+                识别器.定位部落竞赛关闭按钮(第一帧), 第一帧
+            )
+
+            # 重新截图确认：页面、关闭点都必须在新帧上复现。
+            self.脚本延时(350)
+            if 已停止():
+                return False
+            第二帧 = self._刷新部落竞赛复核截图()
+            第二结果 = 识别器.识别(第二帧, 战斗中=False)
+            第二页 = str(getattr(第二结果, "页面", "") or "")
+            第二关闭点 = self._部落竞赛关闭点转800坐标(
+                识别器.定位部落竞赛关闭按钮(第二帧), 第二帧
+            )
+            if (
+                第二页 not in self.部落竞赛页面集合
+                or 第一关闭点 is None
+                or 第二关闭点 is None
+                or abs(第一关闭点[0] - 第二关闭点[0]) > 20
+                or abs(第一关闭点[1] - 第二关闭点[1]) > 20
+            ):
+                self.置脚本状态(
+                    f"{当前页}重新截图复核未通过（新帧：{第二页 or '未知'}，"
+                    f"关闭点{第一关闭点}/{第二关闭点}），不点击"
+                )
+                return False
+
+            OCR返回 = self.获取OCR引擎()(第二帧)
+            OCR结果 = OCR返回[0] if isinstance(OCR返回, tuple) else OCR返回
+            文本 = "".join(
+                str(项[1])
+                for 项 in (OCR结果 or [])
+                if isinstance(项, (list, tuple)) and len(项) > 1
+            ).replace(" ", "").replace("\n", "")
+            危险词 = next(
+                (词 for 词 in self.部落竞赛关闭危险词 if 词 in 文本), None
+            )
+            if 危险词 is not None:
+                self.页面恢复失败 = True
+                self.置脚本状态(
+                    f"[安全拦截] {第二页}画面出现『{危险词}』，"
+                    "禁止点击关闭按钮并保留现场"
+                )
+                return False
+            if not any(词 in 文本 for 词 in self.部落竞赛标题词):
+                self.置脚本状态(
+                    f"{第二页}未通过竞赛标题 OCR 确认，不点击右上角X"
+                )
+                return False
+            宝石命中, 命中说明 = self._存在中央宝石危险模板(第二帧)
+            if 宝石命中:
+                self.页面恢复失败 = True
+                self._宝石保护已触发 = True
+                self.置脚本状态(
+                    f"[安全拦截] {第二页}中央出现宝石模板（{命中说明}），"
+                    "禁止点击关闭按钮并保留现场"
+                )
+                return False
+            if 已停止():
+                return False
+
+            self.置脚本状态(
+                f"两帧确认{第二页}，点击右上角红X{第二关闭点[0]},{第二关闭点[1]}关闭；"
+                "不点任务卡、开始、放弃、购买或宝石"
+            )
+            if not self.点击已确认安全按钮(*第二关闭点, 延时=600):
+                self.页面恢复失败 = True
+                self.置脚本状态(f"{第二页}右上角X点击未执行，停止后续输入")
+                return False
+            self._点击识别截图 = None
+            self._点击识别截图时间 = 0.0
+            self._最近点击页面结果 = None
+
+            for 序号 in range(5):
+                if 已停止():
+                    return False
+                if 序号:
+                    self.脚本延时(400)
+                新画面 = self._刷新部落竞赛复核截图()
+                新页面 = str(
+                    getattr(识别器.识别(新画面, 战斗中=False), "页面", "") or ""
+                )
+                if 新页面 not in self.部落竞赛页面集合:
+                    self.置脚本状态(
+                        f"{第二页}已关闭（当前：{新页面 or '未知'}），交回主页稳定检查"
+                    )
+                    return True
+            self.页面恢复失败 = True
+            self.置脚本状态(f"{第二页}点击右上角X后仍未关闭，禁止后续点击")
+            return False
+        except Exception as 异常:
+            if self.是否内存异常(异常):
+                self.触发内存保护("清理部落竞赛面板", 异常)
+            else:
+                self.置脚本状态(f"部落竞赛面板清理异常，未继续点击：{异常}")
+            return False
+
     def 清理主世界活动弹窗(self, 屏幕图像=None) -> bool:
         """关闭已确认的主世界活动弹窗；识别不清时绝不点击。"""
         if bool(getattr(self, "_战斗中", False)):
