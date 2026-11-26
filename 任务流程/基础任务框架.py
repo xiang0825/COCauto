@@ -1936,7 +1936,7 @@ class 任务上下文:
                             return True
                         if 新页面 in {
                             "断线弹窗", "选择卡片弹窗", "升级详情弹窗",
-                            "活动弹窗", "部落竞赛面板", "部落竞赛任务详情",
+                            "圣水车弹窗", "活动弹窗", "部落竞赛面板", "部落竞赛任务详情",
                             "战斗星级奖励", "多按钮弹窗",
                         }:
                             self._最近点击页面结果 = 新结果
@@ -2173,6 +2173,98 @@ class 任务上下文:
         有活动标题 = any(词 in 文本 for 词 in 任务上下文.活动弹窗标题词)
         有活动内容 = any(词 in 文本 for 词 in 任务上下文.活动弹窗内容词)
         return 有活动标题 and 有活动内容
+
+    @staticmethod
+    def _点在框内(点, 框, 截图尺寸=None) -> bool:
+        """判断 800×600 逻辑坐标的点是否落在截图坐标系的框内。"""
+        try:
+            x, y = float(点[0]), float(点[1])
+            if 截图尺寸 is not None:
+                高, 宽 = 截图尺寸[:2]
+                x *= float(宽) / 800.0
+                y *= float(高) / 600.0
+            左, 上, 右, 下 = 框
+            return 左 <= x <= 右 and 上 <= y <= 下
+        except (TypeError, ValueError, IndexError):
+            return False
+
+    def _圣水车弹窗放行当前点击(self, 屏幕图像=None) -> bool:
+        """圣水车弹窗只放行“收集”按钮与右上角关闭 X，其它一律拒绝。
+
+        待发送坐标取自鼠标控制器（``移动到`` 已先于 ``左键点击`` 执行）；
+        按钮框由页面识别器在同一帧重新定位。顶部行内的绿色按钮、
+        商店/宝石或面板外任何位置都不放行。无法确认时同样拒绝。
+        """
+        try:
+            if 屏幕图像 is None:
+                屏幕图像 = getattr(self, "_点击识别截图", None)
+            if 屏幕图像 is None:
+                屏幕图像 = self._获取点击识别截图(强制=False)
+            按钮 = self._获取点击页面识别器().定位圣水车弹窗按钮(屏幕图像)
+            鼠标 = getattr(self, "鼠标", None)
+            待点 = (getattr(鼠标, "_x", None), getattr(鼠标, "_y", None))
+        except Exception as 异常:
+            self.置脚本状态(f"圣水车弹窗按钮复核异常，拒绝点击：{异常}")
+            return False
+        if not 按钮 or None in 待点:
+            self.置脚本状态("圣水车弹窗按钮未能在同帧确认，拒绝点击")
+            return False
+        尺寸 = getattr(屏幕图像, "shape", None)
+        for 名称 in ("收集", "关闭"):
+            框 = 按钮.get(名称)
+            if 框 is not None and self._点在框内(待点, 框, 尺寸):
+                return True
+        self.置脚本状态(
+            f"圣水车弹窗只允许点击收集按钮或关闭X，拒绝点击({待点[0]},{待点[1]})"
+        )
+        return False
+
+    def 关闭圣水车弹窗(self, 屏幕图像=None) -> bool:
+        """只点击圣水车弹窗右上角 X，并确认回到夜世界主页。
+
+        不点击“收集”或任何其它按钮；未识别到圣水车弹窗时返回 False
+        且不发送输入。
+        """
+        if bool(getattr(self, "_战斗中", False)):
+            return False
+        try:
+            if 屏幕图像 is None:
+                try:
+                    屏幕图像 = self.op.获取屏幕图像cv(0, 0, 800, 600, 强制刷新=True)
+                except TypeError:
+                    屏幕图像 = self.op.获取屏幕图像cv(0, 0, 800, 600)
+            按钮 = self._获取点击页面识别器().定位圣水车弹窗按钮(屏幕图像)
+        except Exception as 异常:
+            self.置脚本状态(f"圣水车弹窗关闭预检失败，未发送输入：{异常}")
+            return False
+        if not 按钮 or 按钮.get("关闭") is None:
+            return False
+        左, 上, 右, 下 = 按钮["关闭"]
+        高, 宽 = 屏幕图像.shape[:2]
+        x = int(round((左 + 右) / 2 * 800.0 / 宽))
+        y = int(round((上 + 下) / 2 * 600.0 / 高))
+        self.置脚本状态(f"安全点击圣水车弹窗右上角关闭X：{x},{y}")
+        if not self.点击已确认安全按钮(x, y, 延时=300):
+            self.置脚本状态("圣水车弹窗关闭点击被拒绝")
+            return False
+        self._最近点击页面结果 = None
+        self._点击识别截图 = None
+        self._点击识别截图时间 = 0.0
+        for _ in range(4):
+            self.脚本延时(300)
+            try:
+                try:
+                    新画面 = self.op.获取屏幕图像cv(0, 0, 800, 600, 强制刷新=True)
+                except TypeError:
+                    新画面 = self.op.获取屏幕图像cv(0, 0, 800, 600)
+                结果 = self._获取点击页面识别器().识别(新画面, 战斗中=False)
+            except Exception:
+                continue
+            if getattr(结果, "页面", "") == "夜世界主页":
+                self.置脚本状态("圣水车弹窗已关闭，已确认回到夜世界主页")
+                return True
+        self.置脚本状态("圣水车弹窗已点击关闭，但未确认夜世界主页", 级别="警告")
+        return False
 
     def 关闭升级详情弹窗(self, 屏幕图像=None) -> bool:
         """安全关闭升级详情弹窗；绝不点击宝石或立即完成。
@@ -2720,6 +2812,11 @@ class 任务上下文:
         # 一律阻断，等待游戏端自行进入战斗。
         if 结果 is not None and getattr(结果, "页面", "") == "搜索对手中":
             return True
+        # 夜世界圣水车弹窗：只放行底部绿色“收集”按钮与右上角关闭 X。
+        # 该页曾被误判为升级详情而拒绝收集；现在由页面识别器单独区分，
+        # 这里按同帧按钮框逐点复核，其余坐标（行内按钮、商店、宝石）一律阻断。
+        if 结果 is not None and getattr(结果, "页面", "") == "圣水车弹窗":
+            return not self._圣水车弹窗放行当前点击()
         # 城墙任务已经通过 OCR 定位到二次确认按钮时，确认点击拥有更高
         # 优先级。升级确认页的几何特征与普通“升级详情”面板相同；如果
         # 先进入下面的通用关闭器，它会点击右上角 X，随后原确认坐标必然
@@ -4155,7 +4252,7 @@ class 任务上下文:
             结果 = self._获取点击页面识别器().识别(画面, 战斗中=False)
             if getattr(结果, "页面", "") in {
                 "断线弹窗", "多按钮弹窗", "系统维护", "升级详情弹窗",
-                "活动弹窗", "部落竞赛面板", "部落竞赛任务详情",
+                "圣水车弹窗", "活动弹窗", "部落竞赛面板", "部落竞赛任务详情",
                 "选择卡片弹窗", "宝箱领奖页",
                 "战斗奖励选择", "战斗星级奖励",
             }:

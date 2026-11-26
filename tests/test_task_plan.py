@@ -1144,6 +1144,55 @@ class 任务计划测试(unittest.TestCase):
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
+    def test_圣水车收集后只在确认圣水车页面时点击关闭(self):
+        任务 = 收集圣水车任务.__new__(收集圣水车任务)
+        页面识别器 = SimpleNamespace(
+            识别=Mock(side_effect=[
+                SimpleNamespace(页面="圣水车弹窗"),
+                SimpleNamespace(页面="夜世界主页"),
+            ]),
+            定位圣水车弹窗按钮=Mock(return_value={"关闭": (650, 40, 690, 80)}),
+        )
+        截图 = np.zeros((600, 800, 3), dtype=np.uint8)
+        点击关闭 = Mock(return_value=True)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=截图)),
+            _获取点击页面识别器=lambda: 页面识别器,
+            点击已确认安全按钮=点击关闭,
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+
+        self.assertTrue(任务._关闭圣水车面板并确认主页())
+
+        页面识别器.定位圣水车弹窗按钮.assert_called_once_with(截图)
+        点击关闭.assert_called_once_with(670, 60, 延时=180)
+        self.assertEqual(页面识别器.识别.call_count, 2)
+
+    def test_圣水车收集后识别到升级面板不点其关闭按钮(self):
+        任务 = 收集圣水车任务.__new__(收集圣水车任务)
+        页面识别器 = SimpleNamespace(
+            识别=Mock(return_value=SimpleNamespace(页面="升级详情弹窗")),
+            定位圣水车弹窗按钮=Mock(return_value=None),
+        )
+        截图 = np.zeros((600, 800, 3), dtype=np.uint8)
+        点击关闭 = Mock(return_value=True)
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(获取屏幕图像cv=Mock(return_value=截图)),
+            _获取点击页面识别器=lambda: 页面识别器,
+            点击已确认安全按钮=点击关闭,
+            脚本延时=Mock(),
+            置脚本状态=Mock(),
+        )
+        任务.上下文 = 上下文
+
+        self.assertFalse(任务._关闭圣水车面板并确认主页())
+
+        self.assertTrue(任务._输入已拒绝)
+        页面识别器.定位圣水车弹窗按钮.assert_not_called()
+        点击关闭.assert_not_called()
+
     def test_夜世界第二场下兵失败不会继续等待回营点击(self):
         任务 = 等待回营或第二次战斗.__new__(等待回营或第二次战斗)
         上下文 = SimpleNamespace(
