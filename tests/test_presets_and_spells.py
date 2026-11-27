@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import cv2
 import numpy as np
+from unittest.mock import patch
 
 from 任务流程.军队配置 import 兵种资料, 阵容预设 as 预设
 from 任务流程.军队配置 import 编辑军队 as 编
@@ -120,6 +121,48 @@ class 兵栏识别测试(unittest.TestCase):
             self.assertGreater(分数, 0.9)
         名称, 分数 = self.任务._槽位最佳模板(self._槽(5), self.任务.兵种模板列表)
         self.assertEqual(名称, "兵种_攻城战车")
+
+    def test_攻城模板分数接近时不虚报攻城战车(self):
+        self.assertIsNone(self.任务._判定攻城模板([
+            ("兵种_攻城气球", 0.660), ("兵种_攻城战车", 0.618),
+        ]))
+        self.assertEqual(self.任务._判定攻城模板([
+            ("兵种_攻城战车", 1.0), ("兵种_攻城气球", 0.506),
+        ]), "兵种_攻城战车")
+
+    def test_低于0点60的攻城模板保留原候选不降级(self):
+        任务 = type(self.任务).__new__(type(self.任务))
+        任务.模板识别 = SimpleNamespace(
+            _安全加载模板=lambda _路径: np.zeros((1, 1, 3), dtype=np.uint8),
+        )
+        格子 = np.zeros((8, 8, 3), dtype=np.uint8)
+        with patch(
+            "任务流程.主世界打鱼.进攻.cv2.minMaxLoc",
+            side_effect=[(0, 0.45, (0, 0), (0, 0)), (0, 0.30, (0, 0), (0, 0))],
+        ):
+            self.assertEqual(
+                任务._槽位最佳模板(
+                    格子, ["兵种_攻城气球.bmp", "兵种_攻城战车.bmp"]
+                ),
+                ("兵种_攻城气球", 0.45),
+            )
+
+    def test_达到0点60后不确定攻城候选仍降级为未知攻城器械(self):
+        任务 = type(self.任务).__new__(type(self.任务))
+        任务.模板识别 = SimpleNamespace(
+            _安全加载模板=lambda _路径: np.zeros((1, 1, 3), dtype=np.uint8),
+        )
+        格子 = np.zeros((8, 8, 3), dtype=np.uint8)
+        with patch(
+            "任务流程.主世界打鱼.进攻.cv2.minMaxLoc",
+            side_effect=[(0, 0.60, (0, 0), (0, 0)), (0, 0.55, (0, 0), (0, 0))],
+        ):
+            self.assertEqual(
+                任务._槽位最佳模板(
+                    格子, ["兵种_攻城气球.bmp", "兵种_攻城战车.bmp"]
+                ),
+                ("未匹配攻城器械模板", 0.60),
+            )
 
     def test_兵种卡不会被当成法术(self):
         法术模板 = self.任务.乱生效类法术列表 + ["法术_镜像法术.bmp"] + self.任务.跟随控制法术列表
