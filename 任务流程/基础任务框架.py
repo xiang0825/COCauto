@@ -2281,6 +2281,75 @@ class 任务上下文:
         self.置脚本状态("圣水车弹窗已点击关闭，但未确认夜世界主页", 级别="警告")
         return False
 
+    def 关闭更换部队弹窗(self, 最多尝试: int = 2) -> bool:
+        """收起夜世界战斗中误开的“更換部隊”换兵弹层并确认回到战斗页。
+
+        只在新截图明确识别为“更换部队弹窗”时点击弹层外的来源兵卡
+        卡面（选中兵种并收起弹层）；不点弹层里的兵卡（会换兵），不点
+        绿色换兵箭头，不发送 ESC。返回 True 表示已用新截图确认回到
+        “战斗中”；未识别到弹层时不发送任何输入并返回 False。
+        """
+        def 抓帧():
+            try:
+                return self.op.获取屏幕图像cv(0, 0, 800, 600, 强制刷新=True)
+            except TypeError:
+                return self.op.获取屏幕图像cv(0, 0, 800, 600)
+
+        try:
+            识别器 = self._获取点击页面识别器()
+        except Exception as 异常:
+            self.置脚本状态(f"换兵弹层关闭预检失败，未发送输入：{异常}")
+            return False
+        for 次数 in range(1, max(1, int(最多尝试)) + 1):
+            if getattr(self, "停止事件", None) is not None and self.停止事件.is_set():
+                return False
+            try:
+                画面 = 抓帧()
+                结果 = 识别器.识别(画面, 战斗中=True)
+                关闭点 = 识别器.定位更换部队弹窗关闭点(画面)
+            except Exception as 异常:
+                self.置脚本状态(f"换兵弹层关闭预检失败，未发送输入：{异常}")
+                return False
+            页面 = str(getattr(结果, "页面", "") or "")
+            if 页面 != "更换部队弹窗" or 关闭点 is None:
+                if 次数 == 1:
+                    return False
+                # 已点过一次且新截图不再是换兵弹层：弹层已收起，页面
+                # 是否可下兵由调用方继续用自己的战斗页确认决定。
+                self.置脚本状态(
+                    f"更换部队弹窗已收起（当前={页面 or '未知'}），交给调用方复核战斗页"
+                )
+                return True
+            x, y = 关闭点
+            self.置脚本状态(
+                f"新截图确认更换部队弹窗（第{次数}次），点击弹层外来源兵卡收起：{x},{y}"
+            )
+            if not self.点击已确认安全按钮(x, y, 延时=400):
+                self.置脚本状态("更换部队弹窗收起点击被拒绝，保留当前画面")
+                return False
+            self._最近点击页面结果 = None
+            self._点击识别截图 = None
+            self._点击识别截图时间 = 0.0
+            for _ in range(3):
+                self.脚本延时(250)
+                try:
+                    复核 = 识别器.识别(抓帧(), 战斗中=True)
+                except Exception:
+                    continue
+                复核页面 = str(getattr(复核, "页面", "") or "")
+                if 复核页面 == "战斗中":
+                    self.置脚本状态("更换部队弹窗已收起，新截图确认回到战斗页")
+                    return True
+                if 复核页面 == "更换部队弹窗":
+                    break
+                if 复核页面 not in {"战斗过渡", "未知"}:
+                    self.置脚本状态(
+                        f"更换部队弹窗已收起，当前页面为{复核页面}，交给调用方处理"
+                    )
+                    return True
+        self.置脚本状态("更换部队弹窗未能确认收起，停止继续点击", 级别="警告")
+        return False
+
     def 关闭升级详情弹窗(self, 屏幕图像=None) -> bool:
         """安全关闭升级详情弹窗；绝不点击宝石或立即完成。
 

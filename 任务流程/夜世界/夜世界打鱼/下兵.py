@@ -40,10 +40,18 @@ class 下兵(夜世界基础任务):
     # 只执行有限批次，防止旧模板失配时随机点击拖满整场战斗。
     可下兵点 = ((45, 250), (400, 80), (755, 250), (45, 500), (755, 500))
 
+    # 新版兵栏 8 张兵卡卡面中部（800×600 逻辑画布）。第二场只有第一场
+    # 未用完的兵卡和第 7/8 格援军是彩色可选，其余灰色；固定槽位会全部
+    # 落在灰卡上。y=520 远离卡底 y≈560~585 的绿色换兵箭头。
+    第二场兵卡中心 = (152, 214, 278, 341, 404, 468, 531, 592)
+    第二场兵卡y = 520
+    第二场彩色饱和度阈值 = 55.0
+
     停止并等待英雄技能线程 = staticmethod(停止并等待英雄技能线程)
 
-    def __init__(self ,上下文: '任务上下文'):
+    def __init__(self ,上下文: '任务上下文', 第二场: bool = False):
         super().__init__(上下文)
+        self.第二场 = bool(第二场)
 
 
     def 执行(self) -> bool:
@@ -127,6 +135,7 @@ class 下兵(夜世界基础任务):
             # 旧测试替身没有页面识别接口；真实运行时由基础上下文提供。
             return True
         截止时间 = time.monotonic() + 20
+        收起次数 = 0
         while time.monotonic() < 截止时间:
             if getattr(self.上下文, "停止事件", None) is not None and self.上下文.停止事件.is_set():
                 return False
@@ -135,6 +144,16 @@ class 下兵(夜世界基础任务):
             if 页面 == "战斗中":
                 self.上下文.置脚本状态("夜世界战斗过渡完成，允许开始下兵")
                 return True
+            if 页面 == "更换部队弹窗":
+                # 弹层遮住“结束战斗”按钮，页面永远等不到“战斗中”；
+                # 只收起弹层（点弹层外来源兵卡），再用新帧确认战斗页。
+                收起次数 += 1
+                if 收起次数 > 2 or not self._收起更换部队弹窗():
+                    self.上下文.置脚本状态(
+                        "下兵前更换部队弹窗未能收起，禁止向弹层下兵"
+                    )
+                    return False
+                continue
             if 页面 in {"断线弹窗", "战斗结算", "系统维护"}:
                 return False
             self.上下文.脚本延时(250)
@@ -146,10 +165,27 @@ class 下兵(夜世界基础任务):
         # 固定少量安全槽位和边缘点，点击是否被战斗护栏接受作为反馈。
         总成功点击 = 0
         有效槽位 = 0
-        for 槽位, (槽位x, 槽位y) in enumerate(self.兵种槽位, start=1):
+        槽位列表 = self.兵种槽位
+        if getattr(self, "第二场", False):
+            可用兵卡 = self._第二场可用兵卡()
+            if 可用兵卡:
+                槽位列表 = 可用兵卡
+                self.上下文.置脚本状态(
+                    "夜世界第二场识别到可用彩色兵卡："
+                    + "、".join(f"{x},{y}" for x, y in 可用兵卡)
+                )
+            else:
+                self.上下文.置脚本状态(
+                    "夜世界第二场未识别到彩色兵卡，按固定兵槽下兵"
+                )
+        for 槽位, (槽位x, 槽位y) in enumerate(槽位列表, start=1):
             if getattr(self.上下文, "停止事件", None) is not None and self.上下文.停止事件.is_set():
                 return False
             选中 = self.上下文.点击(槽位x, 槽位y, 80, 是否精确点击=True)
+            if 选中 is False and self._当前是更换部队弹窗():
+                # 换兵弹层挡住了兵栏/战场：只收起一次再重试本槽。
+                if self._收起更换部队弹窗():
+                    选中 = self.上下文.点击(槽位x, 槽位y, 80, 是否精确点击=True)
             if 选中 is False:
                 if self._当前已是结算页():
                     self._战斗结算已确认 = True
@@ -188,6 +224,64 @@ class 下兵(夜世界基础任务):
             )
             return True
         return False
+
+    def _第二场可用兵卡(self) -> list:
+        """只读识别第二场兵栏中的彩色（可选）兵卡卡面中心。"""
+        获取图像 = getattr(getattr(self.上下文, "op", None), "获取屏幕图像cv", None)
+        if not callable(获取图像):
+            return []
+        try:
+            try:
+                图像 = 获取图像(0, 0, 800, 600, 强制刷新=True)
+            except TypeError:
+                图像 = 获取图像(0, 0, 800, 600)
+            return self.识别彩色兵卡(图像)
+        except Exception as 异常:
+            self.上下文.置脚本状态(f"第二场兵卡识别失败，按固定兵槽下兵：{异常}")
+            return []
+
+    @classmethod
+    def 识别彩色兵卡(cls, 图像) -> list:
+        import cv2
+        import numpy as np
+
+        if 图像 is None or getattr(图像, "ndim", 0) != 3:
+            return []
+        if 图像.shape[:2] != (600, 800):
+            图像 = cv2.resize(图像, (800, 600), interpolation=cv2.INTER_AREA)
+        饱和度 = cv2.cvtColor(图像, cv2.COLOR_BGR2HSV)[:, :, 1]
+        结果 = []
+        for x in cls.第二场兵卡中心:
+            区域 = 饱和度[505:545, max(0, x - 15):x + 15]
+            if 区域.size and float(np.mean(区域)) >= cls.第二场彩色饱和度阈值:
+                结果.append((x, cls.第二场兵卡y))
+        return 结果
+
+    def _当前是更换部队弹窗(self) -> bool:
+        识别 = getattr(self.上下文, "识别点击画面", None)
+        if not callable(识别):
+            return False
+        try:
+            结果 = 识别()
+        except Exception:
+            return False
+        return str(getattr(结果, "页面", "") or "") == "更换部队弹窗"
+
+    def _收起更换部队弹窗(self) -> bool:
+        关闭 = getattr(self.上下文, "关闭更换部队弹窗", None)
+        if not callable(关闭):
+            return False
+        # 收起用的是已确认安全按钮点击（临时绕过点击护栏），后台英雄
+        # 技能线程必须先退出，不能与这段窗口并发输入。
+        if not self.停止并等待英雄技能线程(self.上下文, 超时秒=5.0):
+            self.上下文.置脚本状态("英雄技能线程未退出，禁止收起更换部队弹窗")
+            return False
+        self.上下文.置脚本状态("下兵前识别到更换部队弹窗，只收起弹层后再确认战斗页")
+        try:
+            return bool(关闭())
+        except Exception as 异常:
+            self.上下文.置脚本状态(f"收起更换部队弹窗失败：{异常}")
+            return False
 
     def _当前已是结算页(self) -> bool:
         """只读确认战斗是否已结束，避免把结算护栏拒绝当成下兵失败。"""
