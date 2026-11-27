@@ -150,5 +150,101 @@ class 安全待命战斗中到夜世界主页恢复测试(unittest.TestCase):
         self.assertEqual(上下文.识别点击画面.call_count, 3)
 
 
+class 安全待命总时长上限测试(unittest.TestCase):
+    """复审 aca9a9c P1：战斗永不结束/页面一直未知时不能无限只读等待。"""
+
+    def _创建机器人(self):
+        机器人 = 安全待命战斗中到夜世界主页恢复测试._创建机器人(self)
+        机器人._处理待命超时告警 = Mock()
+        return 机器人
+
+    @staticmethod
+    def _上下文(读取页面, 重启=None):
+        上下文 = SimpleNamespace(
+            识别点击画面=Mock(side_effect=读取页面),
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+            点击已确认安全按钮=Mock(),
+            页面恢复失败=True,
+        )
+        if 重启 is not None:
+            上下文.安全重启游戏应用 = 重启
+        return 上下文
+
+    @staticmethod
+    def _状态(上下文):
+        return [调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list]
+
+    def test_超时后安全重启一次并在夜世界主页按原逻辑恢复(self):
+        机器人 = self._创建机器人()
+        已重启 = [False]
+
+        def 重启():
+            已重启[0] = True
+            return True
+
+        def 读取页面(**_参数):
+            if 已重启[0]:
+                return _页面("夜世界主页", "夜世界", 0.74)
+            return _页面("战斗中", 可信度=0.96)
+
+        重启函数 = Mock(side_effect=重启)
+        上下文 = self._上下文(读取页面, 重启函数)
+
+        self.assertTrue(机器人._等待人工恢复主世界(上下文, Mock()))
+
+        重启函数.assert_called_once_with()
+        self.assertFalse(机器人.停止事件.is_set())
+        self.assertEqual(上下文._安全待命自动恢复次数, 1)
+        self.assertEqual(上下文._待命恢复世界, "夜世界")
+        上下文.点击已确认安全按钮.assert_not_called()
+        self.assertFalse(any("[严重]" in 项 for 项 in self._状态(上下文)))
+
+    def test_超时后重启失败则严重日志并安全停止(self):
+        for 重启 in (Mock(return_value=False), Mock(side_effect=RuntimeError("adb"))):
+            with self.subTest(重启=重启):
+                机器人 = self._创建机器人()
+                上下文 = self._上下文(
+                    lambda **_参数: _页面("战斗中", 可信度=0.96), 重启
+                )
+
+                self.assertFalse(机器人._等待人工恢复主世界(上下文, Mock()))
+
+                重启.assert_called_once_with()
+                self.assertTrue(机器人.停止事件.is_set())
+                self.assertTrue(上下文.页面恢复失败)
+                self.assertFalse(hasattr(上下文, "_安全待命自动恢复次数"))
+                self.assertTrue(any("[严重]" in 项 for 项 in self._状态(上下文)))
+                上下文.点击已确认安全按钮.assert_not_called()
+                # 首次截图在 0 秒，上限 900 秒，每轮 5 秒：不会无限等待。
+                self.assertLessEqual(上下文.识别点击画面.call_count, 182)
+
+    def test_无安全重启流程时到上限直接严重停止(self):
+        机器人 = self._创建机器人()
+        上下文 = self._上下文(lambda **_参数: _页面("未知"))
+
+        self.assertFalse(机器人._等待人工恢复主世界(上下文, Mock()))
+
+        self.assertTrue(机器人.停止事件.is_set())
+        self.assertTrue(上下文.页面恢复失败)
+        严重日志 = [项 for 项 in self._状态(上下文) if "[严重]" in 项]
+        self.assertEqual(len(严重日志), 1)
+        self.assertIn("未知", 严重日志[0])
+        机器人.记录日志.assert_any_call(严重日志[0], 120)
+
+    def test_重启成功但仍未回主页则第二个上限停止且只重启一次(self):
+        机器人 = self._创建机器人()
+        重启 = Mock(return_value=True)
+        上下文 = self._上下文(lambda **_参数: _页面("未知"), 重启)
+
+        self.assertFalse(机器人._等待人工恢复主世界(上下文, Mock()))
+
+        重启.assert_called_once_with()
+        self.assertTrue(机器人.停止事件.is_set())
+        self.assertTrue(上下文.页面恢复失败)
+        self.assertGreater(上下文.识别点击画面.call_count, 300)
+        self.assertLessEqual(上下文.识别点击画面.call_count, 365)
+
+
 if __name__ == "__main__":
     unittest.main()
