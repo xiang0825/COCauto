@@ -140,26 +140,38 @@ class 人工安全恢复等待测试(unittest.TestCase):
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
-    def test_稳定战斗页面可只读自动恢复并交还战斗流程(self):
+    def test_稳定战斗页面不自动恢复也不消耗额度(self):
+        """战斗中接续任务计划会在战场里开下一轮；只读等战斗结束。"""
         机器人 = self._创建机器人()
         self._启用虚拟待命时钟(机器人)
-        战斗页 = self._页面("战斗中", 可信度=0.93)
+        战斗页 = self._页面("战斗中", 可信度=0.96)
+        调用次数 = 0
+
+        def 读取页面(**_参数):
+            nonlocal 调用次数
+            调用次数 += 1
+            if 调用次数 >= 6:
+                机器人.停止事件.set()
+            return 战斗页
+
         上下文 = SimpleNamespace(
-            识别点击画面=Mock(side_effect=[战斗页, 战斗页, 战斗页]),
+            识别点击画面=Mock(side_effect=读取页面),
             置脚本状态=Mock(),
             脚本延时=Mock(),
         )
 
-        self.assertTrue(机器人._等待人工恢复主世界(上下文, Mock()))
+        self.assertFalse(机器人._等待人工恢复主世界(上下文, Mock()))
 
-        self.assertTrue(上下文._战斗中)
-        self.assertFalse(上下文._战斗结束已确认)
-        self.assertFalse(上下文._战斗奖励弹窗已确认)
-        self.assertEqual(上下文._安全待命自动恢复次数, 1)
-        self.assertTrue(any(
-            "连续3帧" in 调用.args[0] and "战斗中" in 调用.args[0]
+        self.assertEqual(上下文.识别点击画面.call_count, 6)
+        self.assertFalse(hasattr(上下文, "_安全待命自动恢复次数"))
+        self.assertFalse(any(
+            "自动恢复：" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
+        self.assertEqual(sum(
+            "战斗仍在进行" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ), 1)
 
     def test_宝石商店购买和升级页面继续只读待命(self):
         机器人 = self._创建机器人()

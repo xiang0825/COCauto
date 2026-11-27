@@ -593,11 +593,32 @@ class 页面识别测试(unittest.TestCase):
         self.assertEqual(结果.页面, "战斗过渡")
         self.assertTrue(any("奖励选择" in 依据 for 依据 in 结果.依据))
 
-    def test_战斗倒计时与奖励候选同时出现时挂起输入(self):
-        """倒计时不能覆盖奖励候选并放行下兵。"""
+    def test_放弃按钮加倒计时的强战斗HUD不判奖励候选(self):
+        """放弃按钮与倒计时同时清晰时是强战斗证据，红色飘字拼出的横幅/卡片不挂起输入。"""
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
         cv2.rectangle(图像, (10, 430), (105, 470), (0, 0, 220), -1)
+        for 左, 上, 右, 下 in (
+            (175, 185, 305, 445),
+            (340, 190, 470, 450),
+            (500, 135, 625, 420),
+        ):
+            cv2.rectangle(图像, (左, 上), (右, 下), (220, 220, 220), 8)
+        cv2.putText(
+            图像, "45", (380, 80), cv2.FONT_HERSHEY_SIMPLEX,
+            1.4, (255, 255, 255), 3, cv2.LINE_AA,
+        )
+        for 战斗中 in (True, False):
+            with self.subTest(战斗中=战斗中):
+                识别器 = 页面识别器(self.引擎)
+                结果 = 识别器.识别(图像, 战斗中=战斗中)
+                self.assertEqual(结果.页面, "战斗中", 结果.依据)
+                self.assertFalse(any("奖励选择" in 依据 for 依据 in 结果.依据))
+
+    def test_仅战斗倒计时与奖励候选同时出现时仍挂起输入(self):
+        """单一倒计时信号不能覆盖奖励候选并放行下兵。"""
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
         for 左, 上, 右, 下 in (
             (175, 185, 305, 445),
             (340, 190, 470, 450),
@@ -612,8 +633,8 @@ class 页面识别测试(unittest.TestCase):
         self.assertEqual(结果.页面, "战斗过渡")
         self.assertTrue(any("奖励选择" in 依据 for 依据 in 结果.依据))
 
-    def test_红色战斗倒计时与奖励候选同时出现时挂起输入(self):
-        """红色倒计时不能覆盖奖励候选并放行下兵。"""
+    def test_放弃按钮加红色倒计时的强战斗HUD不判奖励候选(self):
+        """红色倒计时+放弃按钮同样是强战斗证据。"""
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
         cv2.rectangle(图像, (10, 430), (105, 470), (0, 0, 220), -1)
@@ -632,8 +653,8 @@ class 页面识别测试(unittest.TestCase):
             1.8, (0, 0, 220), 4, cv2.LINE_AA,
         )
         结果 = self.识别器.识别(图像, 战斗中=True)
-        self.assertEqual(结果.页面, "战斗过渡")
-        self.assertTrue(any("奖励选择" in 依据 for 依据 in 结果.依据))
+        self.assertEqual(结果.页面, "战斗中", 结果.依据)
+        self.assertFalse(any("奖励选择" in 依据 for 依据 in 结果.依据))
 
     def test_真实奖励结构须由间隔半秒的两张新帧确认(self):
         """无搜敌或战斗 HUD 的奖励页需连续跨帧确认，单帧不定案。"""
@@ -685,10 +706,8 @@ class 页面识别测试(unittest.TestCase):
             (500, 135, 625, 420),
         ):
             cv2.rectangle(图像, (左, 上), (右, 下), (220, 220, 220), 8)
-        cv2.putText(
-            图像, "45", (380, 80), cv2.FONT_HERSHEY_SIMPLEX,
-            1.4, (255, 255, 255), 3, cv2.LINE_AA,
-        )
+        # 只有放弃按钮这一单一 HUD 信号；放弃按钮+倒计时属于强战斗证据，
+        # 见 test_放弃按钮加倒计时的强战斗HUD不判奖励候选。
         识别器 = 页面识别器(self.引擎)
         上下文 = 任务上下文.__new__(任务上下文)
         上下文._战斗中 = True
@@ -772,10 +791,8 @@ class 页面识别测试(unittest.TestCase):
             (500, 135, 625, 420),
         ):
             cv2.rectangle(图像, (左, 上), (右, 下), (220, 220, 220), 8)
-        cv2.putText(
-            图像, "45", (380, 80), cv2.FONT_HERSHEY_SIMPLEX,
-            1.4, (255, 255, 255), 3, cv2.LINE_AA,
-        )
+        # 只有放弃按钮这一单一 HUD 信号；放弃按钮+倒计时属于强战斗证据，
+        # 见 test_放弃按钮加倒计时的强战斗HUD不判奖励候选。
         识别器 = 页面识别器(self.引擎)
         with patch(
             "模块.检测.页面识别器._奖励候选单调时间",

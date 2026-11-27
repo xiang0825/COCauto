@@ -214,6 +214,24 @@
       "image": "night_star_reward_20261127_195902.png",
       "source": "E:/codex.task/coc/数据集/待命现场/standby_20261127_195902_599_0001.png",
       "expected": {"page": "战斗星级奖励", "world": null, "buttons": {"確定": [400, 466]}}
+    },
+    {
+      "id": "night_battle_reward_misjudge_20261127_215731",
+      "image": "night_battle_reward_misjudge_20261127_215731.png",
+      "source": "E:/codex.task/coc/数据集/待命现场/night_下兵_20261127_215731_479.png",
+      "expected": {"page": "战斗中", "world": null, "buttons": {}}
+    },
+    {
+      "id": "standby_night_home_20261127_220053",
+      "image": "standby_night_home_20261127_220053.png",
+      "source": "E:/codex.task/coc/数据集/待命现场/standby_20261127_220053_342_0001.png",
+      "expected": {"page": "夜世界主页", "world": "夜世界", "buttons": {}}
+    },
+    {
+      "id": "standby_night_home_current_20261127_220053",
+      "image": "standby_night_home_current_20261127_220053.png",
+      "source": "E:/codex.task/coc/异常现场/20261127_220053_323_未知页面待命/当前.png",
+      "expected": {"page": "夜世界主页", "world": "夜世界", "buttons": {}}
     }
   ]
 }
