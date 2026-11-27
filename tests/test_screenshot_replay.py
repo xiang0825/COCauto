@@ -49,6 +49,12 @@ from 任务流程.活动.部落竞赛 import 部落竞赛任务, 加载配置, �
     "standby_20261126_battle",
     "standby_20261126_elixir_cart",
     "standby_20261127_elixir_cart_empty",
+    "standby_20261127_elixir_cart_full_vs_event",
+    "standby_20261127_elixir_cart_full_vs_event_2",
+)
+满车活动误判样本ID = (
+    "standby_20261127_elixir_cart_full_vs_event",
+    "standby_20261127_elixir_cart_full_vs_event_2",
 )
 
 
@@ -520,6 +526,129 @@ class 实机截图回放测试(unittest.TestCase):
             str(实际),
         )
 
+    def _夜世界资源上下文(self, 图像, 旧资源):
+        状态 = SimpleNamespace(
+            状态数据={"夜世界资源": {**旧资源, "识别成功": True}} if 旧资源 else {}
+        )
+        日志 = []
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=lambda x1, y1, x2, y2, **_k: 图像[y1:y2, x1:x2]
+            ),
+            数据库=SimpleNamespace(获取最新完整状态=lambda _标志: 状态),
+            机器人标志="robot_test",
+            置脚本状态=lambda 文本, **_k: 日志.append(文本),
+        )
+        资源任务 = 更新夜世界资源状态任务.__new__(更新夜世界资源状态任务)
+        资源任务.ocr引擎 = self.OCR引擎
+        return 资源任务, 上下文, 日志
+
+    def test_夜世界资源OCR漏中间位时按上次位数复读纠正(self):
+        """rc161 现场 3119754 读成 319754：首读漏位后用新截图复读补回。"""
+        from unittest.mock import patch
+        import 任务流程.夜世界.更新夜世界账号资源状态 as 资源模块
+
+        图像 = 读取样本("standby_20261126_elixir_cart")
+        预期 = 样本表["standby_20261126_elixir_cart"]["expected"]["resources"]
+        真实识别 = 资源模块.单行资源识别
+        调用次数 = {"n": 0}
+
+        def 首读漏位(引擎, 行, **参数):
+            调用次数["n"] += 1
+            值 = 真实识别(引擎, 行, **参数)
+            if 调用次数["n"] == 2:  # 首轮圣水行：模拟吞掉中间一位
+                文本 = str(值)
+                return int(文本[:2] + 文本[3:])
+            return 值
+
+        资源任务, 上下文, 日志 = self._夜世界资源上下文(
+            图像, {"金币": 3_000_000, "圣水": 2_900_000}
+        )
+        with patch.object(资源模块, "单行资源识别", side_effect=首读漏位):
+            实际 = 资源任务.识别当前资源(上下文)
+        self.assertTrue(实际["识别成功"], 实际)
+        self.assertEqual({"金币": 实际["金币"], "圣水": 实际["圣水"]}, 预期, 日志)
+        self.assertTrue(any("位数不一致，双路复读一致采用" in 行 for 行 in 日志), 日志)
+
+    def test_夜世界资源无历史值时首读漏位不写库而以独立复读为准(self):
+        """冷启动无已确认夜世界资源：漏中间位的首读不能直接成为基线。"""
+        from unittest.mock import patch
+        import 任务流程.夜世界.更新夜世界账号资源状态 as 资源模块
+
+        图像 = 读取样本("standby_20261126_elixir_cart")
+        预期 = 样本表["standby_20261126_elixir_cart"]["expected"]["resources"]
+        真实识别 = 资源模块.单行资源识别
+        调用次数 = {"n": 0}
+
+        def 首读漏位(引擎, 行, **参数):
+            调用次数["n"] += 1
+            值 = 真实识别(引擎, 行, **参数)
+            if 调用次数["n"] == 1:  # 金币首读：3020459 → 320459
+                文本 = str(值)
+                return int(文本[:1] + 文本[2:])
+            return 值
+
+        资源任务, 上下文, 日志 = self._夜世界资源上下文(图像, None)
+        with patch.object(资源模块, "单行资源识别", side_effect=首读漏位):
+            实际 = 资源任务.识别当前资源(上下文)
+        self.assertTrue(实际["识别成功"], 实际)
+        self.assertEqual({"金币": 实际["金币"], "圣水": 实际["圣水"]}, 预期, 日志)
+        self.assertTrue(any("无历史基线" in 行 for 行 in 日志), 日志)
+
+        # 无历史值 + 正数漏位 + 复读两路不一致：保持未确认，不写库。
+        读数 = iter([320459, 2_975_754, 320459, 3_020_459, 2_975_754, 2_975_754])
+        资源任务, 上下文, 日志 = self._夜世界资源上下文(图像, None)
+        写库 = []
+        上下文.数据库.更新状态 = lambda *参数: 写库.append(参数)
+        资源任务.上下文 = 上下文
+        with patch.object(资源模块, "单行资源识别", side_effect=lambda *_a, **_k: next(读数)):
+            self.assertFalse(资源任务.执行())
+        self.assertEqual(写库, [])
+        self.assertTrue(any("保持未确认" in 行 for 行 in 日志), 日志)
+
+    def test_夜世界资源位数复核仅单路回到旧位数时判不可信(self):
+        from unittest.mock import patch
+        import 任务流程.夜世界.更新夜世界账号资源状态 as 资源模块
+
+        图像 = 读取样本("standby_20261126_elixir_cart")
+        # 首读 373459；轻量复读回到 7 位，完整复读仍 6 位 → 不采用单路读数。
+        读数 = iter([373459, 2_975_754, 3_700_459, 373458])
+        资源任务, 上下文, _ = self._夜世界资源上下文(
+            图像, {"金币": 3_700_459, "圣水": 2_975_754}
+        )
+        with patch.object(资源模块, "单行资源识别", side_effect=lambda *_a, **_k: next(读数)):
+            实际 = 资源任务.识别当前资源(上下文)
+        self.assertFalse(实际["识别成功"], 实际)
+        self.assertEqual(实际["金币"], 0)
+
+    def test_夜世界资源位数变化复读不一致时判不可信(self):
+        from unittest.mock import patch
+        import 任务流程.夜世界.更新夜世界账号资源状态 as 资源模块
+
+        图像 = 读取样本("standby_20261126_elixir_cart")
+        读数 = iter([373459, 2_975_754, 377549, 0])
+        资源任务, 上下文, 日志 = self._夜世界资源上下文(
+            图像, {"金币": 3_700_459, "圣水": 2_975_754}
+        )
+        with patch.object(资源模块, "单行资源识别", side_effect=lambda *_a, **_k: next(读数)):
+            实际 = 资源任务.识别当前资源(上下文)
+        self.assertFalse(实际["识别成功"], 实际)
+        self.assertEqual(实际["金币"], 0)
+
+    def test_夜世界资源三次读数一致时接受真实跨位(self):
+        from unittest.mock import patch
+        import 任务流程.夜世界.更新夜世界账号资源状态 as 资源模块
+
+        图像 = 读取样本("standby_20261126_elixir_cart")
+        读数 = iter([1_000_200, 2_975_754, 1_000_200, 1_000_200])
+        资源任务, 上下文, _ = self._夜世界资源上下文(
+            图像, {"金币": 999_800, "圣水": 2_975_754}
+        )
+        with patch.object(资源模块, "单行资源识别", side_effect=lambda *_a, **_k: next(读数)):
+            实际 = 资源任务.识别当前资源(上下文)
+        self.assertTrue(实际["识别成功"], 实际)
+        self.assertEqual(实际["金币"], 1_000_200)
+
     def test_夜世界空圣水车只允许关闭并拒绝收集点(self):
         图像列表 = (
             读取样本("standby_20261127_elixir_cart_empty"),
@@ -546,6 +675,40 @@ class 实机截图回放测试(unittest.TestCase):
             收集圣水车任务._是否圣水车为空文案(空车OCR),
             str([项[1] for 项 in 空车OCR or []]),
         )
+
+    def test_rc161满车圣水车不被误判为活动弹窗且放行收集(self):
+        """rc161 17:05 现场：满车圣水车列表与活动弹窗特征重叠，护栏拒点收集。"""
+        for 样本ID in 满车活动误判样本ID:
+            图像 = 读取样本(样本ID)
+            预期 = 样本表[样本ID]["expected"]
+            with self.subTest(样本=样本ID):
+                self.assertIsNone(self.页面识别器.定位活动弹窗关闭按钮(图像))
+                页面 = self.页面识别器.识别(图像, 战斗中=False)
+                self.assertEqual(
+                    (页面.页面, 页面.世界), (预期["page"], 预期["world"]), 页面.摘要()
+                )
+                按钮 = self.页面识别器.定位圣水车弹窗按钮(图像)
+                self.assertIsNotNone(按钮)
+                self.assertFalse(按钮.get("空车"))
+                self.assertFalse(self._圣水车点击被拒绝(图像, 页面, tuple(预期["buttons"]["收集"])))
+                self.assertFalse(self._圣水车点击被拒绝(图像, 页面, tuple(预期["buttons"]["关闭"])))
+                self.assertTrue(self._圣水车点击被拒绝(图像, 页面, (610, 137)))  # 行内“重播”
+                self.assertTrue(self._圣水车点击被拒绝(图像, 页面, (760, 300)))  # 背景商店
+
+        # 之前的满车/空车样本（800×600 与 1280×720）仍为圣水车弹窗。
+        for 图像 in (
+            读取样本("standby_20261126_elixir_cart"),
+            读取样本("standby_20261127_elixir_cart_empty"),
+            读取截图(样本目录 / "standby_20261127_114843_377_未知页面待命" / "当前.png"),
+        ):
+            with self.subTest(尺寸=图像.shape[:2]):
+                self.assertIsNone(self.页面识别器.定位活动弹窗关闭按钮(图像))
+                self.assertEqual(self.页面识别器.识别(图像, 战斗中=False).页面, "圣水车弹窗")
+
+        # 真正的活动列表弹窗仍识别为活动弹窗。
+        活动 = 读取样本("clan_walkthrough_activity_list")
+        self.assertIsNotNone(self.页面识别器.定位活动弹窗关闭按钮(活动))
+        self.assertEqual(self.页面识别器.识别(活动, 战斗中=False).页面, "活动弹窗")
 
     def _圣水车点击被拒绝(self, 图像, 页面, 坐标):
         上下文 = 任务上下文.__new__(任务上下文)
