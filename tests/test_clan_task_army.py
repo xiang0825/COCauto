@@ -82,10 +82,11 @@ class 竞赛配兵方案测试(unittest.TestCase):
         self.assertIsNone(配置)
         self.assertIn("不支持", 原因)
 
-    def test_没有可恢复的基准配兵不接动态配兵任务(self):
+    def test_未开自动配兵也可生成方案_实际个数由编辑页快照决定(self):
+        # rc161：不再要求“按设置自动配兵”作为恢复基准；换兵前读实际阵容快照。
         配置, 原因 = 构建任务配兵("拆墙", "摧毁25块城墙", None, {"炸弹人"})
-        self.assertIsNone(配置)
-        self.assertIn("原配兵", 原因)
+        self.assertEqual(原因, "")
+        self.assertIn("炸弹人", 配置["兵种"])
 
     def test_资源摧毁类返回基准配兵不切换(self):
         配置, 原因 = 构建任务配兵("掠夺金币", "在多人游戏中掠夺金币", self.原配兵, set())

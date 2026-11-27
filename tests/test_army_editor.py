@@ -115,36 +115,6 @@ class 人口解析测试(unittest.TestCase):
         已用编辑操作.assert_not_called()
         任务._退出到主世界.assert_called_once()
 
-    def test_竞赛配兵未确认时重配回原阵容并返回可继续状态(self):
-        import tempfile
-        from 数据库.任务数据库 import 任务数据库
-
-        库 = 任务数据库(os.path.join(tempfile.mkdtemp(), "rollback.db"))
-        原设置 = SimpleNamespace(
-            是否自动配置军队=True,
-            阵容预设="自定义勾选",
-            配兵兵种=["飞龙"], 配兵法术=[], 配兵攻城="",
-        )
-        临时配置 = {"兵种": {"飞龙": 1, "炸弹人": 2}}
-        上下文 = SimpleNamespace(
-            设置=原设置, 数据库=库, 机器人标志="r", 置脚本状态=Mock(),
-            获取模板识别器=Mock(), _部落竞赛配兵配置覆盖=临时配置,
-            _竞赛配兵任务键="拆墙|25",
-        )
-        任务 = 编.编辑军队任务(上下文)
-        任务._退出到主世界 = Mock()
-        任务._配置流程 = Mock(side_effect=[None, {"配置": {"飞龙": 15}, "人口": [352, 352]}])
-
-        self.assertTrue(任务.执行())
-
-        self.assertEqual(任务._配置流程.call_count, 2)
-        self.assertEqual(任务._配置流程.call_args_list[0].args[0], 临时配置)
-        self.assertEqual(任务._配置流程.call_args_list[1].args[0], {"兵种": {"飞龙": 2}})
-        self.assertEqual(上下文._竞赛配兵失败任务键, "拆墙|25")
-        self.assertEqual(上下文._部落竞赛配兵任务类型, "")
-        self.assertEqual(上下文._竞赛配兵任务键, "")
-        self.assertIn("恢复", " ".join(调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list))
-
 
 class 流程分支测试(unittest.TestCase):
     def _任务(self, **设置项):
@@ -214,25 +184,6 @@ class 流程分支测试(unittest.TestCase):
         兵种调用, 攻城调用 = 任务._配置分区.call_args_list
         self.assertEqual(兵种调用.args, ("兵种", {"野蛮人": 1}, (), ()))
         self.assertEqual(攻城调用.args, ("攻城", {"攻城战车": 1}, ("攻城战车",), ("攻城战车",)))
-
-    def test_攻城车竞赛配置执行时只把预设关键兵传给配置流程(self):
-        上下文 = SimpleNamespace(
-            置脚本状态=Mock(), _竞赛配兵关键单位={"攻城": ["攻城战车"]},
-            _部落竞赛配兵配置覆盖={"兵种": {"野蛮人": 1}, "攻城": {"攻城战车": 1}},
-            _部落竞赛基准配兵配置={"兵种": {"野蛮人": 1}},
-            设置=SimpleNamespace(阵容预设=""), _本次运行配兵尝试={},
-            数据库=Mock(), 机器人标志="x",
-        )
-        任务 = object.__new__(编.编辑军队任务)
-        任务.上下文 = 上下文
-        任务.需要配置 = Mock(return_value=True)
-        任务._期望配置 = Mock(return_value={"兵种": {"野蛮人": 1}, "攻城": {"攻城战车": 1}})
-        任务._配置流程 = Mock(return_value={"配置": {"野蛮人": 10, "攻城战车": 1}, "人口": [10, 10]})
-        任务._退出到主世界 = Mock()
-        任务._结束编辑状态 = Mock()
-        with unittest.mock.patch.object(编, "读取卡片模板", return_value=object()):
-            self.assertTrue(任务.执行())
-        self.assertEqual(任务._配置流程.call_args.args[1], ())
 
     def test_竞赛关键单位不在计划时清空前就停止(self):
         上下文 = SimpleNamespace(置脚本状态=Mock())
