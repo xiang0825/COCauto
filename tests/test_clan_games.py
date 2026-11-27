@@ -188,7 +188,14 @@ def 构造任务(游戏, 设置=None, 数据库=None, 配置覆盖=None, 官方�
     时间 = {"t": 0.0}
     任务 = None
     日志 = []
+    # 领奖/满分/结束提醒只写日志（不再发通知），这里单独收集方便断言。
     通知 = []
+
+    def 置脚本状态(文本, *a):
+        日志.append(文本)
+        if any(词 in 文本 for 词 in ("请手动去领奖励", "可以领奖了", "记得手动领奖")):
+            通知.append(文本)
+
     设置 = 设置 or SimpleNamespace(
         是否部落竞赛接任务=True,
         部落竞赛任务白名单=list(核心白名单),
@@ -217,8 +224,7 @@ def 构造任务(游戏, 设置=None, 数据库=None, 配置覆盖=None, 官方�
         点击=点击,
         滑动屏幕=lambda a, b: 游戏.滑动(a, b),
         脚本延时=延时,
-        置脚本状态=lambda 文本, *a: 日志.append(文本),
-        发送企业微信通知=lambda 文本, 包含截图=True: 通知.append(文本),
+        置脚本状态=置脚本状态,
         停止事件=None,
         页面恢复失败=False,
         待命现场目录=tempfile.mkdtemp(prefix="clan_entry_test_"),

@@ -164,7 +164,6 @@ class 防系统休眠测试(unittest.TestCase):
         机器人.记录日志 = Mock()
         机器人.置脚本状态 = Mock()
         机器人.停止原因 = ""
-        机器人._桌面通知线程停止 = Mock()
         机器人._写入未处理异常日志 = Mock()
         机器人._防休眠控制器 = 防休眠控制器(
             执行状态函数=lambda 标志: 调用记录.append((threading.get_ident(), 标志)) or 1,
@@ -188,8 +187,6 @@ class 防系统休眠测试(unittest.TestCase):
         上下文._升级完成弹窗调度时间 = time.monotonic() + 100.0
         上下文._中央提示调度时间 = time.monotonic() + 100.0
         上下文._星级奖励调度时间 = time.monotonic() + 100.0
-        上下文.企业微信通知器 = None
-        上下文.上报间隔秒 = 0
         return 上下文
 
     def test_F1启动_F2暂停_停止_界面线程不调用防休眠且工作线程恢复(self):
@@ -198,7 +195,7 @@ class 防系统休眠测试(unittest.TestCase):
         机器人 = self._构造测试机器人(调用记录)
         上下文 = self._构造真实上下文(机器人)
         上下文.数据库 = Mock()
-        机器人._初始化任务上下文 = Mock(return_value=(机器人设置(), 上下文, None))
+        机器人._初始化任务上下文 = Mock(return_value=(机器人设置(), 上下文))
 
         进入延时 = threading.Event()
         工作线程ID = [0]
@@ -252,7 +249,7 @@ class 防系统休眠测试(unittest.TestCase):
         机器人 = self._构造测试机器人(调用记录)
         上下文 = self._构造真实上下文(机器人)
         上下文.数据库 = Mock()
-        机器人._初始化任务上下文 = Mock(return_value=(机器人设置(), 上下文, None))
+        机器人._初始化任务上下文 = Mock(return_value=(机器人设置(), 上下文))
 
         进入延时 = threading.Event()
         已触发继续 = threading.Event()
@@ -320,7 +317,7 @@ class 防系统休眠测试(unittest.TestCase):
         主线程ID = threading.get_ident()
         机器人 = self._构造测试机器人(调用记录)
         上下文 = self._构造真实上下文(机器人)
-        机器人._初始化任务上下文 = Mock(return_value=(机器人设置(), 上下文, None))
+        机器人._初始化任务上下文 = Mock(return_value=(机器人设置(), 上下文))
 
         工作线程ID = [0]
 
@@ -424,8 +421,6 @@ class 部落竞赛中央提示调度测试(unittest.TestCase):
                 上下文.停止事件 = threading.Event()
                 上下文.继续事件 = threading.Event()
                 上下文.继续事件.set()
-                上下文.企业微信通知器 = None
-                上下文.上报间隔秒 = 0
                 上下文.op = None
                 上下文._战斗中 = False
                 上下文._部落竞赛流程中 = False

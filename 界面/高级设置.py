@@ -1,4 +1,4 @@
-"""高级设置窗口：模拟器连接、平时不用调的参数、通知、官方数据和常规选项。
+"""高级设置窗口：模拟器连接、平时不用调的参数、异常留证、官方数据和常规选项。
 
 参数写进主界面任务计划组件持有的同一个设置对象（``保存外部修改``），
 所以两边同时打开也不会互相覆盖。每页修改 600ms 后自动保存。
@@ -23,7 +23,7 @@ from 界面.组件 import 后台执行, 提示信息, 提示错误, 标签, 横�
     "night_resource": "adv_search",
     "event": "adv_event",
 }
-页顺序 = (连接页键, "adv_search", "adv_combat", "adv_event", "adv_notification", "adv_official", "adv_general")
+页顺序 = (连接页键, "adv_search", "adv_combat", "adv_event", "adv_evidence", "adv_official", "adv_general")
 
 
 class _参数页(QWidget):
@@ -160,10 +160,7 @@ class 高级设置窗口(QDialog):
         )
         self.问题包按钮.clicked.connect(self._导出问题包)
         常规布局.addLayout(横排(标签("排查问题", "次要"), self.问题包按钮, None))
-        测试通知 = QPushButton("发送测试桌面通知")
-        测试通知.setToolTip("立即在屏幕右下角弹一条测试通知（不节流、不影响脚本运行）")
-        测试通知.clicked.connect(self._发送测试桌面通知)
-        附加 = {"adv_general": [常规附加], "adv_notification": [测试通知]}
+        附加 = {"adv_general": [常规附加]}
         for 键 in 页顺序[1:]:
             self.页面[键] = _参数页(键, 计划组件, 附加.get(键))
         for 键 in 页顺序:
@@ -200,17 +197,6 @@ class 高级设置窗口(QDialog):
     @property
     def 当前页键(self) -> str:
         return 页顺序[self.导航.currentRow()]
-
-    def _发送测试桌面通知(self):
-        try:
-            from 工具包.桌面通知 import 发送测试通知
-
-            成功 = bool(发送测试通知())
-        except Exception:
-            成功 = False
-        self.页面["adv_notification"].状态.setText(
-            "已发送测试桌面通知" if 成功 else "测试桌面通知发送失败"
-        )
 
     def _导出问题包(self):
         from 应用.问题包 import 导出问题包

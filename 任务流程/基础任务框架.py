@@ -83,13 +83,8 @@ class 任务上下文:
     键盘:键盘控制器
     鼠标:鼠标控制器
     置脚本状态:Callable
-    企业微信通知器: Optional[Any] = None  # 新增：企业微信通知器实例
-    上次上报时间: float = 0.0  # 新增：上次上报的时间戳
-    上报间隔秒: int = 0  # 新增：上报间隔（秒）
-    上次检查上报时间: float = 0.0  # 新增：上次检查上报的时间戳（避免频繁检查）
     任务计划等待秒: float = 0.0  # 当前轮任务请求的下一次检查等待时间
     内存保护标志: threading.Event = field(default_factory=threading.Event)
-    待命通知回调: Optional[Callable[..., Any]] = None
 
     # 弹窗 OCR 关键词（无类型注解：类属性，不是 dataclass 字段）；
     # 可在 资源/识别/弹窗.json 的“任务上下文”节覆盖，默认值与原内联常量一致。
@@ -383,9 +378,6 @@ class 任务上下文:
         标志 = getattr(self, "内存保护标志", None)
         if isinstance(标志, threading.Event):
             标志.clear()
-        恢复 = getattr(self, "桌面通知已恢复", None)
-        if callable(恢复):
-            恢复("内存保护", "宿主机内存已恢复，解除内存保护暂停")
 
     def 触发内存保护(self, 来源: str, 异常: Exception | str) -> None:
         """内存故障后只释放本进程资源并停止输入，绝不重启游戏。"""
@@ -407,15 +399,6 @@ class 任务上下文:
                 self.停止事件.set()
             except Exception:
                 pass
-        桌面 = getattr(self, "发送桌面通知", None)
-        if callable(桌面):
-            桌面(
-                "内存保护",
-                "内存保护已暂停脚本",
-                f"{来源}：{str(异常)[:200]}"
-                + ("；内存恢复后会自动继续" if 可恢复 else "；需要人工处理后重新开始"),
-                级别="错误",
-            )
         self.置脚本状态(
             f"[资源保护] {来源}检测到内存异常：{异常}；"
             "已释放OCR/YOLO与截图缓存，停止所有后续截图和点击；"
@@ -3784,7 +3767,7 @@ class 任务上下文:
         # 立即设置停止事件，让线程在下一个延时点退出
         self.停止事件.set()
 
-    def 保存待命现场截图并通知(
+    def 保存待命现场截图(
         self,
         原因: str,
         屏幕图像=None,
@@ -3792,7 +3775,7 @@ class 任务上下文:
         截图目录=None,
         最大留图数: int = 50,
     ) -> Optional[Path]:
-        """待命超阈值时保存现场截图（限制留图上限）并发送通知（不抛异常）。"""
+        """待命超阈值时保存现场截图（限制留图上限）并写告警日志（不抛异常）。"""
         保存路径: Optional[Path] = None
         if 屏幕图像 is None and not getattr(self, "_内存保护已触发", False):
             屏幕图像 = getattr(self, "_点击识别截图", None)
@@ -3835,12 +3818,6 @@ class 任务上下文:
                 except Exception:
                     pass
 
-        通知内容 = (
-            f"⚠️ 机器人进入安全待命告警\n"
-            f"原因: {原因}\n"
-            + (f"现场截图: {保存路径}\n" if 保存路径 else "现场截图: 未获取\n")
-            + f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}"
-        )
         try:
             self.置脚本状态(
                 f"[待命告警] {原因}"
@@ -3849,41 +3826,12 @@ class 任务上下文:
         except Exception:
             pass
 
-        通知器 = getattr(self, "企业微信通知器", None)
-        if 通知器 is not None:
-            try:
-                通知器.发送状态消息(
-                    机器人标志=getattr(self, "机器人标志", "robot"),
-                    状态文本=通知内容,
-                    截图=屏幕图像,
-                )
-            except Exception as 异常:
-                try:
-                    self.记录警告(f"待命超时企业微信通知发送失败: {异常}")
-                except Exception:
-                    pass
-
-        桌面 = getattr(self, "发送桌面通知", None)
-        if callable(桌面):
-            桌面("待命", "安全待命超时，需要人工查看", 原因)
-
-        回调 = getattr(self, "待命通知回调", None)
-        if callable(回调):
-            try:
-                回调(
-                    标题="部落冲突机器人待命告警",
-                    内容=通知内容,
-                    截图路径=str(保存路径) if 保存路径 else None,
-                )
-            except Exception:
-                pass
-
         队列 = getattr(self, "消息队列", None)
         入队 = getattr(队列, "put_nowait", None)
         if callable(入队):
             try:
                 入队({
-                    "类型": "待命超时通知",
+                    "类型": "待命超时告警",
                     "机器人标志": getattr(self, "机器人标志", "robot"),
                     "原因": 原因,
                     "截图路径": str(保存路径) if 保存路径 else "",
@@ -3892,54 +3840,6 @@ class 任务上下文:
                 pass
 
         return 保存路径
-
-    def 发送桌面通知(self, 原因键: str, 标题: str, 正文: str = "", 级别: str = "警告",
-                    需要恢复通知: bool = True) -> bool:
-        """电脑右下角弹窗通知（同原因 10 分钟节流；按设置开关；不抛异常）。"""
-        try:
-            from 工具包.桌面通知 import 机器人桌面通知
-
-            try:
-                设置 = self.数据库.获取机器人设置(self.机器人标志)
-            except Exception:
-                设置 = None
-            return 机器人桌面通知(
-                设置, getattr(self, "机器人标志", "robot"), 原因键, 标题, 正文,
-                级别=级别, 需要恢复通知=需要恢复通知,
-            )
-        except Exception:
-            return False
-
-    def 桌面通知已恢复(self, 原因键: str, 正文: str = "") -> bool:
-        try:
-            from 工具包.桌面通知 import 机器人桌面恢复
-
-            return 机器人桌面恢复(getattr(self, "机器人标志", "robot"), 原因键, 正文)
-        except Exception:
-            return False
-
-    def 发送企业微信通知(self, 状态文本: str, 包含截图: bool = True):
-        """发送企业微信状态通知（任务代码可随时调用）
-
-        参数：
-            状态文本: 要发送的文字内容
-            包含截图: 是否附带当前屏幕截图
-        """
-        if self.企业微信通知器 is None:
-            return  # 未配置 webhook，静默跳过
-
-        try:
-            截图 = None
-            if 包含截图:
-                截图 = self.op.获取屏幕图像cv(0, 0, 800, 600)
-
-            self.企业微信通知器.发送状态消息(
-                机器人标志=self.机器人标志,
-                状态文本=状态文本,
-                截图=截图
-            )
-        except Exception as e:
-            self.记录警告(f"企业微信通知发送失败: {e}")
 
     def 处理异常(self, 任务名: str, 异常: Exception, 是否重启游戏=True, 是否重启机器人=True):
         """统一异常处理入口
@@ -3953,7 +3853,7 @@ class 任务上下文:
         异常文本 = str(异常)
         是否资源保护 = self.是否内存异常(异常)
         if 是否资源保护:
-            # 主机/模拟器提交额度不足时，不能再为了异常通知抓一张图；
+            # 主机/模拟器提交额度不足时，不能再为了异常处理抓一张图；
             # 否则“保护已触发”会被二次截图包装成连续 ADB 错误。
             self.置脚本状态(
                 f"任务[{任务名}] 已因资源保护停止：{异常}；"
@@ -3986,19 +3886,6 @@ class 任务上下文:
                 "异常恢复安全锁：保留当前游戏页面，不启动、切换或关闭任何应用；"
                 "请确认模拟器画面后手动继续"
             )
-
-        # 发送异常通知
-        try:
-            异常信息 = 异常文本[:100]  # 限制长度
-            操作描述 = "重启游戏" if 是否重启游戏 else ("重启机器人" if 是否重启机器人 else "继续执行")
-            self.发送企业微信通知(
-                f"⚠️ 任务异常\n任务: {任务名}\n异常: {异常信息}\n操作: {操作描述}",
-                # 资源保护时明确禁止二次截图；普通异常仍保留原有通知截图。
-                包含截图=not 是否资源保护
-            )
-        except Exception as e:
-            # 通知发送失败不应影响异常处理流程
-            print(f"发送异常通知失败: {e}")
 
         if 是否重启游戏:
             # 不强制结束游戏进程，避免识别/截图错误造成游戏循环重启。
@@ -4211,22 +4098,6 @@ class 任务上下文:
                         raise
                     except Exception as 异常:
                         self.置脚本状态(f"星级奖励弹窗检查暂时失败：{异常}")
-
-            # 每1秒检查一次定时上报（基于实际时间，而不是循环次数）。
-            if self.企业微信通知器 and self.上报间隔秒 > 0:
-                当前时间 = time.time()
-                if 当前时间 - self.上次检查上报时间 >= 1.0:
-                    self.上次检查上报时间 = 当前时间
-                    if 当前时间 - self.上次上报时间 >= self.上报间隔秒:
-                        try:
-                            from datetime import datetime
-                            self.发送企业微信通知(
-                                f"📊 状态上报\n时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                                包含截图=True
-                            )
-                            self.上次上报时间 = 当前时间
-                        except Exception as e:
-                            print(f"定时上报失败: {e}")
 
             # 等待停止事件；收到事件后下一轮统一记录并退出。
             等待秒数 = min(0.25, max(0.0, 截止时间 - time.monotonic()))

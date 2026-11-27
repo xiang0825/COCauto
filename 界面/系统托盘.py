@@ -154,26 +154,6 @@ class 系统托盘控制器(QObject):
             except Exception:
                 pass
 
-    def 发送提示(
-        self,
-        标题: str,
-        内容: str,
-        毫秒: int = 3000,
-    ) -> bool:
-        """发送托盘气泡提示；不可用时安全返回 False。"""
-        if not self.是否可用:
-            return False
-        try:
-            self._托盘.showMessage(
-                str(标题),
-                str(内容),
-                QSystemTrayIcon.Information,
-                max(500, int(毫秒)),
-            )
-            return True
-        except Exception:
-            return False
-
     def 关闭(self) -> None:
         if self._已关闭:
             return

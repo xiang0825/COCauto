@@ -264,44 +264,7 @@ class 机器人监控中心:
 
                 # 处理消息
             self._处理消息()
-            self._检查每日通知()
             time.sleep(1)
-
-    每日通知检查间隔秒 = 30.0
-
-    def _检查每日通知(self) -> None:
-        """到点发每日完成汇总（每天只发一次）。
-
-        读库、统计和弹窗都在后台线程里做，监控循环只做时间判断；上一次
-        检查还没结束时不再启动新的检查。
-        """
-        try:
-            现在 = time.monotonic()
-            上次 = getattr(self, "_每日通知上次启动", None)
-            if 上次 is not None and 现在 - 上次 < self.每日通知检查间隔秒:
-                return
-            线程 = getattr(self, "_每日通知线程", None)
-            if 线程 is not None and 线程.is_alive():
-                return
-            self._每日通知上次启动 = 现在
-            self._每日通知线程 = threading.Thread(
-                target=self._执行每日通知检查, name="每日通知检查", daemon=True
-            )
-            self._每日通知线程.start()
-        except Exception as 异常:
-            print(f"[监控中心] 每日通知检查失败：{异常}")
-
-    def _执行每日通知检查(self) -> None:
-        try:
-            调度器 = getattr(self, "_每日通知调度器", None)
-            if 调度器 is None:
-                from 应用.每日通知 import 每日通知调度器
-
-                调度器 = 每日通知调度器(self.数据库, lambda: list(self.机器人池.keys()))
-                self._每日通知调度器 = 调度器
-            调度器.检查(强制=True)
-        except Exception as 异常:
-            print(f"[监控中心] 每日通知检查失败：{异常}")
 
     def _检查自动重启(self, 标志: str, 机器人) -> None:
         停止事件 = getattr(机器人, "停止事件", None)
@@ -326,7 +289,6 @@ class 机器人监控中心:
                 f"不再自动重启；最后停止原因：{原因}"
             )
             self._记录机器人日志(机器人, 文本)
-            self._桌面通知(标志, "自动重启已放弃", 文本)
         elif 动作 == "check":
             threading.Thread(
                 target=self._复核并自动重启, args=(标志, 机器人, 原因, 主线程),
@@ -370,14 +332,6 @@ class 机器人监控中心:
             机器人.记录日志(文本, 300, "警告")
         except Exception:
             print(f"[监控中心] {文本}")
-
-    def _桌面通知(self, 标志: str, 标题: str, 正文: str) -> None:
-        try:
-            from 工具包.桌面通知 import 机器人桌面通知
-
-            机器人桌面通知(self.数据库.获取机器人设置(标志), 标志, "自动重启", 标题, 正文, 级别="错误")
-        except Exception:
-            pass
 
     def _处理消息(self):
         """处理来自各个机器人的消息"""

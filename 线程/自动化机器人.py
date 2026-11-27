@@ -1954,17 +1954,6 @@ class 自动化机器人:
             安装帧缓存(self.op, self.机器人标志)
         except Exception:
             pass
-        企业微信通知器实例 = None
-        if 设置.企业微信webhook:
-            try:
-                from 工具包.企业微信通知 import 企业微信通知器
-                企业微信通知器实例 = 企业微信通知器(设置.企业微信webhook)
-            except Exception as e:
-                _安全控制台打印(f"初始化企业微信通知器失败: {e}")
-        # 即使后续输入控制器或任务上下文初始化失败，调用方也能拿到
-        # 这个部分初始化对象并关闭它，避免后台通知线程泄漏。
-        self._初始化通知器 = 企业微信通知器实例
-
         运行鼠标 = 鼠标控制器(self.设备)
         上下文 = 任务上下文(
             机器人标志=self.机器人标志,
@@ -1977,10 +1966,6 @@ class 自动化机器人:
             设备=self.设备,
             鼠标=运行鼠标,
             键盘=键盘控制器(self.设备),
-            企业微信通知器=企业微信通知器实例,
-            上次上报时间=time.time(),  # 初始化为当前时间
-            上报间隔秒=设置.状态上报间隔分钟 * 60,  # 转换为秒
-            上次检查上报时间=time.time()  # 初始化为当前时间
         )
         # 所有原始鼠标路径（包括连点、长按、直接按下）共用轻量页面
         # 识别和宝石安全检查；识别结果在极短缓存内复用，避免高频下兵
@@ -1994,8 +1979,7 @@ class 自动化机器人:
             _安全控制台打印("本次运行时的设置为" + self.设置.__str__())
         except (UnicodeEncodeError, OSError, ValueError):
             pass
-        self._初始化通知器 = None
-        return 设置, 上下文, 企业微信通知器实例
+        return 设置, 上下文
 
     def _等待人工恢复主世界(self, 上下文, 检测登录) -> bool:
         """安全待命入口：待命内部（如断线重连）再次触发宿主机内存保护时，
@@ -2072,14 +2056,14 @@ class 自动化机器人:
         自动恢复上限已记录 = False
         上次心跳 = _安全待命单调时间()
         待命开始时间 = 上次心跳
-        已发送待命超时通知 = False
+        已触发待命超时告警 = False
         try:
             原始阈值 = getattr(getattr(上下文, "设置", None), "未知页面待命通知秒数", None)
             if 原始阈值 is None and getattr(self, "数据库", None) is not None:
                 原始阈值 = getattr(self.设置, "未知页面待命通知秒数", 180)
-            待命通知阈值秒 = max(0, int(180 if 原始阈值 is None else 原始阈值))
+            待命告警阈值秒 = max(0, int(180 if 原始阈值 is None else 原始阈值))
         except Exception:
-            待命通知阈值秒 = 180
+            待命告警阈值秒 = 180
         上次截图失败状态 = 0.0
         上次内存状态 = 0.0
         断线页已记录 = False
@@ -2374,9 +2358,6 @@ class 自动化机器人:
                         )
                         上下文.置脚本状态(恢复日志)
                         self.记录日志(恢复日志, 120)
-                        恢复 = getattr(上下文, "桌面通知已恢复", None)
-                        if callable(恢复):
-                            恢复("待命", f"已确认安全页面{页面说明}，继续任务计划")
                         return True
             else:
                 连续安全页面帧 = 0
@@ -2386,12 +2367,12 @@ class 自动化机器人:
 
             当前时间 = _安全待命单调时间()
             if (
-                not 已发送待命超时通知
-                and 待命通知阈值秒 > 0
-                and 当前时间 - 待命开始时间 >= 待命通知阈值秒
+                not 已触发待命超时告警
+                and 待命告警阈值秒 > 0
+                and 当前时间 - 待命开始时间 >= 待命告警阈值秒
             ):
-                已发送待命超时通知 = True
-                self._处理待命超时通知(
+                已触发待命超时告警 = True
+                self._处理待命超时告警(
                     上下文,
                     f"安全待命已超过 {int(当前时间 - 待命开始时间)} 秒仍未确认回到{待命恢复世界}主页"
                     f"（当前页面：{页面 or '未知'}）",
@@ -2460,20 +2441,20 @@ class 自动化机器人:
         except Exception:
             return False
 
-    def _处理待命超时通知(self, 上下文, 原因: str) -> None:
-        """待命超阈值后触发一次现场留图与多渠道通知，绝不抛出异常。"""
+    def _处理待命超时告警(self, 上下文, 原因: str) -> None:
+        """待命超阈值后触发一次现场留图与告警日志，绝不抛出异常。"""
         self.保存异常现场("未知页面待命", 原因)
         try:
-            保存并通知 = getattr(上下文, "保存待命现场截图并通知", None)
-            if callable(保存并通知):
-                保存并通知(原因)
+            保存现场 = getattr(上下文, "保存待命现场截图", None)
+            if callable(保存现场):
+                保存现场(原因)
                 return
             from 任务流程.基础任务框架 import 任务上下文 as _任务上下文类
 
-            _任务上下文类.保存待命现场截图并通知(上下文, 原因)
+            _任务上下文类.保存待命现场截图(上下文, 原因)
         except Exception as 异常:
             try:
-                self.记录日志(f"待命超时通知处理失败（不影响安全待命）：{异常}", 120, "警告")
+                self.记录日志(f"待命超时告警处理失败（不影响安全待命）：{异常}", 120, "警告")
             except Exception:
                 pass
 
@@ -2661,11 +2642,9 @@ class 自动化机器人:
 
     def _任务流程(self):
         """主任务逻辑；初始化失败也必须留下可诊断的停止状态。"""
-        企业微信通知器实例 = None
         上下文 = None
-        self._初始化通知器 = None
         try:
-            设置, 上下文, 企业微信通知器实例 = self._初始化任务上下文()
+            设置, 上下文 = self._初始化任务上下文()
         except Exception as 异常:
             self.停止原因 = f"初始化失败：{异常}"
             self.停止事件.set()
@@ -2674,13 +2653,6 @@ class 自动化机器人:
             except Exception:
                 pass
             _安全控制台打印(f"机器人[{self.机器人标志}]初始化失败：{异常}")
-            try:
-                部分初始化通知器 = getattr(self, "_初始化通知器", None)
-                if 企业微信通知器实例 or 部分初始化通知器:
-                    (企业微信通知器实例 or 部分初始化通知器).关闭()
-            except Exception as 关闭异常:
-                _安全控制台打印(f"初始化失败后的通知器关闭失败：{关闭异常}")
-            self._初始化通知器 = None
             try:
                 if getattr(self, "op", None) is not None:
                     self.op.安全清理()
@@ -2724,21 +2696,8 @@ class 自动化机器人:
                 except Exception as 异常:
                     上下文.置脚本状态(f"[警告] 启动 OCR 后台预热失败：{异常}")
 
-            # 发送启动通知
-            from datetime import datetime
-            上下文.发送企业微信通知(
-                f"✅ 机器人已启动\n时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                包含截图=True
-            )
-
             if not 检测登录.执行():
                 return
-            # 重新启动并已登录：之前弹过的“停止/异常退出”通知补一条已恢复。
-            from 工具包.桌面通知 import 机器人桌面恢复
-
-            for 键 in ("停止", "线程异常"):
-                机器人桌面恢复(self.机器人标志, 键, "机器人已重新启动并登录，继续执行任务计划")
-
             if not self._接管启动时战斗(上下文, 检测登录):
                 return
 
@@ -2985,30 +2944,6 @@ class 自动化机器人:
                 self.停止原因 = "任务流程提前结束，请查看最后日志"
             self.停止事件.set()
             self._异常退出留证(上下文)
-            self._桌面通知线程停止()
-            # 在清理 op 之前发送停止通知（此时 op 还活着，可以截图）
-            try:
-                if 企业微信通知器实例:
-                    from datetime import datetime
-                    停止原因 = self.停止原因 or "线程退出"
-
-                    # 获取截图（内存保护已触发时禁止二次截图）
-                    截图 = None
-                    if not getattr(上下文, "_内存保护已触发", False):
-                        try:
-                            截图 = 上下文.op.获取屏幕图像cv(0, 0, 800, 600)
-                        except Exception:
-                            pass  # 截图失败不影响通知发送
-
-                    # 停止通知必须同步发送，确保截图在线程退出前完成 HTTP 请求
-                    企业微信通知器实例._同步发送状态消息(
-                        机器人标志=self.机器人标志,
-                        状态文本=f"⛔ 机器人已停止\n原因: {停止原因}\n时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                        截图=截图
-                    )
-            except Exception as e:
-                _安全控制台打印(f"发送停止通知失败: {e}")
-
             if 上下文 is not None:
                 try:
                     上下文.释放识别模型()
@@ -3023,11 +2958,6 @@ class 自动化机器人:
                     self.op.安全清理()
                 except Exception as e:
                     _安全控制台打印(f"初始化阶段 ADB 屏幕清理失败: {e}")
-            try:
-                if 企业微信通知器实例:
-                    企业微信通知器实例.关闭()
-            except Exception as e:
-                _安全控制台打印(f"关闭企业微信通知线程失败: {e}")
 
     def 只读确认主世界主页(self, 帧数: int = 2, 间隔秒: float = 2.0) -> tuple[bool, str]:
         """自动重启前的只读复核：连续多帧新截图都识别为主世界主页才返回 True。
@@ -3086,27 +3016,6 @@ class 自动化机器人:
             if 原因 in self.人工停止原因 or 原因 in self._不留证停止原因:
                 return
             self.保存异常现场("异常退出", 原因)
-        except Exception:
-            pass
-
-    def _桌面通知线程停止(self) -> None:
-        """线程结束时弹桌面通知；人工停止（界面按钮/关窗）不弹。"""
-        try:
-            原因 = str(self.停止原因 or "线程退出")
-            if 原因 in self.人工停止原因:
-                return
-            from 工具包.桌面通知 import 机器人桌面通知
-
-            try:
-                设置 = self.设置
-            except Exception:
-                设置 = None
-            if 原因.startswith("未处理异常") or 原因.startswith("图像获取失败") or 原因.startswith("初始化失败"):
-                机器人桌面通知(设置, self.机器人标志, "线程异常", "线程异常退出", 原因[:300], 级别="错误")
-            elif 原因 == "任务自然完成":
-                机器人桌面通知(设置, self.机器人标志, "停止", "任务计划已完成，脚本停止", 原因, 级别="信息")
-            else:
-                机器人桌面通知(设置, self.机器人标志, "停止", "脚本已停止", 原因[:300])
         except Exception:
             pass
 

@@ -117,7 +117,6 @@ class 主窗口(QMainWindow):
         self._当前提醒 = None
         self._战报窗 = None
         self._方案窗 = None
-        self._托盘提示过 = False
         self._图标状态 = None
 
         数据库 = 控制器.数据库
@@ -705,9 +704,6 @@ class 主窗口(QMainWindow):
         self._设置.setValue("窗口几何", self.saveGeometry())
         self._保存未提交设置()
         self.hide()
-        if not self._托盘提示过 and self.托盘 is not None:
-            self._托盘提示过 = True
-            self.托盘.发送提示("城控仍在后台", "已最小化到系统托盘；右键托盘图标可开始/暂停或退出。")
 
     def 退出程序(self):
         """托盘“退出程序”：走正常关闭流程（运行中会确认）。"""

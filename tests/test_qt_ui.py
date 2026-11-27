@@ -286,14 +286,13 @@ class 主窗口测试(unittest.TestCase):
         self.assertTrue(页.保存())
         self.assertFalse(self.数据库.获取机器人设置("robot_1").非人工停止后自动重启)
 
-    def test_通知页可发送测试桌面通知(self):
-        设置窗 = self._打开高级页("adv_notification")
-        页 = 设置窗.页面["adv_notification"]
-        self.assertIn("桌面通知", 页.表单.编辑器)
-        with mock.patch("工具包.桌面通知.发送测试通知", return_value=True) as 发送:
-            设置窗._发送测试桌面通知()
-        发送.assert_called_once()
-        self.assertIn("已发送", 页.状态.text())
+    def test_留证页不再显示通知设置(self):
+        设置窗 = self._打开高级页("adv_evidence")
+        页 = 设置窗.页面["adv_evidence"]
+        self.assertIn("异常现场保留份数", 页.表单.编辑器)
+        for 字段 in ("桌面通知", "企业微信webhook", "状态上报间隔分钟", "每日完成通知", "每日通知时间"):
+            self.assertNotIn(字段, 页.表单.编辑器)
+        self.assertFalse(hasattr(设置窗, "_发送测试桌面通知"))
 
     def test_保存任务设置不覆盖引擎新绑定的模拟器(self):
         计划 = self.运行页.计划
@@ -698,7 +697,7 @@ class 主窗口测试(unittest.TestCase):
             self.assertFalse(self.窗口.isVisible())
             self.assertFalse(self.窗口._关闭中)
             退出.assert_not_called()
-            托盘.发送提示.assert_called_once()
+            托盘.发送提示.assert_not_called()
             self.窗口._托盘显隐()
             self.assertTrue(self.窗口.isVisible())
             # 取消勾选：托盘图标立即移除，关窗恢复为直接退出。

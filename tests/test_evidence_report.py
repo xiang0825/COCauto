@@ -1,4 +1,4 @@
-"""异常自动留证 / 每日完成通知 / 一键导出问题包。"""
+"""异常自动留证 / 一键导出问题包。"""
 
 import json
 import tempfile
@@ -13,8 +13,8 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from 应用 import 异常留证, 每日通知, 问题包
-from 数据库.任务数据库 import 任务数据库, 机器人设置, 规范化每日通知时间
+from 应用 import 异常留证, 问题包
+from 数据库.任务数据库 import 任务数据库, 机器人设置
 
 
 def 图像(值=0):
@@ -222,10 +222,10 @@ class 机器人留证接线测试(unittest.TestCase):
     def test_待命超时留证(self):
         机器人 = self._机器人("")
         机器人.记录日志 = Mock()
-        上下文 = SimpleNamespace(保存待命现场截图并通知=Mock())
-        机器人._处理待命超时通知(上下文, "未知页面 180 秒")
+        上下文 = SimpleNamespace(保存待命现场截图=Mock())
+        机器人._处理待命超时告警(上下文, "未知页面 180 秒")
         机器人.保存异常现场.assert_called_once_with("未知页面待命", "未知页面 180 秒")
-        上下文.保存待命现场截图并通知.assert_called_once()
+        上下文.保存待命现场截图.assert_called_once()
 
     def _真实留证机器人(self, 数据库):
         from 线程.自动化机器人 import 自动化机器人
@@ -305,106 +305,10 @@ class 机器人留证接线测试(unittest.TestCase):
         中心._加入全局消息队列 = Mock()
         中心._检查自动重启 = Mock()
         中心._处理消息 = Mock()
-        中心._检查每日通知 = Mock()
         with patch("主入口.time.sleep"):
             中心._监控循环()
         self.assertEqual(顺序, ["留证", "停止"])
         线程.保存异常现场.assert_called_once_with("心跳超时", "超时原因")
-
-
-class 每日通知测试(unittest.TestCase):
-    def setUp(self):
-        self._临时 = tempfile.TemporaryDirectory(prefix="coc-daily-")
-        self.数据库 = 任务数据库(str(Path(self._临时.name) / "任务系统.db"))
-        self.数据库.保存机器人设置("r1", 机器人设置())
-        self.今天 = datetime(2026, 11, 26, 23, 40).timestamp()
-
-    def tearDown(self):
-        self._临时.cleanup()
-
-    def _写日志(self, 时间, 内容):
-        with self.数据库._获取连接() as conn:
-            conn.execute(
-                "INSERT INTO 任务日志 (机器人标志, 记录时间, 日志内容, 下次超时) VALUES (?, ?, ?, ?)",
-                ("r1", 时间, 内容, 时间 + 60),
-            )
-            conn.commit()
-
-    def test_通知时间规范化(self):
-        self.assertEqual(规范化每日通知时间("7:05"), "07:05")
-        self.assertEqual(规范化每日通知时间("23：30"), "23:30")
-        self.assertEqual(规范化每日通知时间("25:00"), "23:30")
-        self.assertEqual(机器人设置(每日通知时间="abc").每日通知时间, "23:30")
-
-    def test_部落竞赛汇总解析(self):
-        日志 = [
-            (1, "部落竞赛：个人积分 3000/10000"),
-            (2, "部落竞赛：已接任务：掠夺金币（150分）在单场多人对战中掠夺"),
-            (3, "部落竞赛：已接任务（收起详情后确认）：摧毁资源建筑（200分）摧毁"),
-            (4, "部落竞赛：个人积分 3350/10000"),
-        ]
-        结果 = 每日通知.汇总部落竞赛(日志)
-        self.assertEqual(结果["已接任务"], ["掠夺金币150分", "摧毁资源建筑200分"])
-        self.assertEqual(结果["个人积分"], (3350, 10000))
-        self.assertEqual(结果["今日积分增加"], 350)
-        self.assertFalse(结果["可领奖"])
-        self.assertTrue(每日通知.汇总部落竞赛([(1, "部落竞赛：个人积分 10000/10000")])["可领奖"])
-        self.assertTrue(每日通知.汇总部落竞赛(
-            [(1, "部落竞赛：部落竞赛已结束、可以领奖了，请自己去选择并领取奖励（脚本不会点领奖）。")]
-        )["可领奖"])
-
-    def test_生成摘要含场次胜率收益和竞赛(self):
-        基 = self.今天 - 3600
-        self._写日志(基, "战斗结果：胜利；星数：2；摧毁率：65%")
-        self._写日志(基 + 1, "本场资源净变化：金币 +300000，圣水 +200000，黑油 +1500")
-        self._写日志(基 + 600, "战斗结果：失败；星数：0；摧毁率：30%")
-        self._写日志(基 + 601, "本场资源净变化：金币 +100000，圣水 +50000，黑油 +0")
-        self._写日志(基 + 700, "部落竞赛：个人积分 10000/10000")
-        标题, 正文, 有内容 = 每日通知.生成每日摘要(self.数据库, "r1", self.今天)
-        self.assertTrue(有内容)
-        self.assertIn("11-26", 标题)
-        self.assertIn("场次 2", 正文)
-        self.assertIn("胜率 50%", 正文)
-        self.assertIn("金+400k", 正文)
-        self.assertIn("积分 10000/10000", 正文)
-        self.assertIn("可领奖", 正文)
-        self.assertIn("不会自动领奖", 正文)
-
-    def test_备份日志里今天的记录也计入(self):
-        备份 = Path(self.数据库.文件路径).with_name("上次日志.bak.jsonl")
-        行 = [
-            {"id": 1, "机器人": "r1", "ts": self.今天 - 7200, "内容": "战斗结果：胜利；星数：3；摧毁率：100%"},
-            {"id": 2, "机器人": "r2", "ts": self.今天 - 7200, "内容": "战斗结果：胜利；星数：3；摧毁率：100%"},
-        ]
-        备份.write_text("\n".join(json.dumps(项, ensure_ascii=False) for 项 in 行) + "\n", encoding="utf-8")
-        _, 正文, 有内容 = 每日通知.生成每日摘要(self.数据库, "r1", self.今天)
-        self.assertTrue(有内容)
-        self.assertIn("场次 1", 正文)
-
-    def test_调度器到点只发一次且可关闭(self):
-        self._写日志(self.今天 - 60, "战斗结果：胜利；星数：2；摧毁率：65%")
-        发送 = Mock(return_value=True)
-        钟 = 时钟(datetime(2026, 11, 26, 23, 0).timestamp())
-        调度 = 每日通知.每日通知调度器(self.数据库, lambda: ["r1"], 发送=发送, 时钟=钟)
-        self.assertEqual(调度.检查(强制=True), [])  # 未到 23:30
-        钟.值 = self.今天
-        self.assertEqual(调度.检查(强制=True), ["r1"])
-        self.assertEqual(调度.检查(强制=True), [])  # 今天已发
-        _, _, 标题, 正文 = 发送.call_args.args
-        self.assertIn("场次 1", 正文)
-        # 新调度器（模拟重启）同一天也不重复发
-        self.assertEqual(每日通知.每日通知调度器(self.数据库, lambda: ["r1"], 发送=发送, 时钟=钟).检查(), [])
-
-        设置 = 机器人设置(每日完成通知=False)
-        self.数据库.保存机器人设置("r2", 设置)
-        self.assertEqual(每日通知.每日通知调度器(self.数据库, lambda: ["r2"], 发送=发送, 时钟=钟).检查(), [])
-
-    def test_今天没有内容不弹空通知(self):
-        发送 = Mock(return_value=True)
-        调度 = 每日通知.每日通知调度器(self.数据库, lambda: ["r1"], 发送=发送, 时钟=时钟(self.今天))
-        self.assertEqual(调度.检查(强制=True), [])
-        发送.assert_not_called()
-        self.assertIsNone(self.数据库.读取系统配置("每日通知已发送:r1"))
 
 
 class 问题包测试(unittest.TestCase):
@@ -419,7 +323,6 @@ class 问题包测试(unittest.TestCase):
         数据库 = 任务数据库(str(根 / "数据库" / "任务系统.db"))
         数据库.保存机器人设置("r1", 机器人设置(
             官方API令牌="eyJSECRETTOKEN123456",
-            企业微信webhook="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abcdef123456",
             玩家标签=self.玩家标签,
             ADB设备序列号=self.序列号,
             ADB路径=r"C:\Users\zhangsan\AppData\Local\MuMu\adb.exe",
@@ -490,7 +393,6 @@ class 问题包测试(unittest.TestCase):
             ):
                 self.assertNotIn(个人信息, 全文, 个人信息)
             self.assertEqual(配置["r1"]["官方API令牌"], 问题包.已去除)
-            self.assertEqual(配置["r1"]["企业微信webhook"], 问题包.已去除)
             self.assertEqual(配置["r1"]["ADB设备序列号"], 问题包.已去除)
             # 排查需要的内容仍在
             self.assertIn("开始运行任务计划", 全文)
@@ -510,7 +412,7 @@ class 问题包测试(unittest.TestCase):
     def test_敏感键判断(self):
         for 键 in ("官方API令牌", "企业微信webhook", "玩家标签", "api_key", "Password", "ADB设备序列号", "名字"):
             self.assertTrue(问题包.是敏感键(键), 键)
-        for 键 in ("金币", "每日通知时间", "部落竞赛检查记录", "家乡资源"):
+        for 键 in ("金币", "异常现场保留份数", "部落竞赛检查记录", "家乡资源"):
             self.assertFalse(问题包.是敏感键(键), 键)
 
 
@@ -561,31 +463,6 @@ class 问题包按钮测试(unittest.TestCase):
                 窗口.close()
                 QSettings("COCauto", "城控").clear()
                 应用.processEvents()
-
-
-class 每日通知不阻塞监控测试(unittest.TestCase):
-    def test_监控循环里只启动后台检查(self):
-        from 主入口 import 机器人监控中心
-
-        中心 = 机器人监控中心.__new__(机器人监控中心)
-        放行 = threading.Event()
-        已开始 = threading.Event()
-
-        def 慢检查():
-            已开始.set()
-            放行.wait(5)
-
-        中心._执行每日通知检查 = 慢检查
-        开始 = time.monotonic()
-        中心._检查每日通知()
-        self.assertLess(time.monotonic() - 开始, 0.2)
-        self.assertTrue(已开始.wait(5))
-        第一个线程 = 中心._每日通知线程
-        中心._每日通知上次启动 = -1e9  # 间隔已到，但上一次还在跑：不重复启动
-        中心._检查每日通知()
-        self.assertIs(中心._每日通知线程, 第一个线程)
-        放行.set()
-        第一个线程.join(5)
 
 
 if __name__ == "__main__":
