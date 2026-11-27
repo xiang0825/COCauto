@@ -532,12 +532,15 @@ class 部落竞赛任务(基础任务):
     def 缺少的模板(self) -> list[str]:
         return [名 for 名 in self.配置.get("必需模板", []) if not self._读模板(名)]
 
-    def _匹配模板(self, 图像, 名称: str, 区域=None) -> tuple[int, int] | None:
-        """返回模板中心（800x600 坐标）；未命中或模板缺失返回 None。"""
+    def _模板阈值(self, 名称: str) -> float:
+        定义 = self.配置.get("模板", {}).get(名称) or {}
+        return float(定义.get("阈值", 0.85))
+
+    def _模板最佳(self, 图像, 名称: str, 区域=None) -> tuple[float, tuple[int, int]] | None:
+        """不看阈值，返回 (最佳分数, 模板中心)；图像无效/模板缺失/ROI 太小返回 None。"""
         import cv2
         定义 = self.配置.get("模板", {}).get(名称) or {}
         x1, y1, x2, y2 = [int(值) for 值 in (区域 or 定义.get("ROI") or (0, 0, 800, 600))]
-        阈值 = float(定义.get("阈值", 0.85))
         if 图像 is None or not hasattr(图像, "shape"):
             return None
         子图 = 图像[max(0, y1):y2, max(0, x1):x2]
@@ -548,9 +551,32 @@ class 部落竞赛任务(基础任务):
                 continue
             结果 = cv2.matchTemplate(子图, 模板, cv2.TM_CCOEFF_NORMED)
             _, 分数, _, 位置 = cv2.minMaxLoc(结果)
-            if 分数 >= 阈值 and (最佳 is None or 分数 > 最佳[0]):
-                最佳 = (分数, (max(0, x1) + 位置[0] + tw // 2, max(0, y1) + 位置[1] + th // 2))
-        return 最佳[1] if 最佳 else None
+            if 最佳 is None or 分数 > 最佳[0]:
+                最佳 = (float(分数), (max(0, x1) + 位置[0] + tw // 2, max(0, y1) + 位置[1] + th // 2))
+        return 最佳
+
+    def _匹配模板(self, 图像, 名称: str, 区域=None) -> tuple[int, int] | None:
+        """返回模板中心（800x600 坐标）；未命中或模板缺失返回 None。"""
+        最佳 = self._模板最佳(图像, 名称, 区域)
+        if 最佳 is None or 最佳[0] < self._模板阈值(名称):
+            return None
+        return 最佳[1]
+
+    def _记录活动按钮诊断(self, 图像) -> None:
+        """底栏没找到活动按钮时写出模板最佳分数/位置并存当时画面，便于事后确认原因（阈值不变）。"""
+        try:
+            最佳 = self._模板最佳(图像, "活动按钮")
+            阈值 = self._模板阈值("活动按钮")
+            区域 = (self.配置.get("模板", {}).get("活动按钮") or {}).get("ROI")
+            if 最佳 is None:
+                self._日志(f"活动按钮模板无法计算最佳分数（图像或模板无效），阈值{阈值:.2f}，ROI{区域}")
+            else:
+                self._日志(
+                    f"活动按钮模板最佳分数{最佳[0]:.3f}（阈值{阈值:.2f}），位置{最佳[1]}，ROI{区域}"
+                )
+        except Exception as 异常:
+            self._日志(f"活动按钮模板诊断失败（不影响流程）：{异常}")
+        self._保存入口现场("活动按钮未找到", 图像=图像)
 
     def _等待(self, 条件: Callable[[], Any], 说明: str, 步骤秒: float | None = None):
         """轮询直到条件返回真值；超过步骤超时返回 None。
@@ -985,6 +1011,7 @@ class 部落竞赛任务(基础任务):
                 self._日志("未找到活动按钮且当前页面非高置信主世界主页，按非主世界跳过")
                 return "非主世界"
             self._日志("底栏没有找到活动按钮，跳过")
+            self._记录活动按钮诊断(图像)
             return "入口不存在"
         if not self._点击(活动按钮, "活动按钮"):
             return "护栏阻止"
@@ -1082,12 +1109,16 @@ class 部落竞赛任务(基础任务):
             禁点 = "宝石图标"
         return 禁点
 
-    def _保存入口现场(self, 原因: str) -> None:
-        """入口确认失败时把当前帧存到 数据集/待命现场，下次有证据可查；不抛异常、不删旧图。"""
+    def _保存入口现场(self, 原因: str, 图像=None) -> None:
+        """入口确认失败时把当前帧存到 数据集/待命现场，下次有证据可查；不抛异常、不删旧图。
+
+        传入 ``图像`` 时保存判定用的那一帧，不再重新截图。
+        """
         try:
             import cv2
 
-            图像 = self._截图()
+            if 图像 is None:
+                图像 = self._截图()
             if 图像 is None or not hasattr(图像, "shape"):
                 return
             目录 = Path(getattr(self.上下文, "待命现场目录", None) or (Path("数据集") / "待命现场"))

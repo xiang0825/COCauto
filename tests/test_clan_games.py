@@ -1278,3 +1278,45 @@ class 拆墙加入白名单测试(unittest.TestCase):
         self.assertIsNone(选择任务(候选[1:], 白名单, 配置))
         # 白名单里没有拆墙时不接拆墙卡（主人仍可在界面关掉）
         self.assertIsNone(选择任务(候选[:1], self.线上旧白名单, 配置))
+
+
+
+class 入口不存在诊断测试(unittest.TestCase):
+    """rc159：底栏没找到活动按钮 → 冷却 20 分钟，日志写模板最佳分数/位置，并存当时画面。"""
+
+    def test_入口不存在冷却20分钟且阈值不变(self):
+        self.assertEqual(配置["冷却分钟"]["入口不存在"], 20)
+        self.assertEqual(配置["模板"]["活动按钮"]["阈值"], 0.75)
+        游戏 = 模拟游戏(有活动按钮=False)
+        任务, 上下文, _, _, _ = 构造任务(游戏)
+        self.assertTrue(任务.执行())
+        self.assertEqual(任务.结果, "入口不存在")
+        记录 = 上下文.数据库.状态["部落竞赛检查记录"]
+        self.assertAlmostEqual(记录["下次检查时间"] - 记录["时间"], 20 * 60, delta=1)
+
+    def test_没找到活动按钮时写最佳分数位置并保存当时画面(self):
+        游戏 = 模拟游戏(有活动按钮=False)
+        任务, 上下文, 日志, _, _ = 构造任务(游戏)
+        帧 = np.full((600, 800, 3), (40, 160, 230), np.uint8)
+        任务._截图 = lambda: 帧
+        任务._模板最佳 = lambda 图像, 名称, 区域=None: (0.612, (180, 560)) if 名称 == "活动按钮" else None
+        self.assertTrue(任务.执行())
+        self.assertEqual(任务.结果, "入口不存在")
+        self.assertEqual(游戏.点击记录, [])
+        诊断 = [行 for 行 in 日志 if "活动按钮模板最佳分数" in 行]
+        self.assertEqual(len(诊断), 1, 日志)
+        self.assertIn("0.612", 诊断[0])
+        self.assertIn("(180, 560)", 诊断[0])
+        self.assertIn("阈值0.75", 诊断[0])
+        截图 = list(Path(上下文.待命现场目录).glob("clan_entry_*活动按钮未找到.png"))
+        self.assertEqual(len(截图), 1)
+        self.assertRegex(截图[0].name, r"clan_entry_\d{8}_\d{6}_")
+
+    def test_真实模板匹配最佳分数低于阈值时仍不点(self):
+        游戏 = 模拟游戏()
+        任务, _, _, _, _ = 构造任务(游戏)
+        图 = np.zeros((600, 800, 3), np.uint8)
+        最佳 = 部落竞赛任务._模板最佳(任务, 图, "活动按钮")
+        if 最佳 is not None:
+            self.assertLess(最佳[0], 0.75)
+        self.assertIsNone(部落竞赛任务._匹配模板(任务, 图, "活动按钮"))
