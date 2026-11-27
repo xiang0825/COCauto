@@ -851,22 +851,6 @@ class 自动化机器人:
             上下文.置脚本状态("主世界资源收集未确认完成，停止后续进攻")
             上下文.页面恢复失败 = True
             return False
-        配兵设置 = getattr(上下文, "设置", None)
-        if (
-            not 主世界战斗选择页
-            and getattr(配兵设置, "是否自动配置军队", False)
-            and (
-                getattr(配兵设置, "配兵兵种", None)
-                or getattr(配兵设置, "配兵法术", None)
-                or getattr(配兵设置, "配兵攻城", "")
-                or getattr(配兵设置, "阵容预设", "自定义勾选") != "自定义勾选"
-            )
-        ):
-            # 勾选了兵种时，进攻前按勾选编辑军队；每次启动核对一次，之后
-            # 只在勾选变化时重配。失败只退出编辑页，照常用现有军队进攻。
-            if not 编辑军队任务(上下文).执行():
-                上下文.页面恢复失败 = True
-                return False
         主世界进攻次数 = 0
         资源未确认连续次数 = 0
         资源识别恢复轮数 = 0
@@ -888,6 +872,30 @@ class 自动化机器人:
                 return False
             if not self._打鱼间隙检查部落竞赛(上下文):
                 return False
+            配兵设置 = getattr(上下文, "设置", None)
+            有竞赛覆盖 = isinstance(
+                getattr(上下文, "_部落竞赛配兵配置覆盖", None), dict
+            )
+            if (
+                not 主世界战斗选择页
+                and (
+                    有竞赛覆盖
+                    or (
+                        getattr(配兵设置, "是否自动配置军队", False)
+                        and (
+                            getattr(配兵设置, "配兵兵种", None)
+                            or getattr(配兵设置, "配兵法术", None)
+                            or getattr(配兵设置, "配兵攻城", "")
+                            or getattr(配兵设置, "阵容预设", "自定义勾选") != "自定义勾选"
+                        )
+                    )
+                )
+            ):
+                # 每场进攻前核对军队配置：竞赛任务覆盖变化时立即切换，任务结束
+                # 后在这同一入口恢复设置中的基准阵容。
+                if not 编辑军队任务(上下文).执行():
+                    上下文.页面恢复失败 = True
+                    return False
             上下文._允许待校准快照落盘 = bool(
                 getattr(上下文, "_待校准资源快照", None)
             )

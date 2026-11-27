@@ -141,11 +141,27 @@ def 列表已打开(图像, 区: str = "兵种") -> bool:
 兵种人口 = {资料.名称: 资料.人口 for 资料 in 兵种资料.兵种列表 if 读取卡片模板(资料.名称)}
 
 
-def 期望配置(设置) -> dict | None:
+def 期望配置(设置, 配置覆盖: dict | None = None) -> dict | None:
     """把设置换算成 {分区: {单位: 权重或个数}}；未开启或没有内容返回 None。
 
     兵种给权重（按军营人口换算个数），法术给个数，攻城器械给 1 个。
     """
+    if isinstance(配置覆盖, dict):
+        覆盖 = {}
+        for 区, 单位 in 配置覆盖.items():
+            if not isinstance(单位, dict):
+                continue
+            清理 = {}
+            for 名, 数 in 单位.items():
+                try:
+                    数 = float(数)
+                except (TypeError, ValueError):
+                    continue
+                if 数 > 0:
+                    清理[str(名)] = 数
+            if 清理:
+                覆盖[str(区)] = 清理
+        return 覆盖 or None
     if not getattr(设置, "是否自动配置军队", False):
         return None
     预设名 = getattr(设置, "阵容预设", 预设.自定义) or 预设.自定义
@@ -180,9 +196,15 @@ class 编辑军队任务(基础任务):
     def __init__(self, 上下文: 任务上下文):
         super().__init__(上下文)
 
+    def _期望配置(self) -> dict | None:
+        return 期望配置(
+            getattr(self.上下文, "设置", None),
+            getattr(self.上下文, "_部落竞赛配兵配置覆盖", None),
+        )
+
     # ------------------------------------------------------------ 对外入口
     def 需要配置(self) -> bool:
-        配置 = 期望配置(getattr(self.上下文, "设置", None))
+        配置 = self._期望配置()
         if not 配置:
             return False
         签名 = 配置签名(配置)
@@ -210,11 +232,25 @@ class 编辑军队任务(基础任务):
 
     def 执行(self) -> bool:
         上下文 = self.上下文
+        配置覆盖 = getattr(上下文, "_部落竞赛配兵配置覆盖", None)
+        是否竞赛临时配置 = isinstance(配置覆盖, dict)
+        基准配置 = (
+            getattr(上下文, "_部落竞赛基准配兵配置", None)
+            or 期望配置(getattr(上下文, "设置", None))
+        )
         if not self.需要配置():
+            配置 = self._期望配置()
+            上下文._最近自动配兵执行结果 = {
+                "签名": 配置签名(配置), "成功": True, "已恢复": False,
+            }
             return True
         设置 = 上下文.设置
-        配置 = 期望配置(设置)
+        配置 = self._期望配置()
         签名 = 配置签名(配置)
+        竞赛关键单位 = getattr(上下文, "_竞赛配兵关键单位", {}) or {}
+        关键 = tuple(dict.fromkeys(
+            (*关键单位(设置), *(名 for 单位 in 竞赛关键单位.values() for 名 in 单位))
+        ))
         无模板 = [名 for 单位 in 配置.values() for 名 in 单位 if 读取卡片模板(名) is None]
         if 无模板:
             上下文.置脚本状态(
@@ -222,7 +258,7 @@ class 编辑军队任务(基础任务):
             )
         配置 = {区: {名: 值 for 名, 值 in 单位.items() if 名 not in 无模板} for 区, 单位 in 配置.items()}
         配置 = {区: 单位 for 区, 单位 in 配置.items() if 单位}
-        缺关键 = [名 for 名 in 关键单位(设置) if 名 in 无模板]
+        缺关键 = [名 for 名 in 关键 if 名 in 无模板]
         if not 配置 or 缺关键:
             上下文._本次运行已配兵签名 = 签名
             上下文.置脚本状态(
@@ -230,6 +266,9 @@ class 编辑军队任务(基础任务):
                 + (f"预设缺少关键兵种 {'、'.join(缺关键)} 的模板，" if 缺关键 else "勾选的单位都没有卡片模板，")
                 + "保持游戏里现有军队"
             )
+            上下文._最近自动配兵执行结果 = {"签名": 签名, "成功": False, "已恢复": False}
+            if 是否竞赛临时配置:
+                return self._恢复原配兵(基准配置, 签名, "临时配置缺少可识别的关键卡片")
             return True
 
         尝试 = dict(getattr(上下文, "_本次运行配兵尝试", {}) or {})
@@ -241,6 +280,7 @@ class 编辑军队任务(基础任务):
             + "；".join(f"{区}：{'、'.join(兵种资料.显示名(名) for 名 in 单位)}" for 区, 单位 in 配置.items())
         )
         try:
+            # 兵种区只认预设关键兵 + 竞赛[兵种]；各分区的竞赛关键单位由 _配置流程 按区取用。
             结果 = self._配置流程(配置, 关键单位(设置))
         except Exception as 异常:  # 任何异常都退出编辑页，交给刷资源继续
             上下文.置脚本状态(f"[警告] 自动配兵异常，保持当前军队：{异常}", 60)
@@ -251,6 +291,9 @@ class 编辑军队任务(基础任务):
             finally:
                 self._结束编辑状态()
         if 结果 is None:
+            上下文._最近自动配兵执行结果 = {"签名": 签名, "成功": False, "已恢复": False}
+            if 是否竞赛临时配置:
+                return self._恢复原配兵(基准配置, 签名, "临时配兵页面确认或配置失败")
             return not getattr(上下文, "页面恢复失败", False)
         人口 = 结果.get("人口")
         if "兵种" in 配置 and (not 人口 or 人口[0] < 人口[1] * 满员比例):
@@ -258,6 +301,9 @@ class 编辑军队任务(基础任务):
                 f"[警告] 自动配兵未填满军营（{人口[0] if 人口 else '?'}/{人口[1] if 人口 else '?'}），"
                 f"本次运行还会再试 {最多尝试次数 - 尝试[签名]} 次"
             )
+            上下文._最近自动配兵执行结果 = {"签名": 签名, "成功": False, "已恢复": False}
+            if 是否竞赛临时配置:
+                return self._恢复原配兵(基准配置, 签名, "临时配兵未达到军营容量确认阈值")
             return True
         上下文._本次运行已配兵签名 = 签名
         try:
@@ -267,6 +313,60 @@ class 编辑军队任务(基础任务):
             })
         except Exception:
             pass
+        上下文._最近自动配兵执行结果 = {"签名": 签名, "成功": True, "已恢复": False}
+        return True
+
+    def _恢复原配兵(self, 基准配置: dict | None, 失败签名: str, 原因: str) -> bool:
+        """竞赛临时阵容失败时最多重配一次基准阵容，不让半套军队进入战斗。"""
+        上下文 = self.上下文
+        任务键 = getattr(上下文, "_竞赛配兵任务键", "")
+        if not 基准配置:
+            上下文.页面恢复失败 = True
+            上下文.置脚本状态(
+                f"[严重] 部落竞赛配兵失败（{原因}），没有原配兵配置可回退；停止本场前的点击"
+            )
+            上下文._最近自动配兵执行结果 = {"签名": 失败签名, "成功": False, "已恢复": False}
+            return False
+
+        上下文.置脚本状态(f"[警告] 部落竞赛配兵失败（{原因}），安全恢复原配兵")
+        上下文._部落竞赛配兵配置覆盖 = None
+        上下文._竞赛配兵关键单位 = {}
+        上下文._部落竞赛配兵任务类型 = ""
+        上下文._竞赛配兵任务键 = ""
+        上下文._本次运行已配兵签名 = None
+        try:
+            恢复结果 = self._配置流程(基准配置, 关键单位(上下文.设置))
+        except Exception as 异常:
+            上下文.置脚本状态(f"[警告] 部落竞赛原配兵恢复异常：{异常}")
+            恢复结果 = None
+        finally:
+            try:
+                self._退出到主世界()
+            finally:
+                self._结束编辑状态()
+
+        人口 = 恢复结果.get("人口") if isinstance(恢复结果, dict) else None
+        if not 恢复结果 or ("兵种" in 基准配置 and (not 人口 or 人口[0] < 人口[1] * 满员比例)):
+            上下文.页面恢复失败 = True
+            上下文.置脚本状态("[严重] 原配兵恢复未通过页面/容量复核，停止进攻并保留当前画面")
+            上下文._最近自动配兵执行结果 = {"签名": 失败签名, "成功": False, "已恢复": False}
+            return False
+
+        基准签名 = 配置签名(基准配置)
+        上下文._本次运行已配兵签名 = 基准签名
+        上下文._竞赛配兵失败任务键 = 任务键
+        上下文._最近自动配兵执行结果 = {
+            "签名": 失败签名, "成功": False, "已恢复": True, "原配兵签名": 基准签名,
+        }
+        try:
+            上下文.数据库.更新状态(上下文.机器人标志, 状态类型, {
+                "预设": getattr(上下文.设置, "阵容预设", 预设.自定义),
+                "签名": 基准签名, "配置": 恢复结果["配置"], "人口": 恢复结果["人口"],
+                "分区容量": 恢复结果.get("分区容量"), "时间": int(time.time()),
+            })
+        except Exception:
+            pass
+        上下文.置脚本状态("部落竞赛临时配兵未应用，已复核恢复原配兵，继续打鱼")
         return True
 
     # ------------------------------------------------------------ 流程
@@ -281,9 +381,13 @@ class 编辑军队任务(基础任务):
         for 区 in ("兵种", "法术", "攻城"):
             if 区 not in 配置:
                 continue
-            结果 = self._配置分区(区, 配置[区], 关键 if 区 == "兵种" else ())
+            竞赛分区 = tuple(
+                (getattr(上下文, "_竞赛配兵关键单位", {}) or {}).get(区, ()) or ()
+            )
+            关键分区 = tuple(dict.fromkeys(tuple(关键 if 区 == "兵种" else ()) + 竞赛分区))
+            结果 = self._配置分区(区, 配置[区], 关键分区, 竞赛分区)
             if 结果 is None:
-                if 区 == "兵种":
+                if 区 == "兵种" or 关键分区:
                     return None
                 continue
             计划, 容量 = 结果
@@ -295,8 +399,14 @@ class 编辑军队任务(基础任务):
             兵种容量 = self._读取人口("兵种")
         return {"配置": 总计划, "人口": list(兵种容量) if 兵种容量 else None, "分区容量": 分区容量}
 
-    def _配置分区(self, 区: str, 单位: dict, 关键: tuple[str, ...]) -> tuple[dict, tuple] | None:
-        """一个分区：确认可用 → 清空 → 添加 → 复核。返回 (计划, 容量)；不动该分区时返回 None。"""
+    def _配置分区(
+        self, 区: str, 单位: dict, 关键: tuple[str, ...], 确认关键: tuple[str, ...] = (),
+    ) -> tuple[dict, tuple] | None:
+        """一个分区：确认可用 → 清空 → 添加 → 复核。返回 (计划, 容量)；不动该分区时返回 None。
+
+        确认关键：竞赛临时配兵要求的本分区单位，清空前必须已在计划中，添加时逐个单击并以容量变化确认；
+        预设关键兵只做可用性检查，仍走原批量添加路径。
+        """
         上下文 = self.上下文
         容量 = self._读取人口(区)
         if 容量 is None:
@@ -329,6 +439,12 @@ class 编辑军队任务(基础任务):
         if not 计划:
             上下文.置脚本状态(f"自动配兵：{区}容量 {上限} 放不下所选单位，{区}保持不动")
             return None
+        不在计划 = [名 for 名 in dict.fromkeys(确认关键) if 计划.get(名, 0) <= 0]
+        if 不在计划:
+            上下文.置脚本状态(
+                f"自动配兵：关键单位{'、'.join(不在计划)}不在{区}计划中，{区}保持不动"
+            )
+            return None
         上下文.置脚本状态(
             f"自动配兵计划（{区}）：" + "、".join(f"{兵种资料.显示名(名)}×{数}" for 名, 数 in 计划.items())
             + f"（容量 {上限}）"
@@ -341,10 +457,19 @@ class 编辑军队任务(基础任务):
         if not self._打开列表(区):
             上下文.置脚本状态(f"[警告] 自动配兵：{区}已清空，但列表没有打开，请在游戏里检查")
             return None
+        for 名 in dict.fromkeys(确认关键):
+            if not self._添加并确认关键单位(区, 名):
+                上下文.置脚本状态(f"自动配兵：关键单位{名}添加后未确认数量，停止{区}配置")
+                return None
+            计划[名] -= 1
+            if 计划[名] <= 0:
+                del 计划[名]
         if 分区表[区].批量点击:
-            self._添加兵种(计划, {名: 0 for 名 in 计划})
+            if 计划:
+                self._添加兵种(计划, {名: 0 for 名 in 计划})
         else:
-            self._逐个添加(区, 计划)
+            if 计划:
+                self._逐个添加(区, 计划)
         self._收起列表()
         容量 = self._读取人口(区)
         # 连续点击偶尔会丢几下：按剩余空位用计划内兵种补满（权重高的优先），最多补 3 轮。
@@ -411,6 +536,9 @@ class 编辑军队任务(基础任务):
 
     def _打开编辑页(self) -> bool:
         上下文 = self.上下文
+        if not self._确认主世界主页():
+            上下文.置脚本状态("自动配兵：未确认主世界主页，不点击战斗菜单")
+            return False
         if 上下文.点击(*锚定(主世界战斗菜单), 延时=900, 是否精确点击=True) is False:
             return False
         if not self._等待文字(编辑军队按钮OCR区域, ("編輯", "编辑", "軍隊", "军队")):
@@ -482,16 +610,62 @@ class 编辑军队任务(基础任务):
         return None
 
     # ------------------------------------------------------------ 列表
-    def _滑动列表(self, 起x: int, 终x: int, 时长毫秒=450):
+    def _已请求停止(self) -> bool:
+        事件 = getattr(self.上下文, "停止事件", None)
+        检查 = getattr(事件, "is_set", None)
+        return bool(callable(检查) and 检查())
+
+    def _读取当前列表容量(self, 区: str) -> tuple[int, int] | None:
+        """关键单位必须在仍打开列表时确认本分区容量确实增加。"""
+        return self._读取人口(区) if 区 == "兵种" else self._列表中容量(区)
+
+    def _添加并确认关键单位(self, 区: str, 名称: str) -> bool:
+        """逐次点击一个关键单位，以分区容量变化确认卡片输入被游戏接受。"""
+        上下文 = self.上下文
+        for _, 图 in self._逐页():
+            if self._已请求停止():
+                return False
+            找到 = 查找兵种卡片(图, 名称)
+            if not 找到:
+                continue
+            起始容量 = self._读取当前列表容量(区)
+            if not 起始容量 or 起始容量[0] >= 起始容量[1]:
+                return False
+            for _ in range(3):
+                if self._已请求停止():
+                    return False
+                (x, y), _ = 找到
+                if 上下文.点击(x, y, 延时=500, 是否精确点击=True) is False:
+                    return False
+                上下文.脚本延时(300)
+                当前容量 = self._读取当前列表容量(区)
+                if 当前容量 and 当前容量[0] > 起始容量[0]:
+                    上下文.置脚本状态(
+                        f"自动配兵：已确认关键单位{兵种资料.显示名(名称)}至少加入1个"
+                    )
+                    return True
+                图 = self._截图()
+                找到 = 查找兵种卡片(图, 名称)
+                if not 找到:
+                    break
+            return False
+        return False
+
+    def _滑动列表(self, 起x: int, 终x: int, 时长毫秒=450) -> bool:
+        if self._已请求停止():
+            return False
         设备 = self.上下文.设备
         a = 设备.参考坐标转设备坐标(起x, 列表滑动Y)
         b = 设备.参考坐标转设备坐标(终x, 列表滑动Y)
+        if self._已请求停止():
+            return False
         设备.执行(
             ["shell", "input", *设备._输入显示参数(), "swipe",
              str(a[0]), str(a[1]), str(b[0]), str(b[1]), str(时长毫秒)],
             timeout=10,
         )
         self.上下文.脚本延时(900)
+        return not self._已请求停止()
 
     def _打开列表(self, 区: str = "兵种") -> bool:
         """在编辑页主页面点分区（满员时点卡片区，空时点“点击以编辑”）打开底部列表。"""
@@ -503,11 +677,50 @@ class 编辑军队任务(基础任务):
                 return False
         return 列表已打开(self._截图(), 区)
 
+    def 检查可用单位(self, 目标单位: dict[str, list[str] | tuple[str, ...]]) -> dict[str, set[str]]:
+        """只读扫描编辑页里的已解锁卡片，不清空、不添加或修改任何单位。"""
+        上下文 = self.上下文
+        可用 = {}
+        try:
+            if not self._确认主世界主页():
+                上下文.置脚本状态("部落竞赛配兵预检：未确认主世界主页，不进入军队页")
+                return 可用
+            if not self._打开编辑页():
+                上下文.置脚本状态("部落竞赛配兵预检：编辑军队页未确认，本轮动态任务关闭")
+                return 可用
+            for 区 in ("兵种", "法术", "攻城"):
+                名称列表 = list(dict.fromkeys(map(str, (目标单位 or {}).get(区, ()))))
+                if not 名称列表:
+                    continue
+                if not self._打开列表(区):
+                    上下文.置脚本状态(f"部落竞赛配兵预检：{区}列表未确认")
+                    可用[区] = set()
+                    continue
+                可用[区] = set(self._扫描可用(区, 名称列表))
+                self._收起列表()
+            return 可用
+        except Exception as 异常:
+            上下文.置脚本状态(f"部落竞赛配兵预检异常，相关任务不接：{异常}")
+            return {}
+        finally:
+            try:
+                self._退出到主世界()
+                if not self._确认主世界主页():
+                    可用.clear()
+                    上下文.置脚本状态("部落竞赛配兵预检后未确认回到主世界，禁用动态配兵")
+            except Exception as 异常:
+                可用.clear()
+                上下文.置脚本状态(f"部落竞赛配兵预检退出失败：{异常}")
+            finally:
+                self._结束编辑状态()
+
     def _打开兵种列表(self) -> bool:  # 兼容旧调用
         return self._打开列表("兵种")
 
     def _收起列表(self):
         """返回键收起底部列表，回到编辑页主页面（实机：返回键只收列表，不关编辑页）。"""
+        if self._已请求停止():
+            return
         try:
             self.上下文.键盘.按键按压("esc")
         except Exception:
@@ -517,18 +730,24 @@ class 编辑军队任务(基础任务):
     def _逐页(self, 最多页数=8):
         """先滑到最左，再逐页右滑；每页产出 (页序号, 截图)。列表不再变化时停止。"""
         for _ in range(4):
-            self._滑动列表(150, 750, 250)
+            if self._已请求停止() or not self._滑动列表(150, 750, 250):
+                return
         上一张 = None
         for 页 in range(最多页数):
+            if self._已请求停止():
+                return
             图 = self._截图()
             yield 页, 图
+            if self._已请求停止():
+                return
             if 上一张 is not None:
                 x1, y1, x2, y2 = 兵种列表区域
                 差异 = np.abs(图[y1:y2, x1:x2].astype(np.int16) - 上一张[y1:y2, x1:x2].astype(np.int16)).mean()
                 if 差异 < 2:
                     return
             上一张 = 图
-            self._滑动列表(600, 300)
+            if not self._滑动列表(600, 300):
+                return
 
     def _扫描可用(self, 区: str, 名称列表: list[str]) -> list[str]:
         可用 = set()
@@ -543,22 +762,28 @@ class 编辑军队任务(基础任务):
         return {名: 0 for 名 in 可用}, {名: 兵种资料.人口(名) for 名 in 可用}
 
     def _添加兵种(self, 计划: dict[str, int], 位置: dict[str, int]):
-        """逐页找到卡片后连续点击添加；每批 31 个 + 1 下补偿（输入层上限 32），每批后复核卡片位置。"""
+        """逐页找到卡片后小批连续点击；每批至多3个 + 1下补偿并检查停止事件。"""
         上下文 = self.上下文
         剩余 = dict(计划)
         for _, 图 in self._逐页():
+            if self._已请求停止():
+                return
             for 兵种 in [名 for 名, 数 in 剩余.items() if 数 > 0]:
                 找到 = 查找兵种卡片(图, 兵种)
                 while 找到 and 剩余[兵种] > 0:
+                    if self._已请求停止():
+                        return
                     (x, y), _ = 找到
-                    本批 = min(31, 剩余[兵种])
+                    本批 = min(3, 剩余[兵种])
                     # 实机：每批连续点击的第一下不会被编辑页接收（3 批就少 3 个），
-                    # 所以每批多点一下。军营满员后游戏不会再加兵，多点不会超员。
+                    # 所以每批至多多点一下；小批之间可立即响应停止事件。
                     if 上下文.鼠标.连续点击(x, y, 本批 + 1, 间隔毫秒=90) is False:
                         上下文.置脚本状态(f"自动配兵：添加{兵种资料.显示名(兵种)}被输入层拒绝，停止添加")
                         return
                     剩余[兵种] -= 本批
                     上下文.脚本延时(300)
+                    if self._已请求停止():
+                        return
                     # 添加后卡片可能变灰或列表重排，重新截图定位再继续。
                     图 = self._截图()
                     找到 = 查找兵种卡片(图, 兵种)
@@ -651,16 +876,24 @@ class 编辑军队任务(基础任务):
         确认框还开着时 X 会被点击护栏拦下，此时返回键先关确认框（等同“取消”）。
         """
         上下文 = self.上下文
+        if self._已请求停止():
+            return
         文本 = self._OCR文本(self._截图(), 编辑页标题OCR区域)
         if any(字 in 文本 for 字 in 编辑页标题关键字):
+            if self._已请求停止():
+                return
             上下文.点击(*关闭按钮, 延时=900, 是否精确点击=True)
         for _ in range(5):
+            if self._已请求停止():
+                return
             识别 = getattr(上下文, "识别点击画面", None)
             try:
                 结果 = 识别(强制=True) if callable(识别) else None
             except Exception:
                 结果 = None
             if getattr(结果, "页面", "") == "主世界主页":
+                return
+            if self._已请求停止():
                 return
             try:
                 上下文.键盘.按键按压("esc")
