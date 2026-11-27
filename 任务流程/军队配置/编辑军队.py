@@ -443,10 +443,22 @@ class 编辑军队任务(基础任务):
         if not self._打开列表(区):
             上下文.置脚本状态(f"[警告] 自动配兵：{区}已清空，但列表没有打开，请在游戏里检查")
             return None
+        for 名 in dict.fromkeys(关键):
+            if 计划.get(名, 0) <= 0:
+                上下文.置脚本状态(f"自动配兵：关键单位{名}不在{区}计划中，停止临时配置")
+                return None
+            if not self._添加并确认关键单位(区, 名):
+                上下文.置脚本状态(f"自动配兵：关键单位{名}添加后未确认数量，停止{区}配置")
+                return None
+            计划[名] -= 1
+            if 计划[名] <= 0:
+                del 计划[名]
         if 分区表[区].批量点击:
-            self._添加兵种(计划, {名: 0 for 名 in 计划})
+            if 计划:
+                self._添加兵种(计划, {名: 0 for 名 in 计划})
         else:
-            self._逐个添加(区, 计划)
+            if 计划:
+                self._逐个添加(区, 计划)
         self._收起列表()
         容量 = self._读取人口(区)
         # 连续点击偶尔会丢几下：按剩余空位用计划内兵种补满（权重高的优先），最多补 3 轮。
@@ -513,6 +525,9 @@ class 编辑军队任务(基础任务):
 
     def _打开编辑页(self) -> bool:
         上下文 = self.上下文
+        if not self._确认主世界主页():
+            上下文.置脚本状态("自动配兵：未确认主世界主页，不点击战斗菜单")
+            return False
         if 上下文.点击(*锚定(主世界战斗菜单), 延时=900, 是否精确点击=True) is False:
             return False
         if not self._等待文字(编辑军队按钮OCR区域, ("編輯", "编辑", "軍隊", "军队")):
@@ -584,16 +599,62 @@ class 编辑军队任务(基础任务):
         return None
 
     # ------------------------------------------------------------ 列表
-    def _滑动列表(self, 起x: int, 终x: int, 时长毫秒=450):
+    def _已请求停止(self) -> bool:
+        事件 = getattr(self.上下文, "停止事件", None)
+        检查 = getattr(事件, "is_set", None)
+        return bool(callable(检查) and 检查())
+
+    def _读取当前列表容量(self, 区: str) -> tuple[int, int] | None:
+        """关键单位必须在仍打开列表时确认本分区容量确实增加。"""
+        return self._读取人口(区) if 区 == "兵种" else self._列表中容量(区)
+
+    def _添加并确认关键单位(self, 区: str, 名称: str) -> bool:
+        """逐次点击一个关键单位，以分区容量变化确认卡片输入被游戏接受。"""
+        上下文 = self.上下文
+        for _, 图 in self._逐页():
+            if self._已请求停止():
+                return False
+            找到 = 查找兵种卡片(图, 名称)
+            if not 找到:
+                continue
+            起始容量 = self._读取当前列表容量(区)
+            if not 起始容量 or 起始容量[0] >= 起始容量[1]:
+                return False
+            for _ in range(3):
+                if self._已请求停止():
+                    return False
+                (x, y), _ = 找到
+                if 上下文.点击(x, y, 延时=500, 是否精确点击=True) is False:
+                    return False
+                上下文.脚本延时(300)
+                当前容量 = self._读取当前列表容量(区)
+                if 当前容量 and 当前容量[0] > 起始容量[0]:
+                    上下文.置脚本状态(
+                        f"自动配兵：已确认关键单位{兵种资料.显示名(名称)}至少加入1个"
+                    )
+                    return True
+                图 = self._截图()
+                找到 = 查找兵种卡片(图, 名称)
+                if not 找到:
+                    break
+            return False
+        return False
+
+    def _滑动列表(self, 起x: int, 终x: int, 时长毫秒=450) -> bool:
+        if self._已请求停止():
+            return False
         设备 = self.上下文.设备
         a = 设备.参考坐标转设备坐标(起x, 列表滑动Y)
         b = 设备.参考坐标转设备坐标(终x, 列表滑动Y)
+        if self._已请求停止():
+            return False
         设备.执行(
             ["shell", "input", *设备._输入显示参数(), "swipe",
              str(a[0]), str(a[1]), str(b[0]), str(b[1]), str(时长毫秒)],
             timeout=10,
         )
         self.上下文.脚本延时(900)
+        return not self._已请求停止()
 
     def _打开列表(self, 区: str = "兵种") -> bool:
         """在编辑页主页面点分区（满员时点卡片区，空时点“点击以编辑”）打开底部列表。"""
@@ -647,6 +708,8 @@ class 编辑军队任务(基础任务):
 
     def _收起列表(self):
         """返回键收起底部列表，回到编辑页主页面（实机：返回键只收列表，不关编辑页）。"""
+        if self._已请求停止():
+            return
         try:
             self.上下文.键盘.按键按压("esc")
         except Exception:
@@ -656,18 +719,24 @@ class 编辑军队任务(基础任务):
     def _逐页(self, 最多页数=8):
         """先滑到最左，再逐页右滑；每页产出 (页序号, 截图)。列表不再变化时停止。"""
         for _ in range(4):
-            self._滑动列表(150, 750, 250)
+            if self._已请求停止() or not self._滑动列表(150, 750, 250):
+                return
         上一张 = None
         for 页 in range(最多页数):
+            if self._已请求停止():
+                return
             图 = self._截图()
             yield 页, 图
+            if self._已请求停止():
+                return
             if 上一张 is not None:
                 x1, y1, x2, y2 = 兵种列表区域
                 差异 = np.abs(图[y1:y2, x1:x2].astype(np.int16) - 上一张[y1:y2, x1:x2].astype(np.int16)).mean()
                 if 差异 < 2:
                     return
             上一张 = 图
-            self._滑动列表(600, 300)
+            if not self._滑动列表(600, 300):
+                return
 
     def _扫描可用(self, 区: str, 名称列表: list[str]) -> list[str]:
         可用 = set()
@@ -682,22 +751,28 @@ class 编辑军队任务(基础任务):
         return {名: 0 for 名 in 可用}, {名: 兵种资料.人口(名) for 名 in 可用}
 
     def _添加兵种(self, 计划: dict[str, int], 位置: dict[str, int]):
-        """逐页找到卡片后连续点击添加；每批 31 个 + 1 下补偿（输入层上限 32），每批后复核卡片位置。"""
+        """逐页找到卡片后小批连续点击；每批至多3个 + 1下补偿并检查停止事件。"""
         上下文 = self.上下文
         剩余 = dict(计划)
         for _, 图 in self._逐页():
+            if self._已请求停止():
+                return
             for 兵种 in [名 for 名, 数 in 剩余.items() if 数 > 0]:
                 找到 = 查找兵种卡片(图, 兵种)
                 while 找到 and 剩余[兵种] > 0:
+                    if self._已请求停止():
+                        return
                     (x, y), _ = 找到
-                    本批 = min(31, 剩余[兵种])
+                    本批 = min(3, 剩余[兵种])
                     # 实机：每批连续点击的第一下不会被编辑页接收（3 批就少 3 个），
-                    # 所以每批多点一下。军营满员后游戏不会再加兵，多点不会超员。
+                    # 所以每批至多多点一下；小批之间可立即响应停止事件。
                     if 上下文.鼠标.连续点击(x, y, 本批 + 1, 间隔毫秒=90) is False:
                         上下文.置脚本状态(f"自动配兵：添加{兵种资料.显示名(兵种)}被输入层拒绝，停止添加")
                         return
                     剩余[兵种] -= 本批
                     上下文.脚本延时(300)
+                    if self._已请求停止():
+                        return
                     # 添加后卡片可能变灰或列表重排，重新截图定位再继续。
                     图 = self._截图()
                     找到 = 查找兵种卡片(图, 兵种)
@@ -790,16 +865,24 @@ class 编辑军队任务(基础任务):
         确认框还开着时 X 会被点击护栏拦下，此时返回键先关确认框（等同“取消”）。
         """
         上下文 = self.上下文
+        if self._已请求停止():
+            return
         文本 = self._OCR文本(self._截图(), 编辑页标题OCR区域)
         if any(字 in 文本 for 字 in 编辑页标题关键字):
+            if self._已请求停止():
+                return
             上下文.点击(*关闭按钮, 延时=900, 是否精确点击=True)
         for _ in range(5):
+            if self._已请求停止():
+                return
             识别 = getattr(上下文, "识别点击画面", None)
             try:
                 结果 = 识别(强制=True) if callable(识别) else None
             except Exception:
                 结果 = None
             if getattr(结果, "页面", "") == "主世界主页":
+                return
+            if self._已请求停止():
                 return
             try:
                 上下文.键盘.按键按压("esc")

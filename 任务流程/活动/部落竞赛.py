@@ -1466,14 +1466,22 @@ class 部落竞赛任务(基础任务):
             self._日志(f"当前任务进度 {self._进度[0]}/{self._进度[1]} 已完成，立即挑选新任务")
         elif self._存在进行中任务(面板["图像"], 项列表):
             记录 = self._读状态()
-            当前类型 = self._记录任务类型(记录)
-            当前文本 = str(记录.get("当前任务文本", "") or 记录.get("当前任务", ""))
-            self._当前任务类型 = 当前类型
-            self._当前任务文本 = 当前文本
-            if 当前类型 in {"拆墙", "指定兵种"}:
-                self._同步竞赛配兵(当前类型, 当前文本)
+            缓存类型 = self._记录任务类型(记录)
+            缓存文本 = str(记录.get("当前任务文本", "") or "")
+            当前文本 = self._读取当前任务卡文本(项列表)
+            if not 当前文本 or not 缓存文本 or not self._任务卡文本匹配(当前文本, 缓存文本):
+                self._当前任务类型 = ""
+                self._当前任务文本 = 当前文本 or ""
+                原因 = "进行中任务卡文本无法确认" if not 当前文本 else "进行中任务卡与缓存不一致"
+                self._清除竞赛配兵(原因)
+                self._日志(f"{原因}，不沿用缓存任务类型")
             else:
-                self._清除竞赛配兵("当前任务不是受支持的动态配兵任务")
+                self._当前任务类型 = 缓存类型
+                self._当前任务文本 = 当前文本
+                if 缓存类型 in {"拆墙", "指定兵种"}:
+                    self._同步竞赛配兵(缓存类型, 当前文本)
+                else:
+                    self._清除竞赛配兵("当前任务不是受支持的动态配兵任务")
             进度说明 = f"（进度 {self._进度[0]}/{self._进度[1]}）" if self._进度 else ""
             self._日志(f"已有进行中的任务{进度说明}，交给打鱼完成")
             return "已有任务"
@@ -1561,6 +1569,50 @@ class 部落竞赛任务(基础任务):
             return None
         _, _, 当前, 目标 = min(候选)
         return 当前, 目标
+
+    def _读取当前任务卡文本(self, 项列表: list[文字项]) -> str | None:
+        """用进度文字定位进行中卡，再只拼接该卡内OCR文字；读不到时不猜缓存任务。"""
+        卡片区 = self.配置.get("面板", {}).get("卡片区ROI")
+        if not 卡片区:
+            return None
+        进度项 = []
+        for 项 in 区域文字(项列表, 卡片区):
+            匹配 = re.fullmatch(r"(\d{1,5})/(\d{1,5})", 项.规范)
+            if not 匹配:
+                continue
+            当前, 目标 = int(匹配.group(1)), int(匹配.group(2))
+            if 目标 >= 1 and 当前 <= 目标:
+                进度项.append(项)
+        if not 进度项:
+            return None
+        活动进度 = min(进度项, key=lambda 项: (项.中心[1], 项.中心[0]))
+        页面 = self.配置.get("面板", {}).get("页") or []
+        卡心 = [tuple(map(int, 点)) for 点 in (页面[0].get("卡片", []) if 页面 else [])]
+        if not 卡心:
+            return None
+        进度x, 进度y = 活动进度.中心
+        卡心x, 卡心y = min(
+            卡心,
+            key=lambda 点: abs(点[0] - 进度x) + abs(点[1] - 进度y),
+        )
+        半宽 = int(self.配置.get("面板", {}).get("卡片文本半宽", 55))
+        半高 = int(self.配置.get("面板", {}).get("卡片文本半高", 70))
+        卡内文字 = []
+        for 项 in 区域文字(项列表, 卡片区):
+            if 项 is 活动进度 or re.fullmatch(r"\d{1,5}/\d{1,5}", 项.规范):
+                continue
+            if 解析积分([项]) is not None:
+                continue
+            x, y = 项.中心
+            if abs(x - 卡心x) <= 半宽 and abs(y - 卡心y) <= 半高:
+                卡内文字.append(项)
+        文本 = 拼接文本(sorted(卡内文字, key=lambda 项: (项.中心[1], 项.中心[0])))
+        return 文本 or None
+
+    def _任务卡文本匹配(self, 当前文本: str, 缓存文本: str) -> bool:
+        当前 = 规范文本(纠正OCR文本(当前文本, self.配置))
+        缓存 = 规范文本(纠正OCR文本(缓存文本, self.配置))
+        return bool(当前 and 缓存 and 当前 == 缓存)
 
     def _存在进行中任务(self, 图像, 项列表: list[文字项]) -> bool:
         卡片区 = self.配置.get("面板", {}).get("卡片区ROI")

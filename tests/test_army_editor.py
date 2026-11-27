@@ -6,6 +6,7 @@ m3/s1/s2 军营满员时的灰色卡列表；g3/w1 军营清空后的彩色卡�
 """
 
 import os
+import threading
 import unittest
 import unittest.mock
 from types import SimpleNamespace
@@ -178,6 +179,130 @@ class 流程分支测试(unittest.TestCase):
         self.assertEqual(上下文._本次运行已配兵签名, "兵种:超级哥布林6")
         上下文.数据库.更新状态.assert_called_once()
         self.assertFalse(任务.需要配置())
+
+    def test_竞赛关键单位计数未确认时分区配置失败(self):
+        上下文 = SimpleNamespace(置脚本状态=Mock())
+        任务 = object.__new__(编.编辑军队任务)
+        任务.上下文 = 上下文
+        任务._读取人口 = Mock(return_value=(0, 10))
+        任务._打开列表 = Mock(return_value=True)
+        任务._扫描可用 = Mock(return_value=["炸弹人"])
+        任务._收起列表 = Mock()
+        任务._清空分区 = Mock(return_value=True)
+        任务._添加并确认关键单位 = Mock(return_value=False)
+        任务._添加兵种 = Mock()
+
+        结果 = 任务._配置分区("兵种", {"炸弹人": 1}, ("炸弹人",))
+
+        self.assertIsNone(结果)
+        任务._添加并确认关键单位.assert_called_once_with("兵种", "炸弹人")
+        任务._添加兵种.assert_not_called()
+
+    def test_关键单位点击后容量未增加不确认且容量增加才成功(self):
+        for 容量序列, 期望结果, 点击次数 in (
+            ([(0, 10), (0, 10), (0, 10), (0, 10)], False, 3),
+            ([(0, 10), (0, 10), (2, 10)], True, 2),
+        ):
+            with self.subTest(期望结果=期望结果):
+                上下文 = SimpleNamespace(
+                    停止事件=None, 点击=Mock(return_value=True), 脚本延时=Mock(), 置脚本状态=Mock(),
+                    op=SimpleNamespace(
+                        获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), np.uint8))
+                    ),
+                )
+                任务 = object.__new__(编.编辑军队任务)
+                任务.上下文 = 上下文
+                任务._逐页 = Mock(return_value=iter([(0, np.zeros((600, 800, 3), np.uint8))]))
+                任务._读取当前列表容量 = Mock(side_effect=容量序列)
+                with unittest.mock.patch.object(编, "查找兵种卡片", return_value=((100, 400), 0.99)):
+                    self.assertEqual(任务._添加并确认关键单位("兵种", "炸弹人"), 期望结果)
+                self.assertEqual(上下文.点击.call_count, 点击次数)
+
+
+    def test_连续点击改为小批且每批间检查停止(self):
+        停止事件 = threading.Event()
+        上下文 = SimpleNamespace(
+            停止事件=停止事件,
+            鼠标=SimpleNamespace(连续点击=Mock(side_effect=lambda *a, **k: (停止事件.set() or True))),
+            置脚本状态=Mock(), 脚本延时=Mock(),
+        )
+        任务 = object.__new__(编.编辑军队任务)
+        任务.上下文 = 上下文
+        任务._逐页 = Mock(return_value=iter([(0, np.zeros((600, 800, 3), np.uint8))]))
+        任务._截图 = Mock(return_value=np.zeros((600, 800, 3), np.uint8))
+        with unittest.mock.patch.object(编, "查找兵种卡片", return_value=((100, 400), 0.99)):
+            任务._添加兵种({"野蛮人": 20}, {})
+
+        上下文.鼠标.连续点击.assert_called_once()
+        self.assertLessEqual(上下文.鼠标.连续点击.call_args.args[2], 4)
+
+    def test_停止后不再滑动列表或发送退出输入(self):
+        停止事件 = threading.Event()
+        停止事件.set()
+        上下文 = SimpleNamespace(
+            停止事件=停止事件,
+            设备=SimpleNamespace(
+                参考坐标转设备坐标=Mock(side_effect=[(0, 0), (1, 1)]),
+                _输入显示参数=Mock(return_value=[]), 执行=Mock(),
+            ),
+            键盘=SimpleNamespace(按键按压=Mock()),
+            点击=Mock(), 脚本延时=Mock(),
+        )
+        任务 = object.__new__(编.编辑军队任务)
+        任务.上下文 = 上下文
+        任务._截图 = Mock()
+
+        self.assertFalse(任务._滑动列表(150, 750))
+        任务._退出到主世界()
+
+        上下文.设备.执行.assert_not_called()
+        上下文.点击.assert_not_called()
+        上下文.键盘.按键按压.assert_not_called()
+        任务._截图.assert_not_called()
+
+    def test_列表翻页间收到停止后不继续滑动(self):
+        停止事件 = threading.Event()
+        上下文 = SimpleNamespace(停止事件=停止事件)
+        任务 = object.__new__(编.编辑军队任务)
+        任务.上下文 = 上下文
+        任务._滑动列表 = Mock(side_effect=lambda *a: (停止事件.set() or True))
+        任务._截图 = Mock()
+
+        self.assertEqual(list(任务._逐页()), [])
+
+        任务._滑动列表.assert_called_once()
+        任务._截图.assert_not_called()
+
+    def test_退出截图期间收到停止后不点X或按ESC(self):
+        停止事件 = threading.Event()
+        上下文 = SimpleNamespace(
+            停止事件=停止事件,
+            点击=Mock(), 键盘=SimpleNamespace(按键按压=Mock()),
+        )
+        任务 = object.__new__(编.编辑军队任务)
+        任务.上下文 = 上下文
+        任务._截图 = Mock(side_effect=lambda: (停止事件.set() or None))
+        任务._OCR文本 = Mock(return_value="我的军队")
+
+        任务._退出到主世界()
+
+        上下文.点击.assert_not_called()
+        上下文.键盘.按键按压.assert_not_called()
+
+    def test_进入编辑页前必须确认主世界主页(self):
+        上下文 = SimpleNamespace(
+            点击=Mock(return_value=True), 置脚本状态=Mock(),
+            op=SimpleNamespace(获取屏幕图像cv=Mock()),
+        )
+        任务 = object.__new__(编.编辑军队任务)
+        任务.上下文 = 上下文
+        任务._确认主世界主页 = Mock(return_value=False)
+        任务._等待文字 = Mock(return_value=True)
+
+        self.assertFalse(任务._打开编辑页())
+
+        任务._确认主世界主页.assert_called_once_with()
+        上下文.点击.assert_not_called()
 
     def test_法术容量已满就停止逐个添加(self):
         任务, 上下文 = self._任务()

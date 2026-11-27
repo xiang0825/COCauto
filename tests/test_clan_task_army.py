@@ -3,9 +3,10 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from 数据库.任务数据库 import 机器人设置
-from 任务流程.活动.部落竞赛 import 加载配置, 部落竞赛任务, 识别任务类型
+from 任务流程.活动.部落竞赛 import 加载配置, 部落竞赛任务, 文字项, 识别任务类型
 from 任务流程.活动.竞赛配兵策略 import 构建任务配兵
 from 任务流程.主世界打鱼.进攻 import 进攻任务
+from 任务流程.主世界打鱼.进攻坐标逻辑计算 import 坐标
 
 
 class 竞赛配兵方案测试(unittest.TestCase):
@@ -158,6 +159,123 @@ class 竞赛配兵方案测试(unittest.TestCase):
         上下文.置脚本状态.reset_mock()
         任务._记录竞赛要求单位部署结果(上下文, 兵栏)
         上下文.置脚本状态.assert_not_called()
+
+    def test_没有资源目标时竞赛关键单位仍走安全落点并记录(self):
+        任务 = object.__new__(进攻任务)
+        上下文 = SimpleNamespace(
+            设置=SimpleNamespace(是否自动配兵=False, 是否自动配置军队=False, 下兵间隔毫秒=25),
+            _部落竞赛配兵任务类型="指定兵种",
+            _竞赛配兵关键单位={"兵种": ["炸弹人"]},
+            当前兵栏清单=[
+                {"槽位": 1, "类别": "兵种", "数量": 1, "区域": (0, 0, 10, 10), "名称": "兵种_炸弹人.bmp"},
+                {"槽位": 2, "类别": "兵种", "数量": 20, "区域": (10, 0, 20, 10), "名称": "兵种_弓箭手.bmp"},
+            ],
+            _本场已部署槽位={1},
+            op=SimpleNamespace(获取屏幕图像cv=lambda *a, **k: None),
+            点击=Mock(return_value=True),
+            置脚本状态=Mock(),
+        )
+        任务.准备可下兵区域 = Mock()
+        任务.阵营中心 = Mock(return_value=(400, 300))
+        任务.生成可下兵候选点 = Mock(return_value=[(400, 490)])
+        任务.记录可下兵点标记 = Mock()
+        任务.是否为灰色图片 = Mock(return_value=False)
+        任务.战斗是否仍在进行 = Mock(return_value=True)
+        任务.刷新选中兵种后的下兵边界 = Mock()
+        任务.复核兵栏槽位选择 = Mock(return_value=True)
+        任务.尝试下兵至可用位置 = Mock(return_value=(True, (400, 490)))
+        任务._记录实际下兵反馈 = Mock()
+        任务._记录竞赛要求单位部署结果 = Mock()
+
+        任务.执行下兵流程(上下文, [])
+
+        任务.尝试下兵至可用位置.assert_called_once()
+        self.assertEqual(任务.尝试下兵至可用位置.call_args.args[2], 坐标(400, 300))
+        self.assertEqual(任务.尝试下兵至可用位置.call_args.args[1]["槽位"], 1)
+        self.assertTrue(any("没有有效资源目标" in 调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list))
+        任务._记录竞赛要求单位部署结果.assert_called_once()
+        self.assertEqual(
+            [项["槽位"] for 项 in 任务._记录竞赛要求单位部署结果.call_args.args[1]], [1]
+        )
+
+    def test_进行中卡片与缓存不一致或无法确认时清除临时配兵(self):
+        原文本 = "在1场多人对战中赢得1颗胜利之星，至少需使用亡灵x1"
+        for 当前卡文本 in (
+            "在1场多人对战中赢得1颗胜利之星，至少需使用气球兵x1",
+            None,
+        ):
+            with self.subTest(当前卡文本=当前卡文本):
+                记录 = {"当前任务类型": "指定兵种", "当前任务文本": 原文本}
+                上下文 = SimpleNamespace(
+                    设置=机器人设置(是否自动配置军队=True),
+                    数据库=SimpleNamespace(
+                        获取最新完整状态=lambda _: SimpleNamespace(状态数据={"部落竞赛检查记录": dict(记录)})
+                    ),
+                    机器人标志="r",
+                    _部落竞赛配兵配置覆盖={"兵种": {"苍蝇": 1}},
+                    _竞赛配兵关键单位={"兵种": ["苍蝇"]},
+                    _竞赛配兵任务键="指定兵种:旧任务",
+                    _部落竞赛配兵任务类型="指定兵种",
+                    置脚本状态=Mock(),
+                )
+                任务 = object.__new__(部落竞赛任务)
+                任务.上下文 = 上下文
+                任务._配置 = 加载配置()
+                任务.数据库 = 上下文.数据库
+                任务.机器人标志 = "r"
+                任务._截止 = 0
+                任务._时钟 = lambda: 0
+                任务._本次进攻前 = False
+                任务._存在进行中任务 = Mock(return_value=True)
+                任务._读取进度 = Mock(return_value=(0, 1))
+                任务._同步竞赛配兵 = Mock(return_value=True)
+                任务._进度 = None
+                任务卡文字项 = [文字项("0/1", (329, 223, 357, 241))]
+                if 当前卡文本:
+                    任务卡文字项.append(文字项(当前卡文本, (280, 145, 410, 181)))
+
+                self.assertEqual(任务._处理面板({"文字": 任务卡文字项, "图像": None}), "已有任务")
+
+                self.assertIsNone(上下文._部落竞赛配兵配置覆盖)
+                self.assertEqual(上下文._竞赛配兵关键单位, {})
+                任务._同步竞赛配兵.assert_not_called()
+
+    def test_进行中任务卡与缓存完全一致时按已确认任务同步(self):
+        文本 = "在1场多人对战中赢得1颗胜利之星，至少需使用亡灵x1"
+        记录 = {"当前任务类型": "指定兵种", "当前任务文本": 文本}
+        上下文 = SimpleNamespace(
+            设置=机器人设置(是否自动配置军队=True),
+            数据库=SimpleNamespace(
+                获取最新完整状态=lambda _: SimpleNamespace(状态数据={"部落竞赛检查记录": dict(记录)})
+            ),
+            机器人标志="r",
+            _部落竞赛配兵配置覆盖={"兵种": {"苍蝇": 1}},
+            _竞赛配兵关键单位={"兵种": ["苍蝇"]},
+            _竞赛配兵任务键="指定兵种:当前任务",
+            _部落竞赛配兵任务类型="指定兵种",
+            置脚本状态=Mock(),
+        )
+        任务 = object.__new__(部落竞赛任务)
+        任务.上下文 = 上下文
+        任务.数据库 = 上下文.数据库
+        任务.机器人标志 = "r"
+        任务._配置 = 加载配置()
+        任务._截止 = 0
+        任务._时钟 = lambda: 0
+        任务._本次进攻前 = False
+        任务._存在进行中任务 = Mock(return_value=True)
+        任务._读取进度 = Mock(return_value=(0, 1))
+        任务._同步竞赛配兵 = Mock(return_value=True)
+        任务卡文字项 = [
+            文字项("0/1", (329, 223, 357, 241)),
+            文字项(文本, (280, 145, 410, 181)),
+            文字项("另一个任务文本", (475, 145, 610, 181)),
+        ]
+
+        self.assertEqual(任务._处理面板({"文字": 任务卡文字项, "图像": None}), "已有任务")
+
+        任务._同步竞赛配兵.assert_called_once_with("指定兵种", 文本)
+        self.assertIsNotNone(上下文._部落竞赛配兵配置覆盖)
 
 
 if __name__ == "__main__":
