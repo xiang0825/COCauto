@@ -95,11 +95,10 @@ class 快照读取测试(unittest.TestCase):
         self.assertEqual(兵种, {"单位": {"雷龙": 8, "气球兵": 22, "弓箭手": 2}, "容量": [352, 352]})
         法术, _ = 任务._读取分区阵容("法术")
         self.assertEqual(法术["单位"], {"闪电法术": 11})
-        # 攻城区实机差距只有 0.047（攻城气球/攻城飞艇），按 0.08 要求认不准就拒绝，并把分数写进原因。
+        # 实机卡片比标准模板小；加入更小尺度后应能从气球/飞艇近似模板中认出攻城气球。
         攻城, 原因 = 任务._读取分区阵容("攻城")
-        self.assertIsNone(攻城)
-        self.assertIn("攻城气球=", 原因)
-        self.assertIn("std=", 原因)
+        self.assertEqual(原因, "")
+        self.assertEqual(攻城, {"单位": {"攻城气球": 1}, "容量": [1, 3]})
         日志 = " ".join(c.args[0] for c in 任务.上下文.置脚本状态.call_args_list)
         self.assertIn("阵容识别明细（兵种）", 日志)
 
@@ -528,7 +527,7 @@ class 不可用单位与连续失败测试(unittest.TestCase):
 
 
 class 复审其它项测试(unittest.TestCase):
-    def test_攻城区识别不确定只放弃攻城区(self):
+    def test_攻城区识别不确定仍替换任务要求并记录不确定快照(self):
         上下文 = 竞赛上下文(
             _部落竞赛配兵配置覆盖={"攻城": {"攻城战车": 1}},
             _竞赛配兵关键单位={"攻城": ["攻城战车"]},
@@ -537,12 +536,31 @@ class 复审其它项测试(unittest.TestCase):
         )
         任务 = 挂页面桩(新任务(上下文))
         任务._读取分区阵容 = Mock(return_value=(None, "攻城第1张卡片无法区分"))
-        任务._配置分区 = Mock()
+        任务._配置分区 = Mock(return_value=({}, (1, 3)))
         self.assertTrue(任务.执行())
-        任务._配置分区.assert_not_called()
-        self.assertEqual(上下文._竞赛配兵失败任务键, "指定兵种:攻城车")
+        任务._配置分区.assert_called_once_with(
+            "攻城", {"攻城战车": 1}, ("攻城战车",), ("攻城战车",), 精确=True
+        )
+        快照 = 编.读取竞赛快照(上下文)
+        self.assertTrue(快照["已应用"])
+        self.assertEqual(set(快照["分区"]), {"攻城"})
+        self.assertTrue(快照["分区"]["攻城"]["不确定"])
+        self.assertEqual(getattr(上下文, "_竞赛配兵失败任务键", ""), "")
         日志 = " ".join(c.args[0] for c in 上下文.置脚本状态.call_args_list)
-        self.assertIn("只放弃攻城区", 日志)
+        self.assertIn("任务结束后攻城区保持当前配置", 日志)
+
+    def test_恢复不确定攻城区快照时不触碰军队分区(self):
+        上下文 = 竞赛上下文()
+        任务 = 新任务(上下文)
+        任务._读取分区阵容 = Mock()
+        任务._配置分区 = Mock()
+
+        self.assertTrue(任务._在编辑页按快照恢复({"攻城": {"不确定": True}}))
+
+        任务._读取分区阵容.assert_not_called()
+        任务._配置分区.assert_not_called()
+        日志 = " ".join(c.args[0] for c in 上下文.置脚本状态.call_args_list)
+        self.assertIn("攻城区原阵容不确定", 日志)
 
     def test_换兵异常恢复成功后标记失败任务键(self):
         上下文 = 竞赛上下文()
@@ -577,6 +595,14 @@ class 复审其它项测试(unittest.TestCase):
     def test_两种攻城时即使包含要求的也换成只带要求的那个(self):
         快照 = {"攻城": {"单位": {"攻城飞艇": 1, "攻城战车": 1}, "容量": [2, 3]}}
         临时, _ = 按快照构建临时阵容("指定兵种", "至少需使用攻城车x1", {"攻城": ["攻城战车"]}, 快照)
+        self.assertEqual(临时, {"攻城": {"攻城战车": 1}})
+
+    def test_攻城原阵容不确定时仍构建要求器械(self):
+        临时, 原因 = 按快照构建临时阵容(
+            "指定兵种", "至少需使用攻城车x1", {"攻城": ["攻城战车"]},
+            {"攻城": {"不确定": True}},
+        )
+        self.assertEqual(原因, "")
         self.assertEqual(临时, {"攻城": {"攻城战车": 1}})
 
 

@@ -365,6 +365,29 @@ class 竞赛配兵方案测试(unittest.TestCase):
         )
         任务._同步竞赛配兵.assert_called_once_with("指定兵种", "详情全文：" + 卡文)
 
+    def test_接任务动画期间旧进度卡位会等待并重新定位置顶卡(self):
+        任务, _, _ = self._进行中任务({})
+        卡文 = "至少需使用攻城车x1"
+        旧位置OCR = [
+            文字项("0/1", (329, 388, 357, 406)),
+            文字项(卡文, (280, 145, 410, 181)),
+        ]
+        置顶卡OCR = [
+            文字项("0/1", (329, 223, 357, 241)),
+            文字项(卡文, (280, 145, 410, 181)),
+        ]
+        任务._截图 = Mock(return_value=None)
+        任务._OCR = Mock(side_effect=[旧位置OCR, 置顶卡OCR])
+        任务._延时 = Mock()
+        任务._点击 = Mock(return_value=True)
+        任务._等待 = Mock(return_value=None)
+        任务._关闭详情 = Mock()
+
+        self.assertEqual(任务._读取已接任务卡文本(), 卡文)
+
+        任务._点击.assert_not_called()
+        self.assertEqual(任务._OCR.call_count, 2)
+
     def test_进行中卡片无文案时读取安全详情并与缓存一致后同步(self):
         文本 = "在1场多人对战中赢得1颗胜利之星，至少需使用亡灵x1"
         任务, 上下文, _ = self._进行中任务(

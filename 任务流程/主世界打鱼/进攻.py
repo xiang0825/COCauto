@@ -2158,6 +2158,16 @@ class 进攻任务(基础任务):
                 # 法术模板是瓶身局部，偶尔在兵种卡上也有 0.5 左右的分数；
                 # 只有法术分数不低于兵种分数时才算法术（实机：女巫卡对疗伤 0.51、对女巫 0.87）。
                 类别, 名称, 分数 = "药水", 法术名称, 法术分数
+            elif (
+                兵种名称 == "未匹配攻城器械模板"
+                and 序号 <= 5 and not 卡牌为灰色
+            ):
+                类别, 名称, 分数 = "攻城器械", "未匹配攻城器械模板", 兵种分数
+                数量 = 0 if 卡牌为灰色 else 1
+                数量已确认 = False
+                上下文.置脚本状态(
+                    f"第{序号}格攻城器械模板相似度不足或候选接近；保留为未知攻城器械，不虚报具体机器"
+                )
             elif 兵种分数 >= 0.70:
                 类别, 名称, 分数 = "兵种", 兵种名称, 兵种分数
             elif 序号 <= 5 and 数量 is not None and 数量 <= 3:
@@ -2445,8 +2455,24 @@ class 进攻任务(基础任务):
         except Exception:
             return None
 
+    @staticmethod
+    def _判定攻城模板(候选分数: list[tuple[str, float]]) -> str | None:
+        """攻城卡相似度接近或置信度偏低时只返回未知，不虚报具体机器。"""
+        排名 = sorted(
+            ((str(名称).removesuffix(".bmp"), float(分数)) for 名称, 分数 in 候选分数),
+            key=lambda 项: -项[1],
+        )
+        if not 排名:
+            return None
+        最佳名, 最佳分 = 排名[0]
+        次分 = 排名[1][1] if len(排名) > 1 else 0.0
+        if not 最佳名.startswith("兵种_攻城") or 最佳分 < 0.80 or 最佳分 - 次分 < 0.10:
+            return None
+        return 最佳名
+
     def _槽位最佳模板(self, 格子图像: np.ndarray, 模板列表: list[str]) -> tuple[str, float]:
         最佳名称, 最佳分数 = "", 0.0
+        候选分数 = []
         for 模板路径 in 模板列表:
             模板 = self.模板识别._安全加载模板(模板路径)
             if 模板 is None or 模板.shape[0] > 格子图像.shape[0] or 模板.shape[1] > 格子图像.shape[1]:
@@ -2457,8 +2483,14 @@ class 进攻任务(基础任务):
                 ))[1])
             except Exception:
                 continue
+            名称 = 模板路径.removesuffix(".bmp")
+            候选分数.append((名称, 分数))
             if 分数 > 最佳分数:
-                最佳名称, 最佳分数 = 模板路径.removesuffix(".bmp"), 分数
+                最佳名称, 最佳分数 = 名称, 分数
+        if 最佳名称.startswith("兵种_攻城"):
+            攻城候选 = [项 for 项 in 候选分数 if 项[0].startswith("兵种_攻城")]
+            if self._判定攻城模板(攻城候选) is None:
+                return "未匹配攻城器械模板", 最佳分数
         return 最佳名称, 最佳分数
 
     def _结束画面有结果标记(self, 屏幕图像) -> bool:
