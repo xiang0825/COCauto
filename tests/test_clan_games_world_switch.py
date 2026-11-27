@@ -1,7 +1,8 @@
 """部落竞赛：人在夜世界先安全回主世界再看任务；每次跳过写清原因；不接捐兵类任务。"""
 import time
+from pathlib import Path
 import unittest
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import Mock, patch
 
 from tests.test_clan_games import (
@@ -261,7 +262,7 @@ class OCR限时测试(unittest.TestCase):
             self.assertTrue(任务.执行())
         finally:
             放行.set()
-        self.assertEqual(任务.结果, "超时")
+        self.assertEqual(任务.结果, "入口异常")  # 卡在活动列表标题 OCR：写原因、存现场、关 X、记冷却
         self.assertEqual(游戏.开始点击, [])
         self.assertEqual(游戏.状态, "home")  # OCR 卡住也用模板复核后关掉活动列表
         self.assertFalse(上下文.页面恢复失败)
@@ -269,7 +270,7 @@ class OCR限时测试(unittest.TestCase):
         self.assertIn("OCR 识别中", 文本)
         self.assertIn("OCR 识别超过1秒仍未返回", 文本)
         记录 = 上下文.数据库.状态["部落竞赛检查记录"]
-        self.assertEqual(记录["结果"], "超时")
+        self.assertEqual(记录["结果"], "入口异常")
 
     def test_上一次OCR未返回时不并发调用引擎(self):
         import threading
@@ -448,3 +449,190 @@ class 引擎注入回主世界测试(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class 活动列表不卡主循环测试(unittest.TestCase):
+    """2026-11-26 19:44 rc157 实机：确认活动列表后约 3 分钟无日志。
+
+    根因：_等待 里的 脚本延时 顺带跑升级完成弹窗整屏 OCR（同步、无超时），
+    活动列表文字最多，一次几分钟。部落竞赛 自己的 OCR 限时/进度日志管不到。
+    """
+
+    def tearDown(self):
+        部落竞赛任务._OCR进行中 = None
+
+    def test_流程期间设置流程标记_结束后清除(self):
+        游戏 = 模拟游戏(卡片=标准卡片())
+        任务, 上下文, _, _, _ = 构造任务(游戏)
+        看到 = []
+        原延时 = 上下文.脚本延时
+        上下文.脚本延时 = lambda 毫秒: 看到.append(getattr(上下文, "_部落竞赛流程中", None)) or 原延时(毫秒)
+        self.assertTrue(任务.执行())
+        self.assertTrue(看到)
+        self.assertTrue(all(看到))
+        self.assertFalse(上下文._部落竞赛流程中)
+
+    def test_流程异常时也清除流程标记(self):
+        游戏 = 模拟游戏(卡片=标准卡片())
+        任务, 上下文, _, _, _ = 构造任务(游戏)
+        任务._流程 = Mock(side_effect=RuntimeError("坏了"))
+        self.assertTrue(任务.执行())
+        self.assertFalse(上下文._部落竞赛流程中)
+
+    def test_延时被后台检查占住时写日志(self):
+        游戏 = 模拟游戏(卡片=标准卡片())
+        任务, 上下文, 日志, _, _ = 构造任务(
+            游戏, 配置覆盖={"超时": {**配置["超时"], "慢调用日志秒": 0.05}})
+        上下文.脚本延时 = lambda 毫秒: time.sleep(0.15)
+        任务._延时(10)
+        self.assertTrue(any("实际多用了" in 行 for 行 in 日志), 日志)
+
+    def test_活动列表识别慢时几秒内超时_写日志_关面板回主页(self):
+        游戏 = 模拟游戏(卡片=标准卡片())
+        任务, 上下文, 日志, _, 时间 = 构造任务(
+            游戏, 配置覆盖={"超时": {**配置["超时"], "慢调用日志秒": 0.05, "活动列表秒": 6}})
+        调用 = {"n": 0}
+
+        def 慢且不确认():
+            # 模拟识别阻塞：真实耗时 + 流程时钟各走 2 秒，始终没确认到列表。
+            调用["n"] += 1
+            time.sleep(0.06)
+            时间["t"] += 2.0
+            return None
+
+        任务._活动列表已打开 = 慢且不确认
+        开始 = time.monotonic()
+        self.assertTrue(任务.执行())
+        self.assertLess(time.monotonic() - 开始, 5)
+        self.assertEqual(任务.结果, "入口异常")
+        self.assertEqual(游戏.状态, "home")
+        self.assertEqual(游戏.开始点击, [])
+        self.assertFalse(上下文.页面恢复失败)
+        # 每次尝试最多 6 秒（3 次识别），2 次入口重试
+        self.assertLessEqual(调用["n"], 2 * 4)
+        文本 = "|".join(日志)
+        self.assertIn("确认活动列表单次识别耗时", 文本)
+        self.assertIn("秒内未确认", 文本)
+        self.assertIn("按冷却稍后重试", 文本)
+        记录 = 上下文.数据库.状态["部落竞赛检查记录"]
+        self.assertEqual(记录["结果"], "入口异常")
+        self.assertGreater(记录["下次检查时间"], 记录["时间"])
+
+    def test_活动列表标题OCR阻塞时按短限时收尾不等60秒(self):
+        import threading
+
+        游戏 = 模拟游戏(卡片=标准卡片())
+        放行 = threading.Event()
+        任务, 上下文, 日志, _, _ = 构造任务(
+            游戏, 配置覆盖={"超时": {**配置["超时"], "活动列表OCR秒": 1, "OCR进度日志秒": 1}})
+        # 视觉特征不足，只能走标题小区域 OCR；OCR 卡住不返回。
+        上下文.识别点击画面 = lambda 强制=False: SimpleNamespace(
+            页面="主世界主页" if 游戏.状态 == "home" else "未知", 世界="主世界", 可信度=0.9)
+
+        def 卡住的OCR(图):
+            放行.wait(10)
+            return 游戏.ocr结果(), None
+
+        上下文.获取OCR引擎 = lambda: 卡住的OCR
+        开始 = time.monotonic()
+        try:
+            self.assertTrue(任务.执行())
+        finally:
+            放行.set()
+        self.assertLess(time.monotonic() - 开始, 5)
+        # 标题 OCR 超时和步骤超时同样处理：写原因、存现场、安全关 X、记冷却。
+        self.assertEqual(任务.结果, "入口异常")
+        self.assertEqual(游戏.状态, "home")
+        self.assertEqual(游戏.开始点击, [])
+        self.assertFalse(上下文.页面恢复失败)
+        文本 = "|".join(日志)
+        self.assertIn("OCR 识别超过1秒仍未返回", 文本)
+        self.assertIn("活动列表标题OCR异常", 文本)
+        self.assertIn("活动列表未确认：已保存现场截图", 文本)
+        self.assertTrue(sorted(Path(上下文.待命现场目录).glob("clan_entry_*活动列表未确认.png")))
+        记录 = 上下文.数据库.状态["部落竞赛检查记录"]
+        self.assertEqual(记录["结果"], "入口异常")
+        self.assertGreater(记录["下次检查时间"], 记录["时间"])
+
+    def test_标题OCR抛异常时保存现场并回主页(self):
+        from 任务流程.活动.部落竞赛 import 部落竞赛超时
+
+        游戏 = 模拟游戏(卡片=标准卡片())
+        任务, 上下文, 日志, _, _ = 构造任务(游戏)
+        上下文.识别点击画面 = lambda 强制=False: SimpleNamespace(
+            页面="主世界主页" if 游戏.状态 == "home" else "未知", 世界="主世界", 可信度=0.9)
+        原OCR = 任务._OCR
+
+        def OCR(图像, 区域=None):
+            if 区域 is not None and tuple(区域) == tuple(配置["活动列表"]["标题ROI"]):
+                raise 部落竞赛超时("OCR 识别超过5秒未返回")
+            return 原OCR(图像, 区域)
+
+        任务._OCR = OCR
+        self.assertTrue(任务.执行())
+        self.assertEqual(任务.结果, "入口异常")
+        self.assertEqual(游戏.状态, "home")
+        self.assertEqual(游戏.开始点击, [])
+        self.assertFalse(上下文.页面恢复失败)
+        self.assertIn("活动列表标题OCR异常", "|".join(日志))
+        self.assertTrue(sorted(Path(上下文.待命现场目录).glob("clan_entry_*活动列表未确认.png")))
+        self.assertEqual(上下文.数据库.状态["部落竞赛检查记录"]["结果"], "入口异常")
+
+    def test_停止请求不被当成OCR异常吞掉(self):
+        from 任务流程.活动.部落竞赛 import 部落竞赛超时
+
+        游戏 = 模拟游戏(卡片=标准卡片())
+        任务, 上下文, 日志, _, _ = 构造任务(游戏)
+        任务._活动列表已打开 = Mock(side_effect=部落竞赛超时("收到停止请求"))
+        self.assertTrue(任务.执行())
+        self.assertEqual(任务.结果, "超时")
+        self.assertNotIn("活动列表标题OCR异常", "|".join(日志))
+
+    def test_已确认的关闭X在升级页误判时仍可安全回主页(self):
+        from 任务流程.基础任务框架 import 任务上下文 as 任务上下文类型
+
+        游戏 = 模拟游戏(卡片=标准卡片())
+        游戏.状态 = "events"
+        任务, 上下文, _, _, _ = 构造任务(游戏)
+        上下文._部落竞赛流程中 = True
+        上下文._部落竞赛面板已确认 = False
+        上下文._最近点击页面结果 = SimpleNamespace(页面="升级详情弹窗")
+        上下文._点击识别截图 = None
+        上下文.检查宝石商店危险页面 = Mock(return_value=False)
+        上下文.关闭升级详情弹窗 = Mock(return_value=False)
+        上下文.清理主世界活动弹窗 = Mock(return_value=False)
+        上下文.页面恢复失败 = False
+        上下文.置脚本状态 = Mock()
+        上下文.输入前安全检查 = MethodType(
+            任务上下文类型.输入前安全检查, 上下文
+        )
+        原点击 = 上下文.点击
+        点击期间关闭标记 = []
+
+        def 带护栏的点击(x, y, *参数, **关键字参数):
+            点击期间关闭标记.append(
+                getattr(上下文, "_部落竞赛安全关闭X点击中", False)
+            )
+            if 上下文.输入前安全检查():
+                return False
+            return 原点击(x, y, *参数, **关键字参数)
+
+        上下文.点击 = 带护栏的点击
+        任务._关闭X附近禁点 = Mock(return_value=None)
+
+        self.assertTrue(任务._安全关闭异常面板("活动列表未确认"))
+        self.assertEqual(游戏.状态, "home")
+        self.assertEqual(点击期间关闭标记, [True])
+        self.assertFalse(上下文._部落竞赛安全关闭X点击中)
+        上下文.关闭升级详情弹窗.assert_not_called()
+
+    def test_停止事件时零点击(self):
+        import threading
+
+        游戏 = 模拟游戏(卡片=标准卡片())
+        任务, 上下文, _, _, _ = 构造任务(游戏)
+        上下文.停止事件 = threading.Event()
+        上下文.停止事件.set()
+        任务.执行()
+        self.assertEqual(游戏.点击记录 if hasattr(游戏, "点击记录") else [], [])
+        self.assertEqual(游戏.开始点击, [])

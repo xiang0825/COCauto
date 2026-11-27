@@ -1100,6 +1100,80 @@ class 页面识别测试(unittest.TestCase):
         self.assertTrue(上下文.输入前安全检查())
         上下文.关闭升级详情弹窗.assert_called_once_with(上下文._点击识别截图)
 
+    def test_竞赛流程仅对白名单页面跳过通用全屏OCR(self):
+        for 页面 in (
+            "活动弹窗", "部落竞赛面板", "部落竞赛任务详情", "主世界主页",
+        ):
+            with self.subTest(页面=页面):
+                上下文 = 任务上下文.__new__(任务上下文)
+                上下文._战斗中 = False
+                上下文._部落竞赛流程中 = True
+                上下文._部落竞赛面板已确认 = False
+                上下文.检查宝石商店危险页面 = Mock(return_value=False)
+                上下文._最近点击页面结果 = SimpleNamespace(页面=页面)
+                上下文._点击识别截图 = np.zeros((600, 800, 3), dtype=np.uint8)
+                上下文.清理主世界活动弹窗 = Mock()
+                上下文.关闭升级详情弹窗 = Mock()
+
+                # False 表示这类页面不进入通用全屏 OCR 处理器。
+                self.assertFalse(上下文.输入前安全检查())
+                上下文.清理主世界活动弹窗.assert_not_called()
+                上下文.关闭升级详情弹窗.assert_not_called()
+
+    def test_竞赛流程中的无关弹窗仍按原护栏阻断(self):
+        for 页面 in ("选择卡片弹窗", "宝箱领奖页", "多按钮弹窗", "升级详情弹窗"):
+            with self.subTest(页面=页面):
+                上下文 = 任务上下文.__new__(任务上下文)
+                上下文._战斗中 = False
+                上下文._部落竞赛流程中 = True
+                上下文._部落竞赛面板已确认 = False
+                if 页面 != "升级详情弹窗":
+                    # 即使当前正在执行一次安全关闭，也不能越过这三类弹窗的
+                    # 专用清理/阻断路径。
+                    上下文._部落竞赛安全关闭X点击中 = True
+                上下文.检查宝石商店危险页面 = Mock(return_value=False)
+                上下文._最近点击页面结果 = SimpleNamespace(页面=页面)
+                上下文._点击识别截图 = np.zeros((600, 800, 3), dtype=np.uint8)
+                上下文.清理选择卡片弹窗 = Mock()
+                上下文.清理宝箱领奖页 = Mock()
+                上下文.清理官方评分弹窗 = Mock(return_value=False)
+                上下文.关闭升级详情弹窗 = Mock(return_value=False)
+                上下文.清理主世界活动弹窗 = Mock(return_value=False)
+                上下文.页面恢复失败 = False
+                上下文.置脚本状态 = Mock()
+
+                self.assertTrue(上下文.输入前安全检查())
+                if 页面 == "选择卡片弹窗":
+                    上下文.清理选择卡片弹窗.assert_called_once_with(
+                        上下文._点击识别截图
+                    )
+                elif 页面 == "宝箱领奖页":
+                    上下文.清理宝箱领奖页.assert_called_once_with(
+                        上下文._点击识别截图
+                    )
+                elif 页面 == "多按钮弹窗":
+                    上下文.清理官方评分弹窗.assert_called_once_with()
+                else:
+                    上下文.关闭升级详情弹窗.assert_called_once_with(
+                        上下文._点击识别截图
+                    )
+
+    def test_竞赛流程中的已确认关闭X允许穿过升级页误判(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文._部落竞赛流程中 = True
+        上下文._部落竞赛面板已确认 = False
+        上下文._部落竞赛安全关闭X点击中 = True
+        上下文.检查宝石商店危险页面 = Mock(return_value=False)
+        上下文._最近点击页面结果 = SimpleNamespace(页面="升级详情弹窗")
+        上下文._点击识别截图 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文.关闭升级详情弹窗 = Mock()
+        上下文.清理主世界活动弹窗 = Mock()
+
+        self.assertFalse(上下文.输入前安全检查())
+        上下文.关闭升级详情弹窗.assert_not_called()
+        上下文.清理主世界活动弹窗.assert_not_called()
+
     def test_活动OCR与升级OCR互斥(self):
         活动OCR = [
             ([], "活動"),
