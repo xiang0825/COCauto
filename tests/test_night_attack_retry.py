@@ -284,8 +284,10 @@ class 只等待回营模式测试(unittest.TestCase):
         结果, 上下文, _任务, 假下兵 = self._运行(只等待回营=None)
 
         self.assertTrue(结果)
-        self.assertTrue(上下文.点击.called)
+        # rc160 起箭头只读：不再点击换兵箭头，选兵交给第二场下兵。
+        上下文.点击.assert_not_called()
         self.assertTrue(假下兵.called)
+        self.assertEqual(假下兵.call_args.kwargs, {"第二场": True})
 
     def test_构造参数默认关闭只等待回营(self):
         from 任务流程.夜世界.夜世界打鱼.等待回营或第二场战斗 import 等待回营或第二次战斗

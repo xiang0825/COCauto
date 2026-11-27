@@ -174,12 +174,12 @@ class 夜世界第二场实拍回放测试(unittest.TestCase):
         任务.模板识别 = self.引擎
         return 任务
 
-    def test_第二场开始帧识别到换兵箭头并点击兵卡(self):
+    def test_第二场开始帧识别到换兵箭头但只读不点击(self):
+        # rc160 11-27 15:20：点击换兵箭头会弹出“更換部隊”弹层并卡死
+        # 第二场；箭头只作证据，选兵交给 下兵(第二场=True)。
         任务 = self._任务(宽屏样本("night_battle2_start"))
         self.assertTrue(任务.是否出现换兵种箭头())
-        x, y = 任务.上下文.点击.call_args.args[:2]
-        # 第 7/8 张兵卡（逻辑 x≈505..600），点击落在兵栏内。
-        self.assertTrue(480 <= x <= 610 and 520 <= y <= 560, (x, y))
+        任务.上下文.点击.assert_not_called()
 
     def test_第一场帧不会误判第二场(self):
         for 前缀 in ("night_battle1_mid", "night_battle1_end"):

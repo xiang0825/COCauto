@@ -279,7 +279,7 @@ class 人工安全恢复等待测试(unittest.TestCase):
 
         self.assertFalse(getattr(上下文, "_主世界战斗模式选择页", False))
 
-    def test_安全待命遇到断线只读等待不自动重连(self):
+    def test_安全待命遇到断线按现有重连流程恢复(self):
         机器人 = self._创建机器人()
         self._启用虚拟待命时钟(机器人)
         上下文 = SimpleNamespace(
@@ -297,9 +297,9 @@ class 人工安全恢复等待测试(unittest.TestCase):
 
         self.assertTrue(机器人._等待人工恢复主世界(上下文, 检测登录))
 
-        检测登录.执行.assert_not_called()
+        检测登录.执行.assert_called_once_with(首次登录=False)
         self.assertTrue(any(
-            "不自动点击重连" in 调用.args[0]
+            "执行游戏内断线重连" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
@@ -518,7 +518,7 @@ class 人工安全恢复等待测试(unittest.TestCase):
         更新夜资源.return_value.执行.assert_called_once_with()
         更新家乡资源.return_value.执行.assert_not_called()
 
-    def test_重复断线帧仍只读等待主页复核(self):
+    def test_重复断线帧限频只重连一次再等待主页复核(self):
         机器人 = self._创建机器人()
         self._启用虚拟待命时钟(机器人)
         断线页 = self._页面("断线弹窗")
@@ -534,7 +534,8 @@ class 人工安全恢复等待测试(unittest.TestCase):
         self.assertTrue(机器人._等待人工恢复主世界(上下文, 检测登录))
 
         self.assertEqual(上下文.识别点击画面.call_count, 6)
-        检测登录.执行.assert_not_called()
+        # 三帧断线相隔 5 秒，重连按 60 秒限频，只会执行一次。
+        检测登录.执行.assert_called_once_with(首次登录=False)
         self.assertFalse(机器人.停止事件.is_set())
         self.assertTrue(上下文._主世界战斗模式选择页 is False)
 

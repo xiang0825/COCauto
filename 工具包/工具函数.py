@@ -245,7 +245,56 @@ def 是否夜世界资源打满(
         for 容量 in 候选容量
     )
 
-def 单行资源识别(ocr引擎, img, 允许完整识别=False, 最大值=None):
+def _资源行白色数字范围(img, 搜索左, 搜索右, 留白=6):
+    """在资源行里找最右侧一串白色数字的横向范围；找不到返回 None。
+
+    资源数字是白色描边字，按列统计“高亮低饱和”像素，从最右侧一列
+    数字向左合并间隔不超过 10px 的列段（千分位空格约 5~7px）。
+    遮罩变暗、弹窗覆盖等情况下数字不够白时返回 None，调用方沿用固定
+    比例裁剪。
+    """
+    try:
+        高, 宽 = img.shape[:2]
+        搜索左 = max(0, int(搜索左))
+        搜索右 = min(宽, int(搜索右))
+        if 搜索右 - 搜索左 < 30:
+            return None
+        hsv = cv2.cvtColor(img[:, 搜索左:搜索右], cv2.COLOR_BGR2HSV)
+        白 = (hsv[:, :, 2] >= 200) & (hsv[:, :, 1] <= 60)
+        有字列 = 白.sum(axis=0) >= 2
+        列段 = []
+        起 = None
+        for x, 有 in enumerate(有字列):
+            if 有 and 起 is None:
+                起 = x
+            elif not 有 and 起 is not None:
+                列段.append((起, x - 1))
+                起 = None
+        if 起 is not None:
+            列段.append((起, len(有字列) - 1))
+        if not 列段:
+            return None
+        左, 右 = 列段[-1]
+        段数 = 1
+        for 段左, 段右 in reversed(列段[:-1]):
+            if 左 - 段右 - 1 > 10:
+                break
+            左 = 段左
+            段数 += 1
+        if 段数 < 3 or 右 - 左 + 1 < 25:
+            return None
+        # 左侧只留 1px：数字左边紧贴的船帆/条纹会被 OCR 读成额外的
+        # “1”/“7”（实测留 4~6px 时读成 13 020 459）。右侧数字后是资源
+        # 图标前的纯色条，留白更多以免切掉末位。
+        return (
+            max(0, 搜索左 + 左 - 1),
+            min(宽, 搜索左 + 右 + 1 + 留白),
+        )
+    except Exception:
+        return None
+
+
+def 单行资源识别(ocr引擎, img, 允许完整识别=False, 最大值=None, 裁到数字范围=False):
     """识别已裁剪好的单行资源数字。
 
     右上角资源图在调用前已经按行裁剪；再运行文字检测和方向分类会额外
@@ -268,7 +317,19 @@ def 单行资源识别(ocr引擎, img, 允许完整识别=False, 最大值=None)
         # 旧的 82% 右边界会切掉最右一位：夜世界现场数字 3 020 459
         # 被裁成半个 9，OCR 因而读成 3 020 455。将边界移到数字末端之外，
         # 同时仍留在资源图标左侧，避免把图标噪声带进识别区域。
-        img = img[:, int(round(宽 * 0.28)):int(round(宽 * 0.86))]
+        左界 = int(round(宽 * 0.28))
+        右界 = int(round(宽 * 0.86))
+        # 夜世界资源条半透明，28% 左边界会带进数字左侧的船/地图亮块：
+        # rc160 15:16 现场把 3 020 459 读成 “020 459”（首位丢失，int
+        # 再吞掉前导 0 → 20459），船旁样本则多读出一位 “7”。能找到
+        # 白色数字串时，裁到数字串左右各留几像素，图标/背景都不进 OCR。
+        数字范围 = (
+            _资源行白色数字范围(img, int(round(宽 * 0.20)), 右界)
+            if 裁到数字范围 else None
+        )
+        if 数字范围 is not None:
+            左界, 右界 = 数字范围
+        img = img[:, 左界:右界]
     img = cv2.resize(img, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
 
     灰度 = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -280,6 +341,8 @@ def 单行资源识别(ocr引擎, img, 允许完整识别=False, 最大值=None)
         31,
         5
     )
+
+    截断读数 = []
 
     def 提取候选数字(结果):
         if not 结果:
@@ -301,6 +364,12 @@ def 单行资源识别(ocr引擎, img, 允许完整识别=False, 最大值=None)
             清理文本 = unicodedata.normalize("NFKC", str(原始文本))
             清理文本 = 清理文本.replace('O', '0').replace('o', '0').replace(' ', '')
             数字 = ''.join(字符 for 字符 in 清理文本 if 字符 in "0123456789")
+            if len(数字) > 1 and 数字.startswith("0"):
+                # 真实资源数不会以 0 开头；“020459” 说明首位被漏读，
+                # int() 会把它静默变成 20459。视为截断读数丢弃，交给
+                # 备用二值图/完整识别；都失败时返回 0（不覆盖旧快照）。
+                截断读数.append(数字)
+                continue
             if 数字:
                 候选.append(数字)
         return 候选
@@ -335,7 +404,7 @@ def 单行资源识别(ocr引擎, img, 允许完整识别=False, 最大值=None)
     # 仅在调用方确认轻量结果可能为 0/截断时启用检测模型。完整 OCR
     # 能处理“31 000 000”这类带空格的大数字，但不应在每一帧资源轮询中
     # 无条件执行，否则会放大 ONNX 内存峰值。
-    if 允许完整识别:
+    if 允许完整识别 or (截断读数 and not 轻量数字):
         完整数字 = ""
         for 输入图 in (img, 二值图):
             result = 安全OCR(输入图, use_cls=False)
@@ -348,6 +417,12 @@ def 单行资源识别(ocr引擎, img, 允许完整识别=False, 最大值=None)
                 return int(数字)
         if len(完整数字) > len(轻量数字):
             轻量数字 = 完整数字
+    if 截断读数 and not 允许完整识别:
+        # 由截断读数触发的补读必须比截断串更长（补回了首位）；检测
+        # 模型可能把 “3” 和 “020 459” 拆成两框，只剩 “3” 时不能采信。
+        最长截断 = max(len(项) for 项 in 截断读数)
+        if len(轻量数字) <= 最长截断:
+            轻量数字 = ""
     if not 轻量数字:
         return 0
     if 最大值 is not None and int(轻量数字) > 最大值:
