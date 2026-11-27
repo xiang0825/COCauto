@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import time
 from dataclasses import dataclass
 
@@ -189,6 +190,33 @@ class BlueStacks设备(ADB设备操作类):
     @classmethod
     def 扫描设备(cls, *参数, **关键字) -> list[ADB设备信息]:
         return [标注本机蓝叠(项) for 项 in super().扫描设备(*参数, **关键字)]
+
+    def _连接已保存网络设备(self) -> None:
+        """BlueStacks 掉线（Mac 睡眠唤醒、模拟器重启、adb server 重置）后重连保存的本机地址。
+
+        父类只对 MuMu 生效；这里对 127.0.0.1/localhost 序列号执行 ``adb connect``，
+        不扫描、不切换到其他设备；emulator-* 由 adb 自动发现，无需 connect。
+        """
+        if not re.fullmatch(r"(?:127\.0\.0\.1|localhost):\d{1,5}", self.设备序列号 or ""):
+            return
+        startupinfo = None
+        creationflags = 0
+        if os.name == "nt":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            self._runner(
+                [self.adb路径, "connect", self.设备序列号],
+                capture_output=True,
+                timeout=8,
+                check=False,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
+                env=self._ADB子进程环境(),
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
     # ---------------------------------------------------------- 不走 MuMu
     def _是MuMu连接(self) -> bool:

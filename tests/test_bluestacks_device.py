@@ -229,6 +229,31 @@ class 伪装型号与类型选择测试(unittest.TestCase):
         with self.assertRaisesRegex(ADB错误, "实体"):
             普通.确认在线()
 
+    def test_掉线后对本机回环地址重新adb_connect(self):
+        """5038 独立 server 上序列号消失（睡眠唤醒/重启）时，BlueStacks 也要重连保存的本机地址。"""
+        其他 = b"List of devices attached\nemulator-5554 device product:BlueStacks model:BlueStacks\n"
+        恢复 = 其他 + b"127.0.0.1:5555 device product:BlueStacks model:BlueStacks\n"
+        runner = 假Runner(结果(其他), 结果(b"connected to 127.0.0.1:5555\n"), 结果(恢复))
+        设备 = BlueStacks设备(ADB, "127.0.0.1:5555", runner=runner, 自动检测路径=False)
+        self.assertEqual(设备.确认在线().序列号, "127.0.0.1:5555")
+        self.assertEqual(runner.命令[1][1:], ["connect", "127.0.0.1:5555"])
+
+    def test_非回环序列号不发connect(self):
+        for 序列号 in ("emulator-5554", "192.168.1.20:5555", "R58M1234567"):
+            runner = 假Runner()
+            设备 = BlueStacks设备(ADB, 序列号, runner=runner)
+            设备._连接已保存网络设备()
+            self.assertEqual(runner.命令, [], 序列号)
+        runner = 假Runner()
+        BlueStacks设备(ADB, "localhost:5565", runner=runner)._连接已保存网络设备()
+        self.assertEqual(runner.命令[0][1:], ["connect", "localhost:5565"])
+
+    def test_父类非MuMu时仍不重连_Windows行为不变(self):
+        runner = 假Runner()
+        设备 = ADB设备操作类(ADB, "127.0.0.1:5555", runner=runner)
+        设备._连接已保存网络设备()
+        self.assertEqual(runner.命令, [])
+
     def test_选择设备类按平台和设置(self):
         from 模块.设备接口 import 选择设备类, 解析生效模拟器类型
         with patch.dict("os.environ", {"COC_EMULATOR_TYPE": ""}):
@@ -239,7 +264,12 @@ class 伪装型号与类型选择测试(unittest.TestCase):
             self.assertIs(选择设备类("bluestacks", ADB设备操作类, "win32"), BlueStacks设备)
             self.assertEqual(解析生效模拟器类型("乱写", "win32"), "mumu")
         with patch.dict("os.environ", {"COC_EMULATOR_TYPE": "bluestacks"}):
-            self.assertIs(选择设备类("auto", ADB设备操作类, "win32"), BlueStacks设备)
+            # Windows 现网忽略环境变量，不能把 MuMu 误切成纯 ADB。
+            self.assertIs(选择设备类("auto", ADB设备操作类, "win32"), ADB设备操作类)
+            self.assertIs(选择设备类("mumu", ADB设备操作类, "darwin"), BlueStacks设备)
+        with patch.dict("os.environ", {"COC_EMULATOR_TYPE": "mumu"}):
+            self.assertIs(选择设备类("auto", ADB设备操作类, "darwin"), ADB设备操作类)
+            self.assertIs(选择设备类("bluestacks", ADB设备操作类, "win32"), BlueStacks设备)
 
     def test_设置默认auto(self):
         from 数据库.任务数据库 import 机器人设置

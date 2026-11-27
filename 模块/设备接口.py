@@ -6,8 +6,8 @@
 - ``模块.BlueStacks设备.BlueStacks设备``：纯 ADB 实现（BlueStacks Air / macOS），
   不走任何 MuMu 探测与 IPC。
 
-``选择设备类``/``创建游戏设备`` 按设置“模拟器类型”（或环境变量
-``COC_EMULATOR_TYPE``）选择实现。Windows 上默认 auto → 现有 ``ADB设备操作类``，
+``选择设备类``/``创建游戏设备`` 按设置“模拟器类型”（macOS 上可用环境变量
+``COC_EMULATOR_TYPE`` 覆盖）选择实现。Windows 上默认 auto → 现有 ``ADB设备操作类``，
 行为不变；macOS 上 auto → ``BlueStacks设备``。
 """
 from __future__ import annotations
@@ -66,20 +66,23 @@ def 规范化模拟器类型(类型: object) -> str:
 def 解析生效模拟器类型(模拟器类型: object = 模拟器_自动, 平台名称: str | None = None) -> str:
     """设置值 + 环境变量 ``COC_EMULATOR_TYPE`` → 实际使用的实现类型。
 
-    - 环境变量优先（便于 Mac 上调试）；非法值回退为 auto，不让启动崩溃；
+    - 环境变量仅在 macOS 生效且优先（便于 Mac 调试；Windows 忽略）；非法值回退为 auto，不让启动崩溃；
     - auto 在 Windows 上保持原行为（ADB设备操作类，MuMu 自动走专用通道），
       在 macOS 上等同 bluestacks（Mac 没有 MuMu）。
     """
     import os
     import sys
 
-    原始 = os.environ.get("COC_EMULATOR_TYPE", "").strip() or 模拟器类型
+    平台 = sys.platform if 平台名称 is None else str(平台名称)
+    原始 = 模拟器类型
+    if 平台 == "darwin":
+        # 环境变量只在 macOS 生效：Windows 现网残留的 COC_EMULATOR_TYPE 不能把 MuMu 误切成纯 ADB。
+        原始 = os.environ.get("COC_EMULATOR_TYPE", "").strip() or 模拟器类型
     try:
         类型 = 规范化模拟器类型(原始)
     except ValueError:
         类型 = 模拟器_自动
     if 类型 == 模拟器_自动:
-        平台 = sys.platform if 平台名称 is None else str(平台名称)
         return 模拟器_蓝叠 if 平台 == "darwin" else 模拟器_MUMU
     return 类型
 
