@@ -9,7 +9,6 @@ from __future__ import annotations
 import ctypes
 import sys
 import threading
-from ctypes import wintypes
 from typing import Callable
 
 
@@ -40,6 +39,8 @@ class 全局快捷键:
 
     def _监听(self) -> None:
         try:
+            # 仅 Windows 线程内导入：Python 3.11 在 macOS 上 import wintypes 会抛 ValueError。
+            from ctypes import wintypes
             user32 = ctypes.WinDLL("user32", use_last_error=True)
             kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
             user32.RegisterHotKey.argtypes = (wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT)

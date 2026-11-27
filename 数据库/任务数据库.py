@@ -135,6 +135,16 @@ class 机器人设置:
         metadata={"显示名称": "已确认目标为模拟器", "描述": "必须确认不是实体手机后才能截图或操作", "UI类型": "hidden"}
     )
 
+    模拟器类型: str = field(
+        default="auto",
+        metadata={
+            "显示名称": "模拟器类型",
+            "描述": "auto：Windows 自动识别（MuMu 走专用通道），macOS 按 BlueStacks；"
+                    "bluestacks：纯 ADB（BlueStacks / BlueStacks Air）；mumu：MuMu",
+            "UI类型": "hidden",
+        }
+    )
+
     服务器: str = field(
         default="国际服",
         metadata={

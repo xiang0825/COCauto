@@ -25,6 +25,7 @@ import os
 import re
 import socket
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
@@ -311,6 +312,9 @@ def MuMu候选地址(安装目录: Path, runner=subprocess.run) -> list[候选�
 
 
 def 蓝叠候选地址(配置路径: Iterable[Path] | None = None) -> list[候选地址]:
+    if 配置路径 is None and sys.platform == "darwin":
+        from 模块.平台 import macOS蓝叠配置路径
+        配置路径 = macOS蓝叠配置路径()
     if 配置路径 is None:
         数据目录 = Path(os.environ.get("ProgramData", r"C:\ProgramData"))
         配置路径 = (数据目录 / "BlueStacks_nxt" / "bluestacks.conf", 数据目录 / "BlueStacks" / "bluestacks.conf")
@@ -424,6 +428,10 @@ def 检测(
             记(f"{项.地址} 连接失败：{异常}")
 
     设备列表 = ADB设备操作类.扫描设备(adb路径, runner=runner, 自动检测路径=False)
+    if sys.platform == "darwin":
+        # macOS 只支持 BlueStacks（Air）：其本机回环端口会伪装成手机型号。
+        from 模块.BlueStacks设备 import 标注本机蓝叠
+        设备列表 = [标注本机蓝叠(项) for 项 in 设备列表]
     可用 = [设备 for 设备 in 设备列表 if 设备.状态 == "device" and not 设备.疑似实体设备]
     for 设备 in 设备列表:
         if 设备.疑似实体设备:

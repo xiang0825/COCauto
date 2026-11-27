@@ -1,11 +1,15 @@
 import ctypes
-import ctypes.wintypes
 import gc
 import importlib
 import os
 import queue
 import random
 import sys
+
+if sys.platform == "win32":
+    # Python 3.11 在 macOS/Linux 上 import ctypes.wintypes 会抛 ValueError；
+    # 只在 Windows 导入，Windows 行为不变。
+    import ctypes.wintypes
 import threading
 import time
 
@@ -17,6 +21,7 @@ from 数据库.任务数据库 import (
     任务计划定义映射,
 )
 from 模块.ADB设备操作类 import ADB设备操作类
+from 模块.设备接口 import 选择设备类
 from 核心.异常 import 主机内存保护暂停请求
 from 核心.核心异常们 import 图像获取失败
 
@@ -86,8 +91,8 @@ def _安全控制台打印(*参数, **关键字):
 
 class _进程内存计数EX(ctypes.Structure):
     _fields_ = [
-        ("cb", ctypes.wintypes.DWORD),
-        ("PageFaultCount", ctypes.wintypes.DWORD),
+        ("cb", ctypes.c_ulong),  # DWORD
+        ("PageFaultCount", ctypes.c_ulong),  # DWORD
         ("PeakWorkingSetSize", ctypes.c_size_t),
         ("WorkingSetSize", ctypes.c_size_t),
         ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
@@ -240,7 +245,7 @@ class 自动化机器人:
                 设置.ADB路径,
                 自动检测=True,
             ) if 已保存序列号 else 设置.ADB路径
-            校验设备 = ADB设备操作类(
+            校验设备 = 选择设备类(getattr(设置, "模拟器类型", "auto"), ADB设备操作类)(
                 已解析路径,
                 已保存序列号,
                 # 路径已经解析完成，但仍要保留自动设备恢复开关；
@@ -1930,7 +1935,7 @@ class 自动化机器人:
             raise RuntimeError("请先在“模拟器连接”页确认目标是 Android 模拟器并保存连接。")
         if not 设置.ADB设备序列号:
             raise RuntimeError("尚未配置 ADB 设备序列号；请先扫描并选择模拟器。")
-        self.设备 = ADB设备操作类(
+        self.设备 = 选择设备类(getattr(设置, "模拟器类型", "auto"), ADB设备操作类)(
             设置.ADB路径,
             设置.ADB设备序列号,
             自动检测路径=getattr(设置, "ADB自动检测路径", True),
@@ -3026,7 +3031,7 @@ class 自动化机器人:
         设置 = self.数据库.获取机器人设置(self.机器人标志)
         if not getattr(设置, "ADB已确认模拟器", False) or not getattr(设置, "ADB设备序列号", ""):
             return False, "未配置模拟器连接"
-        设备 = ADB设备操作类(
+        设备 = 选择设备类(getattr(设置, "模拟器类型", "auto"), ADB设备操作类)(
             设置.ADB路径,
             设置.ADB设备序列号,
             自动检测路径=getattr(设置, "ADB自动检测路径", True),

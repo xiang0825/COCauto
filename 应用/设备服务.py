@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from 核心.ADB屏幕 import 检查分辨率比例告警
 from 模块.ADB设备操作类 import ADB设备操作类, ADB错误
+from 模块.设备接口 import 选择设备类
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,15 +76,17 @@ class 设备服务:
             raise ADB错误("请先扫描并选择设备。")
         if not 表单.已确认模拟器:
             raise ADB错误("请确认目标是 Android 模拟器，不是实体手机。")
-        设备 = ADB设备操作类(
-            表单.adb路径.strip(), 表单.设备序列号.strip(),
-            自动检测路径=表单.自动检测路径,
-        )
         # 多显示模拟器需要 CoC 包名才能选中真实游戏层，测试截图与正式运行一致。
         包名 = 默认游戏包名
+        模拟器类型 = "auto"
         if 机器人ID:
             设置 = self.数据库.获取机器人设置(机器人ID)
             包名 = getattr(设置, "部落冲突包名", None) or 默认游戏包名
+            模拟器类型 = getattr(设置, "模拟器类型", None) or "auto"
+        设备 = 选择设备类(模拟器类型, ADB设备操作类)(
+            表单.adb路径.strip(), 表单.设备序列号.strip(),
+            自动检测路径=表单.自动检测路径,
+        )
         设备.设置目标包名(包名)
         设备.确认在线()
         return 设备

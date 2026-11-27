@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import ctypes
 import ipaddress
 import logging
@@ -262,6 +263,10 @@ class ADB设备操作类:
     @staticmethod
     def _候选ADB路径() -> list[Path]:
         """返回常见模拟器和 Android SDK 的 adb 客户端位置。"""
+        if sys.platform == "darwin":
+            # macOS（BlueStacks Air / Homebrew / Android SDK）；Windows 列表不变。
+            from 模块.平台 import macOS候选ADB路径
+            return list(dict.fromkeys(macOS候选ADB路径()))
         程序文件目录 = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
         程序文件目录x86 = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
         本地应用目录 = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
