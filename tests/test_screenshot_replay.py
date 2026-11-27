@@ -15,6 +15,7 @@ from 模块.检测.模板匹配器 import 模板匹配引擎
 from 任务流程.基础任务框架 import 任务上下文
 from 任务流程.更新主世界账号资源状态 import 更新家乡资源状态任务
 from 任务流程.夜世界.更新夜世界账号资源状态 import 更新夜世界资源状态任务
+from 任务流程.夜世界.收集圣水车 import 收集圣水车任务
 from 任务流程.主世界打鱼.等待战斗结束并回营 import 等待战斗结束并回营任务
 from 任务流程.活动.部落竞赛 import 部落竞赛任务, 加载配置, 识别任务类型, 规范文本
 
@@ -47,6 +48,7 @@ from 任务流程.活动.部落竞赛 import 部落竞赛任务, 加载配置, �
     "standby_20261125_reward_chest",
     "standby_20261126_battle",
     "standby_20261126_elixir_cart",
+    "standby_20261127_elixir_cart_empty",
 )
 
 
@@ -517,6 +519,79 @@ class 实机截图回放测试(unittest.TestCase):
             样本表["standby_20261126_elixir_cart"]["expected"]["resources"],
             str(实际),
         )
+
+    def test_夜世界空圣水车只允许关闭并拒绝收集点(self):
+        图像列表 = (
+            读取样本("standby_20261127_elixir_cart_empty"),
+            读取截图(
+                样本目录
+                / "standby_20261127_114843_377_未知页面待命"
+                / "当前.png"
+            ),
+        )
+        for 图像 in 图像列表:
+            with self.subTest(尺寸=图像.shape[:2]):
+                页面 = self.页面识别器.识别(图像, 战斗中=False)
+                按钮 = self.页面识别器.定位圣水车弹窗按钮(图像)
+
+                self.assertEqual((页面.页面, 页面.世界), ("圣水车弹窗", "夜世界"), 页面.摘要())
+                self.assertIsNotNone(按钮)
+                self.assertTrue(按钮.get("空车"))
+                self.assertIsNone(按钮.get("收集"))
+                self.assertTrue(self._圣水车点击被拒绝(图像, 页面, (588, 507)))
+                self.assertFalse(self._圣水车点击被拒绝(图像, 页面, (670, 60)))
+
+        空车OCR, _ = self.OCR引擎(图像列表[0][150:390, 220:580])
+        self.assertTrue(
+            收集圣水车任务._是否圣水车为空文案(空车OCR),
+            str([项[1] for 项 in 空车OCR or []]),
+        )
+
+    def _圣水车点击被拒绝(self, 图像, 页面, 坐标):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文.检查宝石商店危险页面 = lambda: False
+        上下文._最近点击页面结果 = 页面
+        上下文._点击识别截图 = 图像
+        上下文.鼠标 = SimpleNamespace(_x=坐标[0], _y=坐标[1])
+        上下文._获取点击页面识别器 = lambda: self.页面识别器
+        上下文.置脚本状态 = lambda *_a, **_k: None
+        return 上下文.输入前安全检查()
+
+    def test_升级商店与宝石弹窗不被误认作空圣水车(self):
+        升级面板 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(升级面板, (70, 20), (730, 580), (70, 80, 90), -1)
+        cv2.rectangle(升级面板, (90, 30), (650, 80), (100, 100, 105), -1)
+        cv2.rectangle(升级面板, (690, 20), (730, 70), (0, 0, 220), -1)
+        cv2.line(升级面板, (698, 28), (722, 62), (245, 245, 245), 6)
+        cv2.line(升级面板, (722, 28), (698, 62), (245, 245, 245), 6)
+
+        def 商店或宝石面板(绿色按钮):
+            图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+            cv2.rectangle(图像, (70, 20), (730, 580), (70, 80, 90), -1)
+            cv2.rectangle(图像, (90, 30), (650, 80), (100, 100, 105), -1)
+            cv2.rectangle(图像, (120, 457), (656, 553), (0, 120, 180), -1)
+            cv2.rectangle(
+                图像, (538, 478), (638, 532),
+                (0, 210, 0) if 绿色按钮 else (140, 140, 140), -1,
+            )
+            cv2.circle(图像, (312, 514), 12, (180, 60, 220), -1)
+            cv2.rectangle(图像, (690, 20), (730, 70), (0, 0, 220), -1)
+            cv2.line(图像, (698, 28), (722, 62), (245, 245, 245), 6)
+            cv2.line(图像, (722, 28), (698, 62), (245, 245, 245), 6)
+            return 图像
+
+        for 名称, 图像, 预期页 in (
+            ("升级详情", 升级面板, "升级详情弹窗"),
+            ("商店", 商店或宝石面板(False), None),
+            ("宝石", 商店或宝石面板(True), None),
+        ):
+            with self.subTest(弹窗=名称):
+                页面 = self.页面识别器.识别(图像, 战斗中=False)
+                if 预期页 is not None:
+                    self.assertEqual(页面.页面, 预期页, 页面.摘要())
+                self.assertNotEqual(页面.页面, "圣水车弹窗", 页面.摘要())
+                self.assertIsNone(self.页面识别器.定位圣水车弹窗按钮(图像))
 
 
 def _添加页面识别回归用例(样本ID: str) -> None:
