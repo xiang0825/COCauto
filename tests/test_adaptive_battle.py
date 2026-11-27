@@ -962,6 +962,30 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertEqual(结果[0]["类别"], "兵种")
         self.assertTrue(any("启用高速下兵" in 文本 for 文本 in 状态))
 
+    def test_低分未匹配攻城候选且x20回退为普通兵种(self):
+        任务 = 进攻任务.__new__(进攻任务)
+        任务.兵栏槽位 = [("第1格", (0, 0, 10, 10))]
+        任务.取本次兵种模板列表 = lambda _上下文: ["兵种_攻城气球.bmp"]
+        任务._识别槽位文本 = lambda _图像: ("x20", "")
+        任务._识别槽位数量 = lambda _图像, _文本: 20
+        任务._槽位最佳模板 = Mock(side_effect=[
+            ("未匹配攻城器械模板", 0.55), ("", 0.0), ("", 0.0),
+        ])
+        任务.是否为灰色图片 = lambda *_参数, **_关键字: False
+        状态 = []
+        上下文 = SimpleNamespace(
+            op=SimpleNamespace(
+                获取屏幕图像cv=lambda *_区域: np.zeros((10, 10, 3), dtype=np.uint8),
+            ),
+            置脚本状态=状态.append,
+        )
+
+        结果 = 任务.检查当前配兵(上下文)
+
+        self.assertEqual(结果[0]["类别"], "兵种")
+        self.assertEqual(结果[0]["数量"], 20)
+        self.assertTrue(结果[0]["数量已确认"])
+
     def test_九条雷龙模板失配时不能判成攻城器械(self):
         任务 = 进攻任务.__new__(进攻任务)
         任务.兵栏槽位 = [("第1格", (0, 0, 10, 10))]

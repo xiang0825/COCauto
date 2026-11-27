@@ -133,10 +133,7 @@ def 按快照构建临时阵容(
         if not isinstance(快照, dict) or not 名单:
             return None, f"{区}没有原阵容快照"
         if 区 == "攻城" and 快照.get("不确定"):
-            if 任务类型 != "指定兵种" or len(名单) != 1:
-                return None, "攻城原阵容不确定，仅支持替换指定兵种任务要求的攻城器械"
-            结果[区] = {str(名单[0]): 1}
-            continue
+            return None, "攻城原阵容不确定，无法保证任务结束后恢复"
         原单位 = {str(名): int(数) for 名, 数 in (快照.get("单位") or {}).items()}
         try:
             上限 = int((快照.get("容量") or [0, 0])[1])

@@ -388,6 +388,25 @@ class 竞赛配兵方案测试(unittest.TestCase):
         任务._点击.assert_not_called()
         self.assertEqual(任务._OCR.call_count, 2)
 
+    def test_接任务后详情仍打开时先读详情并收起再定位(self):
+        任务, _, _ = self._进行中任务({})
+        详情 = "在1场多人对战中赢得1颗胜利之星，至少需使用攻城车x1"
+        项列表 = [
+            文字项("0/1", (620, 430, 660, 450)),
+            文字项(详情, (480, 300, 615, 330)),
+            文字项("放弃", (620, 470, 670, 495)),
+        ]
+        任务._截图 = Mock(return_value=None)
+        任务._OCR = Mock(return_value=项列表)
+        任务._关闭详情 = Mock()
+        任务._点击 = Mock(return_value=True)
+
+        self.assertEqual(任务._读取已接任务卡文本(), 详情)
+
+        任务._关闭详情.assert_called_once_with()
+        任务._点击.assert_not_called()
+        self.assertEqual(任务._OCR.call_count, 1)
+
     def test_进行中卡片无文案时读取安全详情并与缓存一致后同步(self):
         文本 = "在1场多人对战中赢得1颗胜利之星，至少需使用亡灵x1"
         任务, 上下文, _ = self._进行中任务(
