@@ -192,11 +192,80 @@ class 流程分支测试(unittest.TestCase):
         任务._添加并确认关键单位 = Mock(return_value=False)
         任务._添加兵种 = Mock()
 
-        结果 = 任务._配置分区("兵种", {"炸弹人": 1}, ("炸弹人",))
+        结果 = 任务._配置分区("兵种", {"炸弹人": 1}, ("炸弹人",), ("炸弹人",))
 
         self.assertIsNone(结果)
         任务._添加并确认关键单位.assert_called_once_with("兵种", "炸弹人")
         任务._添加兵种.assert_not_called()
+
+    def test_攻城车任务兵种区不把攻城关键单位当关键(self):
+        上下文 = SimpleNamespace(
+            置脚本状态=Mock(), _竞赛配兵关键单位={"攻城": ["攻城战车"]},
+        )
+        任务 = object.__new__(编.编辑军队任务)
+        任务.上下文 = 上下文
+        任务._确认主世界主页 = Mock(return_value=True)
+        任务._打开编辑页 = Mock(return_value=True)
+        任务._配置分区 = Mock(side_effect=[({"野蛮人": 10}, (10, 10)), ({"攻城战车": 1}, (1, 1))])
+
+        结果 = 任务._配置流程({"兵种": {"野蛮人": 1}, "攻城": {"攻城战车": 1}}, ())
+
+        self.assertIsNotNone(结果)
+        兵种调用, 攻城调用 = 任务._配置分区.call_args_list
+        self.assertEqual(兵种调用.args, ("兵种", {"野蛮人": 1}, (), ()))
+        self.assertEqual(攻城调用.args, ("攻城", {"攻城战车": 1}, ("攻城战车",), ("攻城战车",)))
+
+    def test_攻城车竞赛配置执行时只把预设关键兵传给配置流程(self):
+        上下文 = SimpleNamespace(
+            置脚本状态=Mock(), _竞赛配兵关键单位={"攻城": ["攻城战车"]},
+            _部落竞赛配兵配置覆盖={"兵种": {"野蛮人": 1}, "攻城": {"攻城战车": 1}},
+            _部落竞赛基准配兵配置={"兵种": {"野蛮人": 1}},
+            设置=SimpleNamespace(阵容预设=""), _本次运行配兵尝试={},
+            数据库=Mock(), 机器人标志="x",
+        )
+        任务 = object.__new__(编.编辑军队任务)
+        任务.上下文 = 上下文
+        任务.需要配置 = Mock(return_value=True)
+        任务._期望配置 = Mock(return_value={"兵种": {"野蛮人": 1}, "攻城": {"攻城战车": 1}})
+        任务._配置流程 = Mock(return_value={"配置": {"野蛮人": 10, "攻城战车": 1}, "人口": [10, 10]})
+        任务._退出到主世界 = Mock()
+        任务._结束编辑状态 = Mock()
+        with unittest.mock.patch.object(编, "读取卡片模板", return_value=object()):
+            self.assertTrue(任务.执行())
+        self.assertEqual(任务._配置流程.call_args.args[1], ())
+
+    def test_竞赛关键单位不在计划时清空前就停止(self):
+        上下文 = SimpleNamespace(置脚本状态=Mock())
+        任务 = object.__new__(编.编辑军队任务)
+        任务.上下文 = 上下文
+        任务._读取人口 = Mock(return_value=(0, 10))
+        任务._打开列表 = Mock(return_value=True)
+        任务._扫描可用 = Mock(return_value=["野蛮人"])
+        任务._收起列表 = Mock()
+        任务._清空分区 = Mock(return_value=True)
+
+        结果 = 任务._配置分区("兵种", {"野蛮人": 1}, (), ("炸弹人",))
+
+        self.assertIsNone(结果)
+        任务._清空分区.assert_not_called()
+
+    def test_预设关键兵不走逐个确认路径(self):
+        上下文 = SimpleNamespace(置脚本状态=Mock())
+        任务 = object.__new__(编.编辑军队任务)
+        任务.上下文 = 上下文
+        任务._读取人口 = Mock(return_value=(10, 10))
+        任务._打开列表 = Mock(return_value=True)
+        任务._扫描可用 = Mock(return_value=["气球兵"])
+        任务._收起列表 = Mock()
+        任务._清空分区 = Mock(return_value=True)
+        任务._添加并确认关键单位 = Mock(return_value=False)
+        任务._添加兵种 = Mock()
+
+        结果 = 任务._配置分区("兵种", {"气球兵": 1}, ("气球兵",))
+
+        self.assertIsNotNone(结果)
+        任务._添加并确认关键单位.assert_not_called()
+        任务._添加兵种.assert_called_once()
 
     def test_关键单位点击后容量未增加不确认且容量增加才成功(self):
         for 容量序列, 期望结果, 点击次数 in (
