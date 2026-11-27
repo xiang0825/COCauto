@@ -568,7 +568,58 @@ class 实机截图回放测试(unittest.TestCase):
             实际 = 资源任务.识别当前资源(上下文)
         self.assertTrue(实际["识别成功"], 实际)
         self.assertEqual({"金币": 实际["金币"], "圣水": 实际["圣水"]}, 预期, 日志)
-        self.assertTrue(any("位数不一致，复读采用" in 行 for 行 in 日志), 日志)
+        self.assertTrue(any("位数不一致，双路复读一致采用" in 行 for 行 in 日志), 日志)
+
+    def test_夜世界资源无历史值时首读漏位不写库而以独立复读为准(self):
+        """冷启动无已确认夜世界资源：漏中间位的首读不能直接成为基线。"""
+        from unittest.mock import patch
+        import 任务流程.夜世界.更新夜世界账号资源状态 as 资源模块
+
+        图像 = 读取样本("standby_20261126_elixir_cart")
+        预期 = 样本表["standby_20261126_elixir_cart"]["expected"]["resources"]
+        真实识别 = 资源模块.单行资源识别
+        调用次数 = {"n": 0}
+
+        def 首读漏位(引擎, 行, **参数):
+            调用次数["n"] += 1
+            值 = 真实识别(引擎, 行, **参数)
+            if 调用次数["n"] == 1:  # 金币首读：3020459 → 320459
+                文本 = str(值)
+                return int(文本[:1] + 文本[2:])
+            return 值
+
+        资源任务, 上下文, 日志 = self._夜世界资源上下文(图像, None)
+        with patch.object(资源模块, "单行资源识别", side_effect=首读漏位):
+            实际 = 资源任务.识别当前资源(上下文)
+        self.assertTrue(实际["识别成功"], 实际)
+        self.assertEqual({"金币": 实际["金币"], "圣水": 实际["圣水"]}, 预期, 日志)
+        self.assertTrue(any("无历史基线" in 行 for 行 in 日志), 日志)
+
+        # 无历史值 + 正数漏位 + 复读两路不一致：保持未确认，不写库。
+        读数 = iter([320459, 2_975_754, 320459, 3_020_459, 2_975_754, 2_975_754])
+        资源任务, 上下文, 日志 = self._夜世界资源上下文(图像, None)
+        写库 = []
+        上下文.数据库.更新状态 = lambda *参数: 写库.append(参数)
+        资源任务.上下文 = 上下文
+        with patch.object(资源模块, "单行资源识别", side_effect=lambda *_a, **_k: next(读数)):
+            self.assertFalse(资源任务.执行())
+        self.assertEqual(写库, [])
+        self.assertTrue(any("保持未确认" in 行 for 行 in 日志), 日志)
+
+    def test_夜世界资源位数复核仅单路回到旧位数时判不可信(self):
+        from unittest.mock import patch
+        import 任务流程.夜世界.更新夜世界账号资源状态 as 资源模块
+
+        图像 = 读取样本("standby_20261126_elixir_cart")
+        # 首读 373459；轻量复读回到 7 位，完整复读仍 6 位 → 不采用单路读数。
+        读数 = iter([373459, 2_975_754, 3_700_459, 373458])
+        资源任务, 上下文, _ = self._夜世界资源上下文(
+            图像, {"金币": 3_700_459, "圣水": 2_975_754}
+        )
+        with patch.object(资源模块, "单行资源识别", side_effect=lambda *_a, **_k: next(读数)):
+            实际 = 资源任务.识别当前资源(上下文)
+        self.assertFalse(实际["识别成功"], 实际)
+        self.assertEqual(实际["金币"], 0)
 
     def test_夜世界资源位数变化复读不一致时判不可信(self):
         from unittest.mock import patch
