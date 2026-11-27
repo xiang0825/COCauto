@@ -265,7 +265,10 @@ def 单行资源识别(ocr引擎, img, 允许完整识别=False, 最大值=None)
         下 = min(高, int(round(高 * 0.95)))
         img = img[上:下, :]
     if 宽 >= 180:
-        img = img[:, int(round(宽 * 0.28)):int(round(宽 * 0.82))]
+        # 旧的 82% 右边界会切掉最右一位：夜世界现场数字 3 020 459
+        # 被裁成半个 9，OCR 因而读成 3 020 455。将边界移到数字末端之外，
+        # 同时仍留在资源图标左侧，避免把图标噪声带进识别区域。
+        img = img[:, int(round(宽 * 0.28)):int(round(宽 * 0.86))]
     img = cv2.resize(img, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
 
     灰度 = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
