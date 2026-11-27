@@ -74,6 +74,76 @@ class 人口解析测试(unittest.TestCase):
         self.assertEqual(补充, {"超级哥布林": 1, "野蛮人": 2})
         self.assertEqual(编.编辑军队任务._补满计划(0, {"野蛮人": 1}, 编.兵种人口), {})
 
+    def test_竞赛覆盖配置不改变持久设置且预检只读取解锁卡片(self):
+        设置 = SimpleNamespace(
+            是否自动配置军队=True,
+            阵容预设="隐秘哥布林刷资源",
+            配兵兵种=[], 配兵法术=[], 配兵攻城="",
+        )
+        上下文 = SimpleNamespace(
+            设置=设置, 数据库=Mock(), 机器人标志="r", 置脚本状态=Mock(),
+            获取模板识别器=Mock(),
+        )
+        临时 = {"兵种": {"炸弹人": 2.0}, "法术": {"急速法术": 1}}
+        上下文._部落竞赛配兵配置覆盖 = 临时
+        self.assertEqual(编.期望配置(设置, 临时), 临时)
+        self.assertNotEqual(编.期望配置(设置), 临时)
+        self.assertEqual(设置.阵容预设, "隐秘哥布林刷资源")
+
+        任务 = 编.编辑军队任务(上下文)
+        任务._确认主世界主页 = Mock(return_value=True)
+        任务._打开编辑页 = Mock(return_value=True)
+        任务._打开列表 = Mock(return_value=True)
+        任务._扫描可用 = Mock(side_effect=lambda 区, 名称: [名称[0]])
+        任务._收起列表 = Mock()
+        任务._退出到主世界 = Mock()
+        已用编辑操作 = Mock()
+        任务._清空分区 = 已用编辑操作
+        任务._添加兵种 = 已用编辑操作
+
+        可用 = 任务.检查可用单位({"兵种": ["炸弹人"], "攻城": ["攻城战车"]})
+
+        self.assertEqual(
+            可用, {"兵种": {"炸弹人"}, "攻城": {"攻城战车"}},
+            上下文.置脚本状态.call_args_list,
+        )
+        任务._扫描可用.assert_has_calls([
+            unittest.mock.call("兵种", ["炸弹人"]),
+            unittest.mock.call("攻城", ["攻城战车"]),
+        ])
+        已用编辑操作.assert_not_called()
+        任务._退出到主世界.assert_called_once()
+
+    def test_竞赛配兵未确认时重配回原阵容并返回可继续状态(self):
+        import tempfile
+        from 数据库.任务数据库 import 任务数据库
+
+        库 = 任务数据库(os.path.join(tempfile.mkdtemp(), "rollback.db"))
+        原设置 = SimpleNamespace(
+            是否自动配置军队=True,
+            阵容预设="自定义勾选",
+            配兵兵种=["飞龙"], 配兵法术=[], 配兵攻城="",
+        )
+        临时配置 = {"兵种": {"飞龙": 1, "炸弹人": 2}}
+        上下文 = SimpleNamespace(
+            设置=原设置, 数据库=库, 机器人标志="r", 置脚本状态=Mock(),
+            获取模板识别器=Mock(), _部落竞赛配兵配置覆盖=临时配置,
+            _竞赛配兵任务键="拆墙|25",
+        )
+        任务 = 编.编辑军队任务(上下文)
+        任务._退出到主世界 = Mock()
+        任务._配置流程 = Mock(side_effect=[None, {"配置": {"飞龙": 15}, "人口": [352, 352]}])
+
+        self.assertTrue(任务.执行())
+
+        self.assertEqual(任务._配置流程.call_count, 2)
+        self.assertEqual(任务._配置流程.call_args_list[0].args[0], 临时配置)
+        self.assertEqual(任务._配置流程.call_args_list[1].args[0], {"兵种": {"飞龙": 2}})
+        self.assertEqual(上下文._竞赛配兵失败任务键, "拆墙|25")
+        self.assertEqual(上下文._部落竞赛配兵任务类型, "")
+        self.assertEqual(上下文._竞赛配兵任务键, "")
+        self.assertIn("恢复", " ".join(调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list))
+
 
 class 流程分支测试(unittest.TestCase):
     def _任务(self, **设置项):
