@@ -92,30 +92,52 @@ class 圣水满仓圣水车测试(unittest.TestCase):
         任务.上下文.点击已确认安全按钮.assert_called_once_with(670, 60, 延时=180)
         self.assertFalse(any("停止点击收集或其它按钮" in 项 for 项 in self._状态(任务)))
 
-    def test_通用面板关X后未回主页不点下一个候选(self):
-        任务, 识别器 = self._任务([_页("圣水车弹窗")] * 3, [])
+    def test_未找到X或非可关面板时不点击且不点下一个候选(self):
+        # 复审 689903f P1-1/2：关 X 返回假（没找到 X）也必须页级确认主页；
+        # 未知/升级详情/商店等非圣水车面板一律不点。
+        for 页面 in ("未知", "升级详情弹窗", "商店弹窗", "宝石购买页"):
+            with self.subTest(页面=页面):
+                任务, 识别器 = self._任务([_页(页面)] * 3, [])
+                任务.执行OCR识别 = Mock(return_value=[([], "加農炮", .99)])
+                任务._检测详情面板关闭点 = Mock(return_value=None)
+
+                self.assertFalse(self._执行两候选(任务))
+
+                self.assertTrue(任务._输入已拒绝)
+                self.assertFalse(任务._本轮未发现可收集圣水车)
+                任务.上下文.点击.assert_called_once_with(575, 278)
+                任务.上下文.点击已确认安全按钮.assert_not_called()
+                self.assertEqual(识别器.识别.call_count, 3)
+                self.assertTrue(any("交由安全待命" in 项 for 项 in self._状态(任务)))
+
+    def test_候选误开圣水车弹窗经护栏关X确认主页后才点下一个候选(self):
+        任务, _ = self._任务(
+            [_页("圣水车弹窗"), _页("夜世界主页"), _页("夜世界主页")], []
+        )
         任务.执行OCR识别 = Mock(return_value=[([], "加農炮", .99)])
-        任务._检测详情面板关闭点 = Mock(return_value=(670, 60))
-
-        self.assertFalse(self._执行两候选(任务))
-
-        self.assertTrue(任务._输入已拒绝)
-        任务.上下文.点击.assert_called_once_with(575, 278)
-        self.assertEqual(识别器.识别.call_count, 3)
-        self.assertTrue(any("未确认回到夜世界主页" in 项 for 项 in self._状态(任务)))
-
-    def test_通用面板关X确认回主页后才点下一个候选(self):
-        任务, _ = self._任务([_页("圣水车弹窗"), _页("夜世界主页")] * 2, [])
-        任务.执行OCR识别 = Mock(return_value=[([], "加農炮", .99)])
-        任务._检测详情面板关闭点 = Mock(side_effect=[(670, 60), (670, 60)])
 
         self.assertFalse(self._执行两候选(任务))
 
         self.assertEqual(
             [c.args for c in 任务.上下文.点击.call_args_list],
-            [(575, 278), (589, 290)],
+            [(575, 278), (670, 60), (589, 290)],
         )
+        # 关闭 X 走公共护栏点击，不用绕过护栏的已确认安全按钮。
+        任务.上下文.点击已确认安全按钮.assert_not_called()
         self.assertTrue(任务._本轮未发现可收集圣水车)
+        self.assertFalse(任务._输入已拒绝)
+
+    def test_文案未确认但关X后未回主页不标记跳过(self):
+        任务, _ = self._任务(
+            [_页("圣水车弹窗"), _页("未知"), _页("未知")],
+            [([], "Valerossi46", .9)],
+        )
+        self.assertFalse(self._执行两候选(任务))
+
+        # 外层据此置页面恢复失败交给安全待命，而不是跳过继续资源收集。
+        self.assertFalse(任务._本轮未发现可收集圣水车)
+        self.assertTrue(任务._输入已拒绝)
+        任务.上下文.点击.assert_called_once_with(575, 278)
 
     def test_满仓关键字不误判空车与正常列表(self):
         self.assertTrue(收集圣水车任务._是否圣水储存已满([([], "圣水已满", .9)]))

@@ -84,12 +84,23 @@ class 夜世界圣水车测试(unittest.TestCase):
                     )
                     任务.上下文._获取点击页面识别器 = lambda: 识别器
                 if 拒绝阶段 == "候选关闭":
+                    # 候选未通过标题 OCR；页级识别为圣水车弹窗时只经公共
+                    # 护栏点击同帧关闭 X，被拒绝后不再点其它候选。
                     任务.执行OCR识别.return_value = [([], "加農炮", .99)]
+                    任务.上下文.点击 = Mock(side_effect=[True, False])
+                    识别器 = SimpleNamespace(
+                        识别=Mock(return_value=SimpleNamespace(页面="圣水车弹窗")),
+                        定位圣水车弹窗按钮=Mock(return_value={
+                            "收集": None, "关闭": (650, 40, 690, 80), "空车": True,
+                        }),
+                    )
+                    任务.上下文._获取点击页面识别器 = lambda: 识别器
                 self.assertFalse(任务.执行())
                 self.assertTrue(任务._输入已拒绝)
-                self.assertEqual(任务.上下文.点击.call_count, 1 if 拒绝阶段 == "候选关闭" else 2)
+                self.assertEqual(任务.上下文.点击.call_count, 2)
                 self.assertEqual(任务.上下文.点击已确认安全按钮.call_count,
-                                 0 if 拒绝阶段 == "收集" else 1)
+                                 1 if 拒绝阶段 == "安全关闭" else 0)
+                self.assertFalse(getattr(任务, "_本轮未发现可收集圣水车", False))
 
     def _任务(self, 屏幕):
         上下文 = SimpleNamespace(
@@ -217,14 +228,14 @@ class 夜世界圣水车测试(unittest.TestCase):
         任务 = self._任务(屏幕)
         任务.模板识别 = Mock()
         任务._世界识别器 = Mock()
-        任务._世界识别器.识别.side_effect = [
-            SimpleNamespace(当前世界="夜世界"),
-            SimpleNamespace(当前世界="主世界"),
-        ]
+        任务._世界识别器.识别.return_value = SimpleNamespace(当前世界="夜世界")
         任务._查找海岸船锚点 = Mock(return_value=(True, (200, 200), 0.9))
         任务._生成圣水车候选点 = Mock(return_value=[(200, 200, "测试候选1"), (300, 300, "测试候选2")])
         任务.尝试收集圣水 = Mock(return_value=False)
-        任务._关闭候选详情面板 = Mock(return_value=False)
+        识别器 = SimpleNamespace(
+            识别=Mock(return_value=SimpleNamespace(页面="主世界主页"))
+        )
+        任务.上下文._获取点击页面识别器 = lambda: 识别器
         任务.上下文.点击 = Mock()
 
         self.assertFalse(任务.执行())
@@ -263,7 +274,7 @@ class 夜世界圣水车测试(unittest.TestCase):
             (180, 240, "候选1"), (196, 258, "候选2"), (168, 234, "候选3"),
         ])
         任务.尝试收集圣水 = Mock(return_value=False)
-        任务._关闭候选详情面板 = Mock(return_value=True)
+        任务._候选后恢复夜世界主页 = Mock(return_value=True)
         任务.上下文.点击 = Mock(return_value=True)
         任务.上下文.脚本延时 = Mock()
         任务.上下文.游戏内拉远视距 = Mock()

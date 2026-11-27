@@ -322,7 +322,7 @@ class 圣水车与飞艇实拍回放测试(unittest.TestCase):
         任务.上下文.点击 = Mock(return_value=True)
         任务.上下文.脚本延时 = Mock()
         任务.尝试收集圣水 = Mock(return_value=False)
-        任务._关闭候选详情面板 = Mock(return_value=True)
+        任务._候选后恢复夜世界主页 = Mock(return_value=True)
         self.assertFalse(任务.执行())
         self.assertEqual(任务.上下文.点击.call_count, 1)
         self.assertTrue(任务._本轮未发现可收集圣水车)
