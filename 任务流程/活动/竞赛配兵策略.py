@@ -59,13 +59,15 @@ def 构建任务配兵(
     基准配置: dict | None,
     已解锁单位: Iterable[str],
 ) -> tuple[dict | None, str]:
-    """以基准配置生成临时竞赛阵容；None 表示保持基准配置。"""
+    """生成临时竞赛阵容方案（可行性判断）；None 表示保持原阵容。
+
+    基准配置可以为空（未开启“按设置自动配兵”）：实际换兵时由编辑页按换兵前
+    读到的实际阵容快照重新计算确切个数（见 按快照构建临时阵容），并按快照恢复。
+    """
     if 任务类型 not in {"拆墙", "指定兵种"}:
         return None, "保持原配兵"
-    if not isinstance(基准配置, dict) or not any(
-        isinstance(单位, dict) and 单位 for 单位 in 基准配置.values()
-    ):
-        return None, "未启用自动配兵或没有可恢复的原配兵配置"
+    if not isinstance(基准配置, dict):
+        基准配置 = {}
 
     可用 = {str(名) for 名 in (已解锁单位 or ())}
     配置 = _复制配置(基准配置)
@@ -95,3 +97,93 @@ def 构建任务配兵(
     最低权重 = max(0.5, 总权重 * 0.08)
     兵种[名称] = max(float(兵种.get(名称, 0) or 0), 最低权重)
     return 配置, ""
+
+
+# ---- 快照换兵：以编辑页实际阵容（确切个数）为基准，只改要求单位所在分区 ----
+拆墙空间比例 = 0.20   # 约五分之一军营给炸弹人，覆盖 25 墙任务
+指定兵种空间比例 = 0.08
+
+
+def 解析要求数量(文本: str) -> int:
+    原文 = re.sub(r"\s+", "", str(文本 or "")).replace("×", "x").replace("X", "x")
+    匹配 = re.findall(r"x(\d{1,3})", 原文)
+    try:
+        return max(1, int(匹配[-1])) if 匹配 else 1
+    except ValueError:
+        return 1
+
+
+def 按快照构建临时阵容(
+    任务类型: str,
+    任务文本: str,
+    关键单位: dict,
+    分区快照: dict,
+) -> tuple[dict | None, str]:
+    """返回 ({分区: {单位: 确切个数}}, "")，只含需要改动的分区。
+
+    不需要改动时返回 (None, "已满足…")；不能安全构建时返回 (None, 原因)。
+    兵种区：从占用最多的非要求单位里逐个腾出空间给要求单位，其余单位个数保持不变；
+    攻城区：只有一个攻城器械会被带入战斗，直接换成要求的攻城器械 1 个。
+    """
+    from 任务流程.军队配置 import 兵种资料
+
+    结果: dict[str, dict[str, int]] = {}
+    for 区, 名单 in (关键单位 or {}).items():
+        快照 = (分区快照 or {}).get(区)
+        if not isinstance(快照, dict) or not 名单:
+            return None, f"{区}没有原阵容快照"
+        原单位 = {str(名): int(数) for 名, 数 in (快照.get("单位") or {}).items()}
+        try:
+            上限 = int((快照.get("容量") or [0, 0])[1])
+        except (TypeError, ValueError, IndexError):
+            上限 = 0
+        if 上限 <= 0:
+            return None, f"{区}容量未知"
+        if 区 == "攻城":
+            名 = str(名单[0])
+            if 原单位.get(名, 0) > 0:
+                continue
+            结果[区] = {名: 1}
+            continue
+        if 区 != "兵种" or len(名单) != 1:
+            return None, f"{区}临时换兵不支持"
+        名 = str(名单[0])
+        单人口 = 兵种资料.人口(名)
+        if 单人口 <= 0:
+            return None, f"{名}人口未知"
+        要求 = 解析要求数量(任务文本) if 任务类型 == "指定兵种" else 1
+        比例 = 拆墙空间比例 if 任务类型 == "拆墙" else 指定兵种空间比例
+        目标个数 = max(要求, -(-int(上限 * 比例) // 单人口))
+        已有 = 原单位.get(名, 0)
+        if 已有 >= (目标个数 if 任务类型 == "拆墙" else 要求):
+            continue
+        单位 = dict(原单位)
+        人口表 = {单: 兵种资料.人口(单) for 单 in 单位}
+        if any(值 <= 0 for 值 in 人口表.values()):
+            return None, "原阵容中有人口未知的单位"
+        已用 = sum(人口表[单] * 数 for 单, 数 in 单位.items())
+        需要 = (目标个数 - 已有) * 单人口 - (上限 - 已用)
+        while 需要 > 0:
+            候选 = [单 for 单, 数 in 单位.items() if 单 != 名 and 数 > 0]
+            if not 候选:
+                break
+            移除 = max(候选, key=lambda 单: (人口表[单] * 单位[单], 人口表[单]))
+            单位[移除] -= 1
+            需要 -= 人口表[移除]
+            已用 -= 人口表[移除]
+        单位 = {单: 数 for 单, 数 in 单位.items() if 数 > 0}
+        新增 = (上限 - 已用) // 单人口
+        if 已有 + 新增 < 要求:
+            return None, f"原阵容腾不出足够空间放{名}"
+        单位[名] = 已有 + 新增
+        已用 += 新增 * 单人口
+        # 剩下不够一个要求单位的零头，用原阵容里人口最小的单位补上，尽量保持满营。
+        for 单 in sorted((单 for 单 in 单位 if 单 != 名), key=lambda 单: 人口表[单]):
+            if 上限 - 已用 >= 人口表[单]:
+                加 = (上限 - 已用) // 人口表[单]
+                单位[单] += 加
+                已用 += 加 * 人口表[单]
+        结果[区] = 单位
+    if not 结果:
+        return None, "已满足：现有阵容已包含任务要求单位"
+    return 结果, ""
