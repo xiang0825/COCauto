@@ -155,6 +155,17 @@
       "image": "部落竞赛/standby_20261126_battle.jpg",
       "source": "E:/codex.task/coc/数据集/待命现场/standby_20261126_132324_521_0001.png",
       "expected": {"page": "战斗中", "world": null, "return_button": null}
+    },
+    {
+      "id": "standby_20261126_elixir_cart",
+      "image": "standby_20261126_elixir_cart.png",
+      "source": "E:/codex.task/coc/数据集/待命现场/standby_20261126_201043_875_0001.png",
+      "expected": {
+        "page": "圣水车弹窗",
+        "world": "夜世界",
+        "buttons": {"收集": [591, 509], "关闭": [670, 60]},
+        "resources": {"金币": 3020459, "圣水": 2975754}
+      }
     }
   ]
 }

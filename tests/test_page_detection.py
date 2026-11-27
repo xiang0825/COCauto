@@ -812,6 +812,91 @@ class 页面识别测试(unittest.TestCase):
         self.assertEqual(首帧.页面, "战斗过渡")
         self.assertEqual(次帧.页面, "搜索对手中")
 
+    def test_奖励候选持续未知超过三秒返回超时页(self):
+        识别器 = 页面识别器(self.引擎)
+        识别器._识别单帧 = Mock(side_effect=[
+            页面识别结果("战斗奖励候选", None, 0.96, ("奖励选择红色横幅0.96",)),
+            页面识别结果("未知", None, 0.0, ()),
+            页面识别结果("战斗过渡", None, 0.0, ()),
+            页面识别结果("未知", None, 0.0, ()),
+        ])
+        帧 = [np.zeros((600, 800, 3), dtype=np.uint8) for _ in range(4)]
+        with patch(
+            "模块.检测.页面识别器._奖励候选单调时间",
+            side_effect=[10.0, 11.0, 12.9, 13.01],
+        ):
+            页面序列 = [识别器.识别(图, 战斗中=True).页面 for 图 in 帧]
+
+        self.assertEqual(页面序列, [
+            "战斗过渡", "战斗过渡", "战斗过渡", "战斗奖励候选超时"
+        ])
+
+    def test_奖励候选护栏三秒超时在战斗内外都安全停止(self):
+        待确认页 = 页面识别结果(
+            "战斗过渡", None, 0.96, ("奖励选择候选需间隔至少0.5秒的新帧复核",)
+        )
+        for 战斗中 in (True, False):
+            with self.subTest(战斗中=战斗中):
+                上下文 = 任务上下文.__new__(任务上下文)
+                上下文._战斗中 = 战斗中
+                上下文.停止事件 = threading.Event()
+                上下文.页面恢复失败 = False
+                上下文.置脚本状态 = Mock()
+                上下文.脚本延时 = Mock()
+                上下文.点击已确认安全按钮 = Mock()
+                上下文.识别点击画面 = Mock(side_effect=[
+                    待确认页,
+                    页面识别结果("未知", None, 0.0, ()),
+                    页面识别结果("战斗过渡", None, 0.0, ()),
+                ])
+                上下文._系统维护页阻断输入 = Mock(return_value=False)
+                上下文._获取点击识别截图 = Mock(
+                    return_value=np.zeros((600, 800, 3), dtype=np.uint8)
+                )
+                时间序列 = (
+                    [100.0, 100.0, 102.9, 102.9, 103.01, 103.01]
+                    if not 战斗中
+                    else [100.0, 102.9, 103.01]
+                )
+                with patch(
+                    "任务流程.基础任务框架.time.monotonic",
+                    side_effect=时间序列,
+                ):
+                    self.assertTrue(上下文.检查宝石商店危险页面())
+                    self.assertTrue(上下文.检查宝石商店危险页面())
+                    self.assertFalse(上下文.停止事件.is_set())
+                    self.assertTrue(上下文.检查宝石商店危险页面())
+
+                self.assertTrue(上下文.停止事件.is_set())
+                self.assertTrue(上下文.页面恢复失败)
+                上下文.点击已确认安全按钮.assert_not_called()
+                self.assertTrue(any(
+                    "超时" in 调用.args[0]
+                    for 调用 in 上下文.置脚本状态.call_args_list
+                ))
+
+    def test_候选挂起后确认战斗护栏恢复输入(self):
+        待确认页 = 页面识别结果(
+            "战斗过渡", None, 0.96, ("奖励选择候选需间隔至少0.5秒的新帧复核",)
+        )
+        战斗页 = 页面识别结果("战斗中", None, 0.96, ("战斗倒计时0.96",))
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = True
+        上下文.停止事件 = threading.Event()
+        上下文.置脚本状态 = Mock()
+        上下文.脚本延时 = Mock()
+        上下文.识别点击画面 = Mock(side_effect=[待确认页, 战斗页])
+
+        with patch("任务流程.基础任务框架.time.monotonic", return_value=50.0):
+            self.assertTrue(上下文.检查宝石商店危险页面())
+            self.assertFalse(上下文.检查宝石商店危险页面())
+
+        self.assertFalse(上下文.停止事件.is_set())
+        上下文.识别点击画面.assert_has_calls([
+            unittest.mock.call(强制=False),
+            unittest.mock.call(强制=False),
+        ])
+
     def test_结果横幅和底部回营按钮优先识别结算页(self):
         """回营模板失配时，真实结算画面的视觉结构仍优先于奖励页。"""
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
@@ -1270,6 +1355,80 @@ class 页面识别测试(unittest.TestCase):
 
         self.assertTrue(上下文.输入前安全检查())
         上下文.关闭升级详情弹窗.assert_called_once_with(上下文._点击识别截图)
+
+    def test_竞赛流程仅对白名单页面跳过通用全屏OCR(self):
+        for 页面 in (
+            "活动弹窗", "部落竞赛面板", "部落竞赛任务详情", "主世界主页",
+        ):
+            with self.subTest(页面=页面):
+                上下文 = 任务上下文.__new__(任务上下文)
+                上下文._战斗中 = False
+                上下文._部落竞赛流程中 = True
+                上下文._部落竞赛面板已确认 = False
+                上下文.检查宝石商店危险页面 = Mock(return_value=False)
+                上下文._最近点击页面结果 = SimpleNamespace(页面=页面)
+                上下文._点击识别截图 = np.zeros((600, 800, 3), dtype=np.uint8)
+                上下文.清理主世界活动弹窗 = Mock()
+                上下文.关闭升级详情弹窗 = Mock()
+
+                # False 表示这类页面不进入通用全屏 OCR 处理器。
+                self.assertFalse(上下文.输入前安全检查())
+                上下文.清理主世界活动弹窗.assert_not_called()
+                上下文.关闭升级详情弹窗.assert_not_called()
+
+    def test_竞赛流程中的无关弹窗仍按原护栏阻断(self):
+        for 页面 in ("选择卡片弹窗", "宝箱领奖页", "多按钮弹窗", "升级详情弹窗"):
+            with self.subTest(页面=页面):
+                上下文 = 任务上下文.__new__(任务上下文)
+                上下文._战斗中 = False
+                上下文._部落竞赛流程中 = True
+                上下文._部落竞赛面板已确认 = False
+                if 页面 != "升级详情弹窗":
+                    # 即使当前正在执行一次安全关闭，也不能越过这三类弹窗的
+                    # 专用清理/阻断路径。
+                    上下文._部落竞赛安全关闭X点击中 = True
+                上下文.检查宝石商店危险页面 = Mock(return_value=False)
+                上下文._最近点击页面结果 = SimpleNamespace(页面=页面)
+                上下文._点击识别截图 = np.zeros((600, 800, 3), dtype=np.uint8)
+                上下文.清理选择卡片弹窗 = Mock()
+                上下文.清理宝箱领奖页 = Mock()
+                上下文.清理官方评分弹窗 = Mock(return_value=False)
+                上下文.关闭升级详情弹窗 = Mock(return_value=False)
+                上下文.清理主世界活动弹窗 = Mock(return_value=False)
+                上下文.页面恢复失败 = False
+                上下文.置脚本状态 = Mock()
+
+                self.assertTrue(上下文.输入前安全检查())
+                if 页面 == "选择卡片弹窗":
+                    上下文.清理选择卡片弹窗.assert_called_once_with(
+                        上下文._点击识别截图
+                    )
+                elif 页面 == "宝箱领奖页":
+                    上下文.清理宝箱领奖页.assert_called_once_with(
+                        上下文._点击识别截图
+                    )
+                elif 页面 == "多按钮弹窗":
+                    上下文.清理官方评分弹窗.assert_called_once_with()
+                else:
+                    上下文.关闭升级详情弹窗.assert_called_once_with(
+                        上下文._点击识别截图
+                    )
+
+    def test_竞赛流程中的已确认关闭X允许穿过升级页误判(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文._部落竞赛流程中 = True
+        上下文._部落竞赛面板已确认 = False
+        上下文._部落竞赛安全关闭X点击中 = True
+        上下文.检查宝石商店危险页面 = Mock(return_value=False)
+        上下文._最近点击页面结果 = SimpleNamespace(页面="升级详情弹窗")
+        上下文._点击识别截图 = np.zeros((600, 800, 3), dtype=np.uint8)
+        上下文.关闭升级详情弹窗 = Mock()
+        上下文.清理主世界活动弹窗 = Mock()
+
+        self.assertFalse(上下文.输入前安全检查())
+        上下文.关闭升级详情弹窗.assert_not_called()
+        上下文.清理主世界活动弹窗.assert_not_called()
 
     def test_活动OCR与升级OCR互斥(self):
         活动OCR = [

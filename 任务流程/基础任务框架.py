@@ -59,10 +59,20 @@ np = _延迟模块("numpy")
 
 # 后台预热线程和任务线程可能同时第一次取 OCR 引擎：创建过程加锁，只建一套 ONNX 会话。
 _OCR创建锁 = threading.Lock()
+_部落竞赛安全输入页面 = frozenset({
+    "活动弹窗", "部落竞赛面板", "部落竞赛任务详情", "主世界主页",
+})
+_部落竞赛关闭X不可绕过页面 = frozenset({
+    "选择卡片弹窗", "宝箱领奖页", "多按钮弹窗",
+    "断线弹窗", "系统维护", "登录页", "模拟器桌面",
+    "战斗中", "战斗过渡", "战斗结算", "战斗奖励选择",
+})
 
 
 @dataclass
 class 任务上下文:
+    奖励候选输入挂起上限秒 = 3.0
+
     机器人标志: str
     数据库: 任务数据库
     消息队列: queue.Queue
@@ -851,6 +861,11 @@ class 任务上下文:
             or bool(getattr(self, "_战斗中", False))
         ):
             return False
+        # 2026-11-26 19:44 实机：部落竞赛点开活动列表后，这里的近整屏 OCR
+        # 在文字最多的活动列表上同步跑了约 3 分钟，主循环无日志、步骤超时
+        # 也轮不到判断。部落竞赛流程自己会关回主页，期间不做这项维护检查。
+        if self._部落竞赛占用画面():
+            return False
 
         当前时间 = time.monotonic()
         上次检查 = float(getattr(self, "_升级完成弹窗检查时间", 0.0))
@@ -881,6 +896,10 @@ class 任务上下文:
                 return False
             页面结果 = getattr(self, "_最近点击页面结果", None)
             if 页面结果 is not None and 页面结果.页面 in {"战斗中", "战斗结算", "战斗过渡"}:
+                return False
+            # 已高置信识别为活动列表/竞赛面板时肯定不是升级完成弹窗，
+            # 不对这些文字最多的页面做整屏 OCR。
+            if 页面结果 is not None and getattr(页面结果, "页面", "") in self._非升级弹窗文字页:
                 return False
 
             # 宝石护栏刚刚已经拿过一张画面；这里复用短缓存，避免一次
@@ -922,6 +941,15 @@ class 任务上下文:
             return False
         finally:
             self._升级完成弹窗检查中 = False
+
+    _非升级弹窗文字页 = frozenset({"活动弹窗", "部落竞赛面板", "部落竞赛任务详情"})
+
+    def _部落竞赛占用画面(self) -> bool:
+        """部落竞赛流程进行中（含已打开活动列表/竞赛面板）时返回 True。"""
+        return bool(
+            getattr(self, "_部落竞赛流程中", False)
+            or getattr(self, "_部落竞赛面板已确认", False)
+        )
 
     def _升级完成弹窗检查间隔(self) -> float:
         """返回升级完成弹窗的维护检查间隔（秒）。"""
@@ -1940,7 +1968,7 @@ class 任务上下文:
                             return True
                         if 新页面 in {
                             "断线弹窗", "选择卡片弹窗", "升级详情弹窗",
-                            "活动弹窗", "部落竞赛面板", "部落竞赛任务详情",
+                            "圣水车弹窗", "活动弹窗", "部落竞赛面板", "部落竞赛任务详情",
                             "战斗星级奖励", "多按钮弹窗",
                         }:
                             self._最近点击页面结果 = 新结果
@@ -2177,6 +2205,98 @@ class 任务上下文:
         有活动标题 = any(词 in 文本 for 词 in 任务上下文.活动弹窗标题词)
         有活动内容 = any(词 in 文本 for 词 in 任务上下文.活动弹窗内容词)
         return 有活动标题 and 有活动内容
+
+    @staticmethod
+    def _点在框内(点, 框, 截图尺寸=None) -> bool:
+        """判断 800×600 逻辑坐标的点是否落在截图坐标系的框内。"""
+        try:
+            x, y = float(点[0]), float(点[1])
+            if 截图尺寸 is not None:
+                高, 宽 = 截图尺寸[:2]
+                x *= float(宽) / 800.0
+                y *= float(高) / 600.0
+            左, 上, 右, 下 = 框
+            return 左 <= x <= 右 and 上 <= y <= 下
+        except (TypeError, ValueError, IndexError):
+            return False
+
+    def _圣水车弹窗放行当前点击(self, 屏幕图像=None) -> bool:
+        """圣水车弹窗只放行“收集”按钮与右上角关闭 X，其它一律拒绝。
+
+        待发送坐标取自鼠标控制器（``移动到`` 已先于 ``左键点击`` 执行）；
+        按钮框由页面识别器在同一帧重新定位。顶部行内的绿色按钮、
+        商店/宝石或面板外任何位置都不放行。无法确认时同样拒绝。
+        """
+        try:
+            if 屏幕图像 is None:
+                屏幕图像 = getattr(self, "_点击识别截图", None)
+            if 屏幕图像 is None:
+                屏幕图像 = self._获取点击识别截图(强制=False)
+            按钮 = self._获取点击页面识别器().定位圣水车弹窗按钮(屏幕图像)
+            鼠标 = getattr(self, "鼠标", None)
+            待点 = (getattr(鼠标, "_x", None), getattr(鼠标, "_y", None))
+        except Exception as 异常:
+            self.置脚本状态(f"圣水车弹窗按钮复核异常，拒绝点击：{异常}")
+            return False
+        if not 按钮 or None in 待点:
+            self.置脚本状态("圣水车弹窗按钮未能在同帧确认，拒绝点击")
+            return False
+        尺寸 = getattr(屏幕图像, "shape", None)
+        for 名称 in ("收集", "关闭"):
+            框 = 按钮.get(名称)
+            if 框 is not None and self._点在框内(待点, 框, 尺寸):
+                return True
+        self.置脚本状态(
+            f"圣水车弹窗只允许点击收集按钮或关闭X，拒绝点击({待点[0]},{待点[1]})"
+        )
+        return False
+
+    def 关闭圣水车弹窗(self, 屏幕图像=None) -> bool:
+        """只点击圣水车弹窗右上角 X，并确认回到夜世界主页。
+
+        不点击“收集”或任何其它按钮；未识别到圣水车弹窗时返回 False
+        且不发送输入。
+        """
+        if bool(getattr(self, "_战斗中", False)):
+            return False
+        try:
+            if 屏幕图像 is None:
+                try:
+                    屏幕图像 = self.op.获取屏幕图像cv(0, 0, 800, 600, 强制刷新=True)
+                except TypeError:
+                    屏幕图像 = self.op.获取屏幕图像cv(0, 0, 800, 600)
+            按钮 = self._获取点击页面识别器().定位圣水车弹窗按钮(屏幕图像)
+        except Exception as 异常:
+            self.置脚本状态(f"圣水车弹窗关闭预检失败，未发送输入：{异常}")
+            return False
+        if not 按钮 or 按钮.get("关闭") is None:
+            return False
+        左, 上, 右, 下 = 按钮["关闭"]
+        高, 宽 = 屏幕图像.shape[:2]
+        x = int(round((左 + 右) / 2 * 800.0 / 宽))
+        y = int(round((上 + 下) / 2 * 600.0 / 高))
+        self.置脚本状态(f"安全点击圣水车弹窗右上角关闭X：{x},{y}")
+        if not self.点击已确认安全按钮(x, y, 延时=300):
+            self.置脚本状态("圣水车弹窗关闭点击被拒绝")
+            return False
+        self._最近点击页面结果 = None
+        self._点击识别截图 = None
+        self._点击识别截图时间 = 0.0
+        for _ in range(4):
+            self.脚本延时(300)
+            try:
+                try:
+                    新画面 = self.op.获取屏幕图像cv(0, 0, 800, 600, 强制刷新=True)
+                except TypeError:
+                    新画面 = self.op.获取屏幕图像cv(0, 0, 800, 600)
+                结果 = self._获取点击页面识别器().识别(新画面, 战斗中=False)
+            except Exception:
+                continue
+            if getattr(结果, "页面", "") == "夜世界主页":
+                self.置脚本状态("圣水车弹窗已关闭，已确认回到夜世界主页")
+                return True
+        self.置脚本状态("圣水车弹窗已点击关闭，但未确认夜世界主页", 级别="警告")
+        return False
 
     def 关闭升级详情弹窗(self, 屏幕图像=None) -> bool:
         """安全关闭升级详情弹窗；绝不点击宝石或立即完成。
@@ -2639,6 +2759,10 @@ class 任务上下文:
             # 让调用方等待下一帧，而不是继续发送主世界或夜世界入口点击。
             页面 = str(getattr(结果, "页面", "") or "")
             依据 = tuple(getattr(结果, "依据", ()) or ())
+            if 页面 == "战斗奖励候选超时":
+                self._奖励候选超时安全停止(
+                    "连续新帧仍未确认安全战斗或搜敌页面"
+                )
             上次主页世界 = getattr(self, "_最近确认主页世界", None)
             if (
                 页面 == "夜世界主页"
@@ -2724,6 +2848,11 @@ class 任务上下文:
         # 一律阻断，等待游戏端自行进入战斗。
         if 结果 is not None and getattr(结果, "页面", "") == "搜索对手中":
             return True
+        # 夜世界圣水车弹窗：只放行底部绿色“收集”按钮与右上角关闭 X。
+        # 该页曾被误判为升级详情而拒绝收集；现在由页面识别器单独区分，
+        # 这里按同帧按钮框逐点复核，其余坐标（行内按钮、商店、宝石）一律阻断。
+        if 结果 is not None and getattr(结果, "页面", "") == "圣水车弹窗":
+            return not self._圣水车弹窗放行当前点击()
         # 城墙任务已经通过 OCR 定位到二次确认按钮时，确认点击拥有更高
         # 优先级。升级确认页的几何特征与普通“升级详情”面板相同；如果
         # 先进入下面的通用关闭器，它会点击右上角 X，随后原确认坐标必然
@@ -2765,18 +2894,23 @@ class 任务上下文:
             # 流程已用 OCR 确认标题、且确认按钮不含宝石字样时才短暂设置，
             # 点完立即清除；只放行这一次确认点击。
             return False
+        部落竞赛占用点击 = bool(
+            getattr(self, "_部落竞赛面板已确认", False)
+            or getattr(self, "_部落竞赛流程中", False)
+        )
         if (
             结果 is not None
-            and getattr(self, "_部落竞赛面板已确认", False)
-            and 结果.页面 not in {
-                "断线弹窗", "系统维护", "登录页", "模拟器桌面",
-                "战斗中", "战斗过渡", "战斗结算", "战斗奖励选择",
-            }
+            and 部落竞赛占用点击
+            and 结果.页面 not in _部落竞赛关闭X不可绕过页面
+            and (
+                结果.页面 in _部落竞赛安全输入页面
+                # 竞赛任务已经用关闭模板和附近禁点复核确认这次 X。页面识别
+                # 可能把活动列表误分成升级详情；只对这一个受控点击放行。
+                or getattr(self, "_部落竞赛安全关闭X点击中", False)
+            )
         ):
-            # 部落竞赛流程已用模板+OCR 确认当前是活动列表/竞赛面板；
-            # 这些面板与活动弹窗、升级详情共用几何特征，通用关闭器会
-            # 把它们当成意外弹窗关掉。宝石/商店检查在上面已经执行过，
-            # 断线、维护和战斗页仍按原规则阻断。流程结束立即清除标记。
+            # 只在竞赛相关页面或竞赛任务确认的关闭 X 点击中跳过通用
+            # 活动/升级详情 OCR。其它弹窗继续走下方原有清理和阻断分支。
             return False
         if 结果 is not None and 结果.页面 == "选择卡片弹窗":
             self.清理选择卡片弹窗(getattr(self, "_点击识别截图", None))
@@ -2894,6 +3028,8 @@ class 任务上下文:
             and not getattr(self, "_城墙升级资源点击中", False)
             and 结果 is not None
             and 结果.页面 in {"主世界主页", "夜世界主页"}
+            # 部落竞赛流程只在确认主页后才点活动按钮，期间不做这项 OCR 预检。
+            and not getattr(self, "_部落竞赛流程中", False)
         ):
             # 活动/奖励面板会保留底层资源栏，轻量识别因此可能仍返回
             # “主页”。先做纯几何的红色 X + 中央面板预检；只有命中候选
@@ -3025,6 +3161,71 @@ class 任务上下文:
                 self.触发内存保护("官方评分提示", 异常)
             return False
 
+    def _奖励候选挂起护栏(self, 页面结果) -> bool:
+        """候选等待最多三秒；不确认安全页面就安全停止，避免无限拦截。"""
+        页面 = str(getattr(页面结果, "页面", "") or "")
+        依据 = tuple(getattr(页面结果, "依据", ()) or ())
+        开始时间 = getattr(self, "_奖励候选输入挂起开始时间", None)
+        挂起上限秒 = max(
+            0.5,
+            float(getattr(self, "奖励候选输入挂起上限秒", 3.0) or 3.0),
+        )
+
+        if 页面 == "战斗奖励候选超时":
+            return self._奖励候选超时安全停止(
+                "页面识别器确认候选超过挂起时限仍未有明确安全页面"
+            )
+        if 页面 in {"战斗中", "搜索对手中"}:
+            self._奖励候选输入挂起开始时间 = None
+            self._奖励候选输入挂起日志 = False
+            return False
+
+        有奖励候选 = (
+            页面 == "战斗过渡"
+            and any("奖励选择候选需" in str(项) for 项 in 依据)
+        )
+        当前时间 = None
+        if 有奖励候选 and 开始时间 is None:
+            当前时间 = time.monotonic()
+            开始时间 = 当前时间
+            self._奖励候选输入挂起开始时间 = 开始时间
+
+        if 开始时间 is not None and (
+            页面 in {"", "未知", "战斗过渡"} or 页面结果 is None
+        ):
+            if 当前时间 is None:
+                当前时间 = time.monotonic()
+            已挂起秒 = max(0.0, 当前时间 - float(开始时间))
+            if 已挂起秒 >= 挂起上限秒:
+                return self._奖励候选超时安全停止(
+                    f"连续未知/过渡页面已挂起{已挂起秒:.1f}秒，超过{挂起上限秒:.1f}秒上限"
+                )
+            if not getattr(self, "_奖励候选输入挂起日志", False):
+                self.置脚本状态(
+                    f"奖励选择候选待确认（已等待{已挂起秒:.1f}/{挂起上限秒:.1f}秒）；阻断输入"
+                )
+                self._奖励候选输入挂起日志 = True
+            return True
+
+        if 页面 not in {"战斗过渡", "未知", ""}:
+            self._奖励候选输入挂起开始时间 = None
+            self._奖励候选输入挂起日志 = False
+        return False
+
+    def _奖励候选超时安全停止(self, 原因: str) -> bool:
+        self._奖励候选输入挂起开始时间 = None
+        self.页面恢复失败 = True
+        if not getattr(self, "_奖励候选超时已记录", False):
+            self.置脚本状态(
+                f"奖励选择候选超时：{原因}；安全停止任务并保留当前画面，不点击、不发送ESC"
+            )
+            self._奖励候选超时已记录 = True
+        try:
+            self.停止事件.set()
+        except Exception:
+            pass
+        return True
+
     def 检查宝石商店危险页面(self, 强制: bool = False) -> bool:
         """识别宝石/商店弹窗，ESC 退出后恢复任务，不允许点宝石。
 
@@ -3109,6 +3310,8 @@ class 任务上下文:
         # 避免高频下兵时增加 ADB/CPU 压力或误发 ESC 中断战斗。
         if getattr(self, "_战斗中", False):
             结果 = self.识别点击画面(强制=强制)
+            if self._奖励候选挂起护栏(结果):
+                return True
             # 战斗中无法取到新画面时，不能继续盲目下兵：这会不断创建
             # ADB 客户端并扩大 transport 卡死。保留战斗，不再发送输入。
             if 结果 is None:
@@ -3228,12 +3431,14 @@ class 任务上下文:
             # 的鼠标回调会命中 160ms 缓存，不会再次 screencap。
             屏幕图像 = self._获取点击识别截图(强制=强制)
             页面结果 = self.识别点击画面()
+            if self._奖励候选挂起护栏(页面结果):
+                return True
             if self._系统维护页阻断输入(页面结果):
                 return True
             if getattr(页面结果, "页面", "") == "战斗过渡":
                 if not getattr(self, "_奖励候选输入挂起日志", False):
                     self.置脚本状态(
-                        "点击护栏：奖励选择候选等待新帧确认，阻断当前输入"
+                        "点击护栏：页面仍在过渡状态，阻断当前输入"
                     )
                     self._奖励候选输入挂起日志 = True
                 return True
@@ -3936,8 +4141,15 @@ class 任务上下文:
                 if bool(getattr(self, "_任务计划长时间等待", False))
                 else 0.75
             )
+            最近页面 = getattr(
+                getattr(self, "_最近点击页面结果", None), "页面", ""
+            )
             if (
                 not getattr(self, "_战斗中", False)
+                and not self._部落竞赛占用画面()
+                # 和升级完成弹窗检查一样：已识别为活动列表/竞赛面板时
+                # 肯定不是主页中央提示，不做整屏复核/OCR。
+                and 最近页面 not in self._非升级弹窗文字页
                 and 当前单调时间
                 - float(getattr(self, "_中央提示调度时间", 0.0))
                 >= 中央提示检查间隔
@@ -4171,7 +4383,7 @@ class 任务上下文:
             结果 = self._获取点击页面识别器().识别(画面, 战斗中=False)
             if getattr(结果, "页面", "") in {
                 "断线弹窗", "多按钮弹窗", "系统维护", "升级详情弹窗",
-                "活动弹窗", "部落竞赛面板", "部落竞赛任务详情",
+                "圣水车弹窗", "活动弹窗", "部落竞赛面板", "部落竞赛任务详情",
                 "选择卡片弹窗", "宝箱领奖页",
                 "战斗奖励选择", "战斗星级奖励",
             }:

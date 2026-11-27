@@ -245,6 +245,7 @@ class 防系统休眠测试(unittest.TestCase):
         self.assertEqual(调用记录[-1], (工作线程ID[0], ES_CONTINUOUS))
         self.assertFalse(机器人._防休眠控制器.当前已阻止休眠)
 
+
     def test_F1启动_F2暂停_继续_停止_工作线程全程控制防休眠(self):
         调用记录: list[tuple[int, int]] = []
         主线程ID = threading.get_ident()
@@ -413,6 +414,31 @@ class 防系统休眠测试(unittest.TestCase):
             ],
         )
         self.assertNotIn(主线程ID, {tid for tid, _ in 调用记录})
+
+
+class 部落竞赛中央提示调度测试(unittest.TestCase):
+    def test_最近页面是活动或竞赛面板时跳过中央提示OCR(self):
+        for 页面 in ("活动弹窗", "部落竞赛面板", "部落竞赛任务详情"):
+            with self.subTest(页面=页面):
+                上下文 = 任务上下文.__new__(任务上下文)
+                上下文.停止事件 = threading.Event()
+                上下文.继续事件 = threading.Event()
+                上下文.继续事件.set()
+                上下文.企业微信通知器 = None
+                上下文.上报间隔秒 = 0
+                上下文.op = None
+                上下文._战斗中 = False
+                上下文._部落竞赛流程中 = False
+                上下文._部落竞赛面板已确认 = False
+                上下文._最近点击页面结果 = SimpleNamespace(页面=页面)
+                上下文._升级完成弹窗调度时间 = time.monotonic()
+                上下文._中央提示调度时间 = 0.0
+                上下文._星级奖励调度时间 = time.monotonic()
+                上下文.清理中央游戏提示 = Mock()
+
+                上下文.脚本延时(50)
+
+                上下文.清理中央游戏提示.assert_not_called()
 
 
 class 动态降帧节能测试(unittest.TestCase):

@@ -1221,3 +1221,102 @@ class 新白名单选择测试(unittest.TestCase):
     def test_配置白名单与设置选项一一对应(self):
         from 数据库.任务数据库 import 部落竞赛白名单选项
         self.assertEqual(set(模块.加载配置()["白名单"]), set(部落竞赛白名单选项))
+
+
+class 拆墙加入白名单测试(unittest.TestCase):
+    """rc159：主人要求部落竞赛接拆墙类（暴力拆墙）；捐兵、夜世界、指定兵种仍不接。"""
+
+    线上旧白名单 = [
+        "掠夺金币", "掠夺圣水", "掠夺黑油", "摧毁资源建筑", "拆毁建筑",
+        "摧毁防御建筑", "摧毁指定建筑", "多人对战胜利", "摧毁率",
+    ]
+
+    def test_已有自定义白名单一次性补上拆墙且之后取消不再加回(self):
+        from 数据库.任务数据库 import 任务数据库
+
+        with tempfile.TemporaryDirectory() as 目录:
+            路径 = os.path.join(目录, "任务系统.db")
+            库 = 任务数据库(路径)
+            # 模拟 rc158 线上：迁移前保存的白名单没有拆墙
+            with 库._获取连接() as conn:
+                conn.execute("DELETE FROM 系统配置")
+                conn.commit()
+            库.保存机器人设置("robot_1", 机器人设置(部落竞赛任务白名单=list(self.线上旧白名单)))
+
+            白名单 = 任务数据库(路径).获取机器人设置("robot_1").部落竞赛任务白名单
+            self.assertIn("拆墙", 白名单)
+            self.assertTrue(set(self.线上旧白名单) <= set(白名单))
+
+            # 主人之后在界面取消拆墙，再次启动不会被迁移加回
+            库.保存机器人设置("robot_1", 机器人设置(部落竞赛任务白名单=list(self.线上旧白名单)))
+            self.assertNotIn("拆墙", 任务数据库(路径).获取机器人设置("robot_1").部落竞赛任务白名单)
+
+    def test_暴力拆墙卡被选中且捐兵夜世界指定兵种仍不接(self):
+        白名单 = 机器人设置(部落竞赛任务白名单=self.线上旧白名单 + ["拆墙"]).部落竞赛任务白名单
+        self.assertIn("拆墙", 白名单)
+        阵容 = "弓箭手x2+雷龙x11+飞龙+攻城战车+飞龙公爵"
+        卡片 = [
+            ("暴力拆墙在多人游戏中摧毁100块城墙", 600),
+            (文本_捐兵, 900),
+            ("接助之手向部落成员增援总计45空间的部。", 900),
+            (文本_夜世界, 900),
+            ("建莱大师载用摘星逢人在建筑大师门中赢得6利之星。", 900),
+            ("亡塞浩劫在场多人避中赢得1颗胜利之星，至少需使用亡xl。", 900),
+            ("在1场多人对战中赢得1颗胜利之星，至少需使用攻城车x1", 900),
+        ]
+        候选 = [
+            任务候选(0, (序号, 序号), 识别任务类型(文本, 配置, 阵容), 积分, 文本=文本)
+            for 序号, (文本, 积分) in enumerate(卡片)
+        ]
+        self.assertEqual(候选[0].类型, "拆墙")
+        for 项 in 候选[1:]:
+            self.assertIsNone(项.类型, 项.文本)
+        选中 = 选择任务(候选, 白名单, 配置)
+        self.assertIsNotNone(选中)
+        self.assertEqual(选中.文本, "暴力拆墙在多人游戏中摧毁100块城墙")
+        # 只剩不接类卡片时一张都不接
+        self.assertIsNone(选择任务(候选[1:], 白名单, 配置))
+        # 白名单里没有拆墙时不接拆墙卡（主人仍可在界面关掉）
+        self.assertIsNone(选择任务(候选[:1], self.线上旧白名单, 配置))
+
+
+
+class 入口不存在诊断测试(unittest.TestCase):
+    """rc159：底栏没找到活动按钮 → 冷却 20 分钟，日志写模板最佳分数/位置，并存当时画面。"""
+
+    def test_入口不存在冷却20分钟且阈值不变(self):
+        self.assertEqual(配置["冷却分钟"]["入口不存在"], 20)
+        self.assertEqual(配置["模板"]["活动按钮"]["阈值"], 0.75)
+        游戏 = 模拟游戏(有活动按钮=False)
+        任务, 上下文, _, _, _ = 构造任务(游戏)
+        self.assertTrue(任务.执行())
+        self.assertEqual(任务.结果, "入口不存在")
+        记录 = 上下文.数据库.状态["部落竞赛检查记录"]
+        self.assertAlmostEqual(记录["下次检查时间"] - 记录["时间"], 20 * 60, delta=1)
+
+    def test_没找到活动按钮时写最佳分数位置并保存当时画面(self):
+        游戏 = 模拟游戏(有活动按钮=False)
+        任务, 上下文, 日志, _, _ = 构造任务(游戏)
+        帧 = np.full((600, 800, 3), (40, 160, 230), np.uint8)
+        任务._截图 = lambda: 帧
+        任务._模板最佳 = lambda 图像, 名称, 区域=None: (0.612, (180, 560)) if 名称 == "活动按钮" else None
+        self.assertTrue(任务.执行())
+        self.assertEqual(任务.结果, "入口不存在")
+        self.assertEqual(游戏.点击记录, [])
+        诊断 = [行 for 行 in 日志 if "活动按钮模板最佳分数" in 行]
+        self.assertEqual(len(诊断), 1, 日志)
+        self.assertIn("0.612", 诊断[0])
+        self.assertIn("(180, 560)", 诊断[0])
+        self.assertIn("阈值0.75", 诊断[0])
+        截图 = list(Path(上下文.待命现场目录).glob("clan_entry_*活动按钮未找到.png"))
+        self.assertEqual(len(截图), 1)
+        self.assertRegex(截图[0].name, r"clan_entry_\d{8}_\d{6}_")
+
+    def test_真实模板匹配最佳分数低于阈值时仍不点(self):
+        游戏 = 模拟游戏()
+        任务, _, _, _, _ = 构造任务(游戏)
+        图 = np.zeros((600, 800, 3), np.uint8)
+        最佳 = 部落竞赛任务._模板最佳(任务, 图, "活动按钮")
+        if 最佳 is not None:
+            self.assertLess(最佳[0], 0.75)
+        self.assertIsNone(部落竞赛任务._匹配模板(任务, 图, "活动按钮"))

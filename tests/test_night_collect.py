@@ -24,6 +24,14 @@ class 夜世界圣水车测试(unittest.TestCase):
                 任务.上下文.脚本延时 = Mock()
                 任务.上下文.点击 = Mock(side_effect=[True, 拒绝阶段 != "收集"])
                 任务.上下文.点击已确认安全按钮 = Mock(return_value=False)
+                if 拒绝阶段 == "安全关闭":
+                    识别器 = SimpleNamespace(
+                        识别=Mock(return_value=SimpleNamespace(页面="圣水车弹窗")),
+                        定位圣水车弹窗按钮=Mock(
+                            return_value={"关闭": (650, 40, 690, 80)}
+                        ),
+                    )
+                    任务.上下文._获取点击页面识别器 = lambda: 识别器
                 if 拒绝阶段 == "候选关闭":
                     任务.执行OCR识别.return_value = [([], "加農炮", .99)]
                 self.assertFalse(任务.执行())

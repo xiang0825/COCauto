@@ -14,6 +14,7 @@ from 模块.检测.页面识别器 import 页面识别器
 from 模块.检测.模板匹配器 import 模板匹配引擎
 from 任务流程.基础任务框架 import 任务上下文
 from 任务流程.更新主世界账号资源状态 import 更新家乡资源状态任务
+from 任务流程.夜世界.更新夜世界账号资源状态 import 更新夜世界资源状态任务
 from 任务流程.主世界打鱼.等待战斗结束并回营 import 等待战斗结束并回营任务
 from 任务流程.活动.部落竞赛 import 部落竞赛任务, 加载配置, 识别任务类型, 规范文本
 
@@ -45,6 +46,7 @@ from 任务流程.活动.部落竞赛 import 部落竞赛任务, 加载配置, �
 近期待命样本ID = (
     "standby_20261125_reward_chest",
     "standby_20261126_battle",
+    "standby_20261126_elixir_cart",
 )
 
 
@@ -446,6 +448,75 @@ class 实机截图回放测试(unittest.TestCase):
                 结果 = 识别器.识别(读取截图(图片路径), 战斗中=False)
                 self.assertEqual(结果.页面, "战斗中", 结果.摘要())
                 self.assertNotEqual(结果.页面, "战斗奖励选择", 结果.摘要())
+    def test_夜世界圣水车实机截图分类与按钮护栏(self):
+        样本 = 样本表["standby_20261126_elixir_cart"]
+        预期 = 样本["expected"]
+        图像 = 读取样本("standby_20261126_elixir_cart")
+        页面 = self.页面识别器.识别(图像, 战斗中=False)
+        按钮 = self.页面识别器.定位圣水车弹窗按钮(图像)
+
+        self.assertEqual((页面.页面, 页面.世界), (预期["page"], 预期["world"]), 页面.摘要())
+        self.assertIsNotNone(按钮)
+        for 名称, (x, y) in 预期["buttons"].items():
+            框 = 按钮[名称]
+            self.assertTrue(框[0] <= x <= 框[2] and 框[1] <= y <= 框[3], (名称, 框))
+
+        for x, y, 允许 in (
+            (*预期["buttons"]["收集"], True),
+            (*预期["buttons"]["关闭"], True),
+            (610, 137, False),  # 圣水车列表行内的绿色升级按钮
+            (760, 300, False),  # 背景商店入口
+            (571, 339, False),  # 地图候选点
+        ):
+            上下文 = 任务上下文.__new__(任务上下文)
+            上下文._战斗中 = False
+            上下文.检查宝石商店危险页面 = lambda: False
+            上下文._最近点击页面结果 = 页面
+            上下文._点击识别截图 = 图像
+            上下文.鼠标 = SimpleNamespace(_x=x, _y=y)
+            上下文._获取点击页面识别器 = lambda: self.页面识别器
+            上下文.置脚本状态 = lambda *_a, **_k: None
+            self.assertEqual(
+                上下文.输入前安全检查(),
+                not 允许,
+                f"点击({x},{y}) allowed={允许}",
+            )
+
+        # 仅有灰色升级标题栏与红色 X 的升级面板仍保持原先的封锁行为。
+        升级面板 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(升级面板, (70, 20), (730, 580), (70, 80, 90), -1)
+        cv2.rectangle(升级面板, (90, 30), (650, 80), (100, 100, 105), -1)
+        cv2.rectangle(升级面板, (690, 20), (730, 70), (0, 0, 220), -1)
+        cv2.line(升级面板, (698, 28), (722, 62), (245, 245, 245), 6)
+        cv2.line(升级面板, (722, 28), (698, 62), (245, 245, 245), 6)
+        升级页 = self.页面识别器.识别(升级面板, 战斗中=False)
+        self.assertEqual(升级页.页面, "升级详情弹窗", 升级页.摘要())
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文.检查宝石商店危险页面 = lambda: False
+        上下文._最近点击页面结果 = 升级页
+        上下文._点击识别截图 = 升级面板
+        上下文.关闭升级详情弹窗 = lambda *_a: False
+        上下文.置脚本状态 = lambda *_a, **_k: None
+        self.assertTrue(上下文.输入前安全检查())
+
+    def test_夜世界圣水车截图资源OCR保留完整金币尾数(self):
+        图像 = 读取样本("standby_20261126_elixir_cart")
+        资源任务 = 更新夜世界资源状态任务.__new__(更新夜世界资源状态任务)
+        资源任务.ocr引擎 = self.OCR引擎
+        操作 = SimpleNamespace(
+            获取屏幕图像cv=lambda x1, y1, x2, y2, **_kwargs: 图像[y1:y2, x1:x2]
+        )
+        上下文 = SimpleNamespace(op=操作, 置脚本状态=lambda *_a: None)
+
+        实际 = 资源任务.识别当前资源(上下文)
+
+        self.assertTrue(实际["识别成功"], 实际)
+        self.assertEqual(
+            {"金币": 实际["金币"], "圣水": 实际["圣水"]},
+            样本表["standby_20261126_elixir_cart"]["expected"]["resources"],
+            str(实际),
+        )
 
 
 def _添加页面识别回归用例(样本ID: str) -> None:

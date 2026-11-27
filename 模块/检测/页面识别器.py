@@ -44,12 +44,14 @@ class 页面识别器:
     奖励选择页阈值 = 0.90
     奖励选择确认间隔秒 = 0.50
     奖励选择确认最大间隔秒 = 10.0
+    奖励候选挂起最长秒 = 3.0
 
     def __init__(self, 模板识别):
         self.模板识别 = 模板识别
         self.世界识别 = 世界识别器(模板识别)
         self._奖励选择候选时间 = None
         self._奖励选择候选帧 = None
+        self._奖励候选开始时间 = None
 
     @staticmethod
     def _裁剪(图像: np.ndarray, 区域: tuple[int, int, int, int]) -> np.ndarray:
@@ -757,6 +759,7 @@ class 页面识别器:
         if (
             self._检测部落竞赛面板状态(图像) is not None
             or self._检测活动弹窗关闭点(图像) is not None
+            or self._检测圣水车弹窗按钮(图像) is not None
         ):
             return None
         try:
@@ -784,6 +787,100 @@ class 页面识别器:
             )
         except (AttributeError, TypeError, ValueError, cv2.error):
             return None
+
+    @staticmethod
+    def _最大连通框(掩码: np.ndarray):
+        """返回掩码中面积最大的连通域 (x, y, 宽, 高, 面积)，无则 None。"""
+        数量, _, 统计, _ = cv2.connectedComponentsWithStats(掩码, 8)
+        if 数量 <= 1:
+            return None
+        序号 = 1 + int(np.argmax(统计[1:, cv2.CC_STAT_AREA]))
+        return tuple(int(值) for 值 in 统计[序号])
+
+    def _检测圣水车弹窗按钮(
+        self, 图像: np.ndarray
+    ) -> dict[str, tuple[int, int, int, int]] | None:
+        """识别夜世界“聖水車/圣水车”弹窗，返回收集按钮与关闭 X 的点击框。
+
+        圣水车弹窗与升级详情共用灰色标题栏和右上角红色 X，旧识别器
+        只看这两项，会把它误判为升级详情并拒绝点击“收集”。圣水车
+        弹窗独有的视觉结构是：底部横贯的橙色木质横幅、横幅右侧绿色
+        “收集”按钮、横幅中部紫色圣水进度条/圣水滴。三者都必须同时
+        存在；升级详情页底部只有灰色面板和绿色升级/宝石按钮，没有
+        木质横幅与紫色进度条。这里只做几何识别，不授权其它按钮。
+        返回值：{"收集": (左, 上, 右, 下), "关闭": (左, 上, 右, 下)}。
+        """
+        if not isinstance(图像, np.ndarray) or 图像.ndim != 3 or 图像.size == 0:
+            return None
+        try:
+            高, 宽 = 图像.shape[:2]
+            if 高 < 120 or 宽 < 240:
+                return None
+            hsv = cv2.cvtColor(图像, cv2.COLOR_BGR2HSV)
+
+            # 1. 底部木质横幅：橙棕色、高饱和，横跨弹窗宽度。
+            横幅 = hsv[int(高 * 0.76):int(高 * 0.93), int(宽 * 0.15):int(宽 * 0.82)]
+            if 横幅.size == 0:
+                return None
+            木色 = cv2.inRange(横幅, (8, 150, 90), (25, 255, 235))
+            木色比例 = cv2.countNonZero(木色) / float(横幅.shape[0] * 横幅.shape[1])
+            if 木色比例 < 0.40:
+                return None
+            # 木色必须横向铺满：左右两端都要有足够木色，排除局部橙色建筑。
+            半宽 = 木色.shape[1] // 2
+            for 部分 in (木色[:, :半宽], 木色[:, 半宽:]):
+                if cv2.countNonZero(部分) < 部分.size * 0.25:
+                    return None
+
+            # 2. 横幅右侧绿色“收集”按钮。
+            按钮左, 按钮上 = int(宽 * 0.62), int(高 * 0.76)
+            按钮区 = hsv[按钮上:int(高 * 0.94), 按钮左:int(宽 * 0.84)]
+            绿色 = cv2.inRange(按钮区, (35, 90, 140), (62, 255, 255))
+            绿色 = cv2.morphologyEx(
+                绿色, cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)),
+            )
+            按钮 = self._最大连通框(绿色)
+            if 按钮 is None:
+                return None
+            bx, by, bw, bh, 面积 = 按钮
+            if not (
+                宽 * 0.08 <= bw <= 宽 * 0.20
+                and 高 * 0.06 <= bh <= 高 * 0.15
+                and 面积 >= bw * bh * 0.55
+            ):
+                return None
+            收集框 = (按钮左 + bx, 按钮上 + by, 按钮左 + bx + bw, 按钮上 + by + bh)
+
+            # 3. 横幅中部紫色圣水进度条/圣水滴。
+            进度区 = hsv[int(高 * 0.80):int(高 * 0.91), int(宽 * 0.35):int(宽 * 0.66)]
+            紫色 = cv2.inRange(进度区, (125, 100, 110), (165, 255, 255))
+            if cv2.countNonZero(紫色) < max(40, int(宽 * 高 * 0.00012)):
+                return None
+
+            # 4. 右上角红色关闭 X（与升级详情同一几何约束）。
+            关闭点 = self._查找顶部红色关闭X(
+                图像, hsv, x最小比例=0.78, x最大比例=0.95,
+                y最小比例=0.02, y最大比例=0.16,
+            )
+            if 关闭点 is None:
+                return None
+            半边 = max(10, int(宽 * 0.025))
+            关闭框 = (
+                关闭点[0] - 半边, 关闭点[1] - 半边,
+                关闭点[0] + 半边, 关闭点[1] + 半边,
+            )
+            return {"收集": 收集框, "关闭": 关闭框}
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return None
+
+    def _圣水车弹窗分数(self, 图像: np.ndarray) -> float:
+        """返回圣水车弹窗几何置信度，不授权输入。"""
+        return 0.97 if self._检测圣水车弹窗按钮(图像) is not None else 0.0
+
+    def 定位圣水车弹窗按钮(self, 图像: np.ndarray):
+        """仅在已确认圣水车弹窗时返回 {"收集": 框, "关闭": 框}。"""
+        return self._检测圣水车弹窗按钮(图像)
 
     def _升级详情弹窗分数(self, 图像: np.ndarray) -> float:
         """返回升级详情页的几何置信度，不授权输入。"""
@@ -1715,15 +1812,17 @@ class 页面识别器:
             最小间隔秒,
             float(getattr(self, "奖励选择确认最大间隔秒", 10.0) or 10.0),
         )
+        挂起上限秒 = max(
+            0.5, float(getattr(self, "奖励候选挂起最长秒", 3.0) or 3.0)
+        )
+        开始时间 = getattr(self, "_奖励候选开始时间", None)
 
         if 结果.页面 == "战斗奖励候选":
             # 候选帧即使仍有放弃按钮或倒计时，也必须先挂起输入。
             # 搜敌过渡特征会在下一张新帧复核时排除奖励页。
-            if 屏幕图像 is 上次候选帧:
-                return self._待确认奖励选择结果(结果, 最小间隔秒)
             当前时间 = _奖励候选单调时间()
             搜敌分数 = self._奖励候选搜敌分数(结果)
-            if 上次时间 is not None and 搜敌分数 >= 0.90:
+            if 开始时间 is not None and 搜敌分数 >= 0.90:
                 self._清除奖励选择候选()
                 return 页面识别结果(
                     页面="搜索对手中",
@@ -1731,6 +1830,15 @@ class 页面识别器:
                     可信度=搜敌分数,
                     依据=("奖励候选跨帧复核确认搜敌过渡",),
                 )
+            if 开始时间 is None:
+                开始时间 = 当前时间
+                self._奖励候选开始时间 = 当前时间
+            已挂起秒 = max(0.0, 当前时间 - float(开始时间))
+            if 已挂起秒 >= 挂起上限秒:
+                self._清除奖励选择候选()
+                return self._奖励候选超时结果(结果, 已挂起秒, 挂起上限秒)
+            if 屏幕图像 is 上次候选帧:
+                return self._待确认奖励选择结果(结果, 最小间隔秒)
             if 上次时间 is not None:
                 间隔 = 当前时间 - float(上次时间)
                 if 最小间隔秒 <= 间隔 <= 最大间隔秒:
@@ -1747,20 +1855,18 @@ class 页面识别器:
             return self._待确认奖励选择结果(结果, 最小间隔秒)
 
         if 上次候选帧 is not None:
-            if 屏幕图像 is 上次候选帧:
-                return self._待确认奖励选择结果(
-                    页面识别结果(
-                        页面="战斗奖励候选",
-                        世界=None,
-                        可信度=0.0,
-                        依据=("奖励候选帧尚未取得新截图",),
-                    ),
-                    最小间隔秒,
-                )
             # 候选消失后，明确战斗或搜敌页可以恢复原流程；不明确的帧继续挂起。
             if 结果.页面 not in {"未知", "战斗过渡"}:
                 self._清除奖励选择候选()
                 return 结果
+            当前时间 = _奖励候选单调时间()
+            已挂起秒 = max(
+                0.0,
+                当前时间 - float(开始时间 if 开始时间 is not None else 当前时间),
+            )
+            if 已挂起秒 >= 挂起上限秒:
+                self._清除奖励选择候选()
+                return self._奖励候选超时结果(结果, 已挂起秒, 挂起上限秒)
             return self._待确认奖励选择结果(结果, 最小间隔秒)
 
         self._清除奖励选择候选()
@@ -1769,6 +1875,20 @@ class 页面识别器:
     def _清除奖励选择候选(self) -> None:
         self._奖励选择候选时间 = None
         self._奖励选择候选帧 = None
+        self._奖励候选开始时间 = None
+
+    @staticmethod
+    def _奖励候选超时结果(
+        结果: 页面识别结果, 已挂起秒: float, 挂起上限秒: float
+    ) -> 页面识别结果:
+        return 页面识别结果(
+            页面="战斗奖励候选超时",
+            世界=None,
+            可信度=结果.可信度,
+            依据=(
+                f"奖励候选挂起{已挂起秒:.1f}秒仍未确认战斗或搜敌，超过{挂起上限秒:.1f}秒上限",
+            ),
+        )
 
     @staticmethod
     def _奖励候选搜敌分数(结果: 页面识别结果) -> float:
@@ -1854,6 +1974,22 @@ class 页面识别器:
                     世界=None,
                     可信度=0.95,
                     依据=("居中高亮度活动列表", "右侧绿色入口", "右上角红色关闭X"),
+                )
+        # 夜世界圣水车弹窗与升级详情共用标题栏+红色 X，必须先用木质
+        # 横幅、绿色收集按钮和紫色进度条区分，否则“收集”会被升级详情
+        # 护栏拒绝。圣水车页只放行收集按钮与关闭 X（见输入护栏）。
+        if not 战斗中:
+            圣水车分数 = self._圣水车弹窗分数(屏幕图像)
+            if 圣水车分数 >= 0.90:
+                return 页面识别结果(
+                    页面="圣水车弹窗",
+                    世界="夜世界",
+                    可信度=圣水车分数,
+                    依据=(
+                        "底部木质横幅+绿色收集按钮",
+                        "紫色圣水进度条",
+                        "右上角红色关闭X",
+                    ),
                 )
         升级详情分数 = self._升级详情弹窗分数(屏幕图像)
         if 升级详情分数 >= 0.90:
