@@ -95,8 +95,19 @@ class 快照读取测试(unittest.TestCase):
         self.assertEqual(兵种, {"单位": {"雷龙": 8, "气球兵": 22, "弓箭手": 2}, "容量": [352, 352]})
         法术, _ = 任务._读取分区阵容("法术")
         self.assertEqual(法术["单位"], {"闪电法术": 11})
-        攻城, _ = 任务._读取分区阵容("攻城")
-        self.assertEqual(攻城["单位"], {"攻城气球": 1})
+        # 攻城区实机差距只有 0.047（攻城气球/攻城飞艇），按 0.08 要求认不准就拒绝，并把分数写进原因。
+        攻城, 原因 = 任务._读取分区阵容("攻城")
+        self.assertIsNone(攻城)
+        self.assertIn("攻城气球=", 原因)
+        self.assertIn("std=", 原因)
+        日志 = " ".join(c.args[0] for c in 任务.上下文.置脚本状态.call_args_list)
+        self.assertIn("阵容识别明细（兵种）", 日志)
+
+    def test_灰度平坦但数量区有x数字不当空槽(self):
+        任务 = self._任务({**实机OCR表(), 编.阵容数量区域("兵种", 3): "x5"})
+        快照, 原因 = 任务._读取分区阵容("兵种")
+        self.assertIsNone(快照)
+        self.assertIn("不当空槽", 原因)
 
     def test_任一数量读不到即快照不完整(self):
         任务 = self._任务({**实机OCR表(), 编.阵容数量区域("兵种", 1): ""})
@@ -228,7 +239,7 @@ class 竞赛换兵流程测试(unittest.TestCase):
 
         self.assertTrue(任务.执行())
 
-        任务._配置分区.assert_called_once_with("兵种", 主人兵种, (), (), 精确=True)
+        任务._配置分区.assert_called_once_with("兵种", 主人兵种, (), (), 精确=True, 缺失替补=True)
         self.assertFalse(编.有待恢复竞赛快照(上下文))
         上下文.数据库.更新状态.assert_called_with("r", 编.快照状态类型, {})
 
@@ -314,18 +325,20 @@ class 精确复核测试(unittest.TestCase):
         任务._读取分区阵容 = Mock(side_effect=读数)
         return 任务
 
-    def test_精确恢复不补偿多点_只补缺口(self):
+    def test_缺口大于5先小批_尾数逐下确认(self):
         任务 = self._任务([
-            ({"单位": {"雷龙": 10, "飞龙": 1, "弓箭手": 2}, "容量": [322, 352]}, ""),
+            ({"单位": {"雷龙": 5, "飞龙": 1, "弓箭手": 2}, "容量": [202, 352]}, ""),
+            ({"单位": {"雷龙": 9, "飞龙": 1, "弓箭手": 2}, "容量": [322, 352]}, ""),
             ({"单位": dict(主人兵种), "容量": [352, 352]}, ""),
         ])
+        任务._逐下确认添加 = Mock(return_value=2)
         结果 = 任务._配置分区("兵种", dict(主人兵种), (), (), 精确=True)
         self.assertEqual(结果, (主人兵种, (352, 352)))
-        首次, 补缺 = 任务._添加兵种.call_args_list
-        self.assertEqual(首次.args[0], 主人兵种)
-        self.assertFalse(首次.kwargs["补偿"])
-        self.assertEqual(补缺.args[0], {"雷龙": 1})
-        self.assertFalse(补缺.kwargs["补偿"])
+        首批, 补缺批 = 任务._添加兵种.call_args_list
+        self.assertEqual(首批.args[0], {"雷龙": 8})
+        self.assertFalse(首批.kwargs["补偿"])
+        self.assertEqual(补缺批.args[0], {"雷龙": 3})
+        任务._逐下确认添加.assert_called_once_with("兵种", "雷龙", 2)
 
     def test_数量多了即失败(self):
         任务 = self._任务([({"单位": {"雷龙": 11, "飞龙": 1, "弓箭手": 3}, "容量": [353, 360]}, "")])
@@ -379,6 +392,192 @@ class 未开自动配兵不碰军队测试(unittest.TestCase):
         self.assertTrue(编.有待恢复竞赛快照(新))
         编.保存竞赛快照(新, {})
         self.assertFalse(编.有待恢复竞赛快照(SimpleNamespace(数据库=库, 机器人标志="r")))
+
+
+
+class 假游戏:
+    """模拟编辑页：每批连续点击的第一下被吞；单击也交替被吞（第 1、3、5… 下不入账）。"""
+
+    人口 = {"雷龙": 30, "飞龙": 20, "弓箭手": 1, "炸弹人": 2}
+
+    def __init__(self, 上限=352):
+        self.上限 = 上限
+        self.兵 = {}
+        self.单击次数 = 0
+        self.名 = list(self.人口)
+
+    def 占用(self):
+        return sum(self.人口[名] * 数 for 名, 数 in self.兵.items())
+
+    def _加(self, 名, 个):
+        for _ in range(个):
+            if self.占用() + self.人口[名] <= self.上限:
+                self.兵[名] = self.兵.get(名, 0) + 1
+
+    def 坐标名(self, x):
+        return self.名[x // 100]
+
+    def 连续点击(self, x, _y, 次数, **_k):
+        self._加(self.坐标名(x), max(0, 次数 - 1))
+        return True
+
+    def 点击(self, x, _y, **_k):
+        self.单击次数 += 1
+        if self.单击次数 % 2 == 0:
+            self._加(self.坐标名(x), 1)
+        return True
+
+
+def 挂假游戏(任务, 游戏):
+    任务._读取人口 = lambda 区="兵种": (游戏.占用(), 游戏.上限)
+    任务._读取当前列表容量 = lambda 区: (游戏.占用(), 游戏.上限)
+    任务._读取分区阵容 = lambda 区: (
+        {"单位": {名: 数 for 名, 数 in 游戏.兵.items() if 数}, "容量": [游戏.占用(), 游戏.上限]}, "")
+    任务._打开列表 = Mock(return_value=True)
+    任务._收起列表 = Mock()
+    任务._扫描可用 = lambda 区, 名称: [名 for 名 in 名称 if 名 in 游戏.人口]
+    任务._清空分区 = lambda 区: (游戏.兵.clear() or True)
+    任务._逐页 = lambda *a, **k: iter([(0, np.zeros((600, 800, 3), np.uint8))])
+    任务._截图 = Mock(return_value=np.zeros((600, 800, 3), np.uint8))
+
+
+class 第一下被吞测试(unittest.TestCase):
+    def test_每批第一下和单击被吞时精确恢复仍收敛且不多加(self):
+        游戏 = 假游戏()
+        游戏.兵 = {"雷龙": 8, "飞龙": 1, "弓箭手": 2, "炸弹人": 45}
+        上下文 = SimpleNamespace(
+            置脚本状态=Mock(), 脚本延时=Mock(), 停止事件=threading.Event(),
+            点击=游戏.点击, 鼠标=SimpleNamespace(连续点击=游戏.连续点击),
+        )
+        任务 = 新任务(上下文)
+        挂假游戏(任务, 游戏)
+        with unittest.mock.patch.object(
+            编, "查找兵种卡片", side_effect=lambda _图, 名: ((游戏.名.index(名) * 100, 400), 0.99)
+        ):
+            结果 = 任务._配置分区("兵种", dict(主人兵种), (), (), 精确=True)
+        self.assertIsNotNone(结果, 上下文.置脚本状态.call_args_list)
+        self.assertEqual(游戏.兵, 主人兵种)
+        self.assertEqual(游戏.占用(), 352)
+
+
+class 不可用单位与连续失败测试(unittest.TestCase):
+    def test_快照单位不可用时按可用单位替补恢复并写日志(self):
+        上下文 = SimpleNamespace(置脚本状态=Mock(), 脚本延时=Mock(), 停止事件=threading.Event())
+        任务 = 新任务(上下文)
+        任务._读取人口 = Mock(return_value=(352, 352))
+        任务._打开列表 = Mock(return_value=True)
+        任务._收起列表 = Mock()
+        任务._扫描可用 = Mock(return_value=["雷龙", "弓箭手"])  # 飞龙（假设为到期超级兵）不可用
+        任务._清空分区 = Mock(return_value=True)
+        任务._添加兵种 = Mock()
+        任务._精确复核 = Mock(side_effect=lambda 区, 目标: (目标, (352, 352)))
+        结果 = 任务._配置分区("兵种", dict(主人兵种), (), (), 精确=True, 缺失替补=True)
+        目标 = 结果[0]
+        self.assertNotIn("飞龙", 目标)
+        self.assertEqual(编.阵容占用(目标), 352)
+        self.assertEqual(目标["雷龙"], 11)
+        日志 = " ".join(c.args[0] for c in 上下文.置脚本状态.call_args_list)
+        self.assertIn("当前不可用", 日志)
+
+    def test_快照单位全部不可用时保持当前军队不清空(self):
+        上下文 = SimpleNamespace(置脚本状态=Mock())
+        任务 = 新任务(上下文)
+        任务._读取人口 = Mock(return_value=(352, 352))
+        任务._打开列表 = Mock(return_value=True)
+        任务._收起列表 = Mock()
+        任务._扫描可用 = Mock(return_value=[])
+        任务._清空分区 = Mock()
+        结果 = 任务._配置分区("兵种", {"飞龙": 17}, (), (), 精确=True, 缺失替补=True)
+        self.assertEqual(结果, ({}, (352, 352)))
+        任务._清空分区.assert_not_called()
+
+    def _恢复失败任务(self, 快照, 容量):
+        上下文 = 竞赛上下文(_部落竞赛配兵配置覆盖=None)
+        上下文._竞赛原阵容快照 = 快照
+        任务 = 挂页面桩(新任务(上下文))
+        任务._读取分区阵容 = Mock(return_value=(None, "x"))
+        任务._配置分区 = Mock(return_value=None)
+        任务._读取人口 = Mock(return_value=容量)
+        return 任务, 上下文
+
+    def test_连续两次恢复失败清除快照_满营继续(self):
+        快照 = {"任务键": "x", "分区": {"兵种": {"单位": dict(主人兵种), "容量": [352, 352]}}}
+        任务, 上下文 = self._恢复失败任务(快照, (352, 352))
+        self.assertFalse(任务.执行())
+        self.assertTrue(编.有待恢复竞赛快照(上下文))
+        self.assertEqual(上下文._竞赛原阵容快照["恢复失败次数"], 1)
+
+        上下文.页面恢复失败 = False
+        self.assertTrue(任务.执行())
+        self.assertFalse(编.有待恢复竞赛快照(上下文))
+        self.assertFalse(上下文.页面恢复失败)
+        日志 = " ".join(c.args[0] for c in 上下文.置脚本状态.call_args_list)
+        self.assertIn("[严重]", 日志)
+        self.assertIn("保持当前军队继续", 日志)
+
+    def test_连续两次恢复失败清除快照_半空营停在主页(self):
+        快照 = {"任务键": "x", "恢复失败次数": 1,
+                "分区": {"兵种": {"单位": dict(主人兵种), "容量": [352, 352]}}}
+        任务, 上下文 = self._恢复失败任务(快照, (120, 352))
+        self.assertFalse(任务.执行())
+        self.assertTrue(上下文.页面恢复失败)
+        self.assertFalse(编.有待恢复竞赛快照(上下文))
+        任务._退出到主世界.assert_called()
+        日志 = " ".join(c.args[0] for c in 上下文.置脚本状态.call_args_list)
+        self.assertIn("停在主页", 日志)
+
+
+class 复审其它项测试(unittest.TestCase):
+    def test_攻城区识别不确定只放弃攻城区(self):
+        上下文 = 竞赛上下文(
+            _部落竞赛配兵配置覆盖={"攻城": {"攻城战车": 1}},
+            _竞赛配兵关键单位={"攻城": ["攻城战车"]},
+            _竞赛配兵任务键="指定兵种:攻城车", _部落竞赛配兵任务类型="指定兵种",
+            _竞赛配兵任务文本="至少需使用攻城车x1",
+        )
+        任务 = 挂页面桩(新任务(上下文))
+        任务._读取分区阵容 = Mock(return_value=(None, "攻城第1张卡片无法区分"))
+        任务._配置分区 = Mock()
+        self.assertTrue(任务.执行())
+        任务._配置分区.assert_not_called()
+        self.assertEqual(上下文._竞赛配兵失败任务键, "指定兵种:攻城车")
+        日志 = " ".join(c.args[0] for c in 上下文.置脚本状态.call_args_list)
+        self.assertIn("只放弃攻城区", 日志)
+
+    def test_换兵异常恢复成功后标记失败任务键(self):
+        上下文 = 竞赛上下文()
+        任务 = 挂页面桩(新任务(上下文))
+        快照值 = {"单位": dict(主人兵种), "容量": [352, 352]}
+        任务._读取分区阵容 = Mock(side_effect=[(快照值, ""), (None, "x")])
+        任务._配置分区 = Mock(side_effect=[RuntimeError("boom"), (dict(主人兵种), (352, 352))])
+        self.assertTrue(任务.执行())
+        self.assertEqual(上下文._竞赛配兵失败任务键, "拆墙:摧毁25块城墙")
+        self.assertIsNone(上下文._部落竞赛配兵配置覆盖)
+        self.assertFalse(编.有待恢复竞赛快照(上下文))
+
+    def test_快照写库失败就不换兵(self):
+        上下文 = 竞赛上下文()
+        上下文.数据库.更新状态.side_effect = OSError("disk")
+        任务 = 挂页面桩(新任务(上下文))
+        任务._读取分区阵容 = Mock(return_value=({"单位": dict(主人兵种), "容量": [352, 352]}, ""))
+        任务._配置分区 = Mock()
+        self.assertTrue(任务.执行())
+        任务._配置分区.assert_not_called()
+        self.assertFalse(编.有待恢复竞赛快照(上下文))
+        self.assertEqual(上下文._竞赛配兵失败任务键, "拆墙:摧毁25块城墙")
+
+    def test_读库异常不缓存空快照(self):
+        库 = Mock()
+        库.获取最新完整状态.side_effect = [OSError("locked"), SimpleNamespace(状态数据={
+            编.快照状态类型: {"任务键": "x", "分区": {"兵种": {"单位": {"雷龙": 1}, "容量": [30, 30]}}}})]
+        上下文 = SimpleNamespace(数据库=库, 机器人标志="r")
+        self.assertFalse(编.有待恢复竞赛快照(上下文))
+        self.assertTrue(编.有待恢复竞赛快照(上下文))
+
+    def test_两种攻城时即使包含要求的也换成只带要求的那个(self):
+        快照 = {"攻城": {"单位": {"攻城飞艇": 1, "攻城战车": 1}, "容量": [2, 3]}}
+        临时, _ = 按快照构建临时阵容("指定兵种", "至少需使用攻城车x1", {"攻城": ["攻城战车"]}, 快照)
+        self.assertEqual(临时, {"攻城": {"攻城战车": 1}})
 
 
 if __name__ == "__main__":
