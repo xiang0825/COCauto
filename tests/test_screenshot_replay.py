@@ -153,6 +153,14 @@ class 实机截图回放测试(unittest.TestCase):
                     结果.摘要(),
                 )
 
+    def test_实机军队配置页有专属页面识别(self):
+        根目录 = 测试目录.parent
+        图像 = 读取截图(根目录 / "tests" / "fixtures" / "coc_army_config_live_ui.png")
+
+        结果 = self.页面识别器.识别(图像, 战斗中=False)
+
+        self.assertEqual(结果.页面, "军队配置页", 结果.摘要())
+
     def test_结算页资源OCR数值(self):
         资源任务 = 更新家乡资源状态任务.__new__(更新家乡资源状态任务)
         资源任务.ocr引擎 = self.OCR引擎
@@ -205,6 +213,53 @@ class 实机截图回放测试(unittest.TestCase):
             识别任务类型(详情["文本"], 详情任务.配置, ""),
             任务样本["clan_task_type"],
         )
+
+    def test_进行中卡面无文案时只读打开任务详情取得比对文本(self):
+        面板图像 = 读取样本("clan_walkthrough_gray_cards")
+        详情图像 = 读取样本("clan_walkthrough_active_task")
+        任务 = self._部落竞赛任务(面板图像)
+        当前画面 = [面板图像]
+        点击记录 = []
+        任务.上下文.op.获取屏幕图像cv = lambda *args, **kwargs: 当前画面[0]
+        任务._截止 = 10
+        任务._时钟 = lambda: 0
+        任务._日志 = lambda *args: None
+        任务._延时 = lambda *args: None
+
+        def 点击(位置, 说明):
+            点击记录.append((tuple(位置), 说明))
+            当前画面[0] = 详情图像 if 说明 == "进行中任务卡详情" else 面板图像
+            return True
+
+        任务._点击 = 点击
+        项列表 = 任务._OCR(面板图像, 任务.配置["面板"]["卡片区ROI"])
+
+        文本 = 任务._读取当前任务卡文本(项列表)
+
+        self.assertIsNotNone(文本)
+        self.assertIn("5000", 文本)
+        self.assertTrue(任务._任务卡文本匹配(文本, 文本))
+        self.assertEqual(
+            点击记录,
+            [((341, 165), "进行中任务卡详情"), ((160, 500), "空白处关闭详情")],
+        )
+        self.assertIs(当前画面[0], 面板图像)
+
+    def test_进行中详情OCR只读到放字仍提取稳定目标(self):
+        图像 = 读取样本("clan_walkthrough_active_task")
+        任务 = self._部落竞赛任务(图像)
+        点击记录 = []
+        任务._日志 = lambda *args: None
+        任务._延时 = lambda *args: None
+        任务._点击 = lambda 位置, 说明: 点击记录.append((tuple(位置), 说明)) or True
+        项列表 = 任务._OCR(图像, 任务._卡片区(扩展=60))
+
+        文本 = 任务._读取当前任务卡文本(项列表)
+
+        self.assertIn("5000", 文本)
+        self.assertNotIn("300", 文本)
+        self.assertTrue(任务._任务卡文本匹配(文本, 文本))
+        self.assertEqual(点击记录, [((160, 500), "空白处关闭详情")])
 
     def test_实机宝箱领奖全屏页不被误判为主世界主页且可安全收起(self):
         根目录 = 测试目录.parent

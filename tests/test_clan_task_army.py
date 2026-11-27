@@ -365,6 +365,25 @@ class 竞赛配兵方案测试(unittest.TestCase):
         )
         任务._同步竞赛配兵.assert_called_once_with("指定兵种", "详情全文：" + 卡文)
 
+    def test_进行中卡片无文案时读取安全详情并与缓存一致后同步(self):
+        文本 = "在1场多人对战中赢得1颗胜利之星，至少需使用亡灵x1"
+        任务, 上下文, _ = self._进行中任务(
+            {"当前任务类型": "指定兵种", "当前任务文本": "详情全文：" + 文本, "当前任务卡文本": 文本}
+        )
+        任务._读取进度 = Mock(return_value=(11, 25))
+        任务._等待 = Mock(return_value=文本)
+        任务._识别当前任务详情 = Mock()
+        任务._点击 = Mock(return_value=True)
+        任务._关闭详情 = Mock()
+        项列表 = [文字项("11/25", (329, 223, 357, 241))]
+
+        self.assertEqual(任务._处理面板({"文字": 项列表, "图像": None}), "已有任务")
+
+        任务._点击.assert_called_once_with((341, 165), "进行中任务卡详情")
+        self.assertEqual(任务._等待.call_args.args[1], "进行中任务详情")
+        任务._关闭详情.assert_called_once_with()
+        任务._同步竞赛配兵.assert_called_once_with("指定兵种", "详情全文：" + 文本)
+
 
 if __name__ == "__main__":
     unittest.main()
