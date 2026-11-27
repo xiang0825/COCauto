@@ -232,6 +232,12 @@
       "image": "standby_night_home_current_20261127_220053.png",
       "source": "E:/codex.task/coc/异常现场/20261127_220053_323_未知页面待命/当前.png",
       "expected": {"page": "夜世界主页", "world": "夜世界", "buttons": {}}
+    },
+    {
+      "id": "standby_night_home_cart_full_20261127_233039",
+      "image": "standby_night_home_cart_full_20261127_233039.png",
+      "source": "E:/codex.task/coc/数据集/待命现场/standby_20261127_233039_517_0001.png",
+      "expected": {"page": "夜世界主页", "world": "夜世界", "buttons": {}}
     }
   ]
 }

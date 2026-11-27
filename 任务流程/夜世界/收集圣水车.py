@@ -50,12 +50,14 @@ class 收集圣水车任务(夜世界基础任务):
         # 与页面/输入异常区分开；前者可以由外层跳过收集继续战斗。
         self._本轮未发现可收集圣水车 = False
         self._本轮圣水车为空 = False
+        self._本轮圣水车满仓 = False
 
     def 执行(self) -> bool:
         try:
             self._输入已拒绝 = False
             self._本轮未发现可收集圣水车 = False
             self._本轮圣水车为空 = False
+            self._本轮圣水车满仓 = False
             self._收集已点击 = False
             找不到夜世界船的次数 = 0
             最大扫描次数 = 5
@@ -88,18 +90,11 @@ class 收集圣水车任务(夜世界基础任务):
                         return False
                     self.上下文.脚本延时(600)
                     if self.尝试收集圣水():
-                        if self._本轮圣水车为空:
-                            self.上下文.置脚本状态(
-                                f"确认圣水车为空并返回夜世界主页：{点击x},{点击y}"
-                            )
-                        else:
-                            self.上下文.置脚本状态(
-                                f"已确认圣水车面板并完成收集：{点击x},{点击y}"
-                            )
-                        return True
+                        return self._圣水车面板处理完成(点击x, 点击y)
                     if self._输入已拒绝 or getattr(self, "_收集已点击", False):
                         return False
-                    self._关闭候选详情面板()
+                    if self._关闭候选详情面板() and not self._确认回到夜世界主页():
+                        return False
                     if self._输入已拒绝 or not self._夜世界仍在前台():
                         return False
                     self._本轮未发现可收集圣水车 = True
@@ -133,15 +128,7 @@ class 收集圣水车任务(夜世界基础任务):
                             )
                             return False
                         if self.尝试收集圣水():
-                            if self._本轮圣水车为空:
-                                self.上下文.置脚本状态(
-                                    f"确认圣水车为空并返回夜世界主页：{点击x},{点击y}"
-                                )
-                            else:
-                                self.上下文.置脚本状态(
-                                    f"已确认圣水车面板并完成收集：{点击x},{点击y}"
-                                )
-                            return True
+                            return self._圣水车面板处理完成(点击x, 点击y)
                         if self._输入已拒绝 or getattr(self, "_收集已点击", False):
                             # 收集已点下但未确认回到主页：不再点击其它候选。
                             return False
@@ -149,8 +136,13 @@ class 收集圣水车任务(夜世界基础任务):
                         # 个地图坐标继续点在详情页上，否则会把后续输入带到
                         # 错误页面。只在右上角明确识别到红色关闭按钮时关闭，
                         # 不发送无条件 ESC，避免退回主世界或模拟器桌面。
-                        self._关闭候选详情面板()
+                        # 关闭 X 点下后必须确认弹窗已收起、回到夜世界主页，
+                        # 才能点下一个候选点；否则下一点会落在仍打开的弹窗
+                        # 上被输入护栏拒绝（rc165 11-27 23:2x 现场）。
+                        已关闭面板 = self._关闭候选详情面板()
                         if self._输入已拒绝:
+                            return False
+                        if 已关闭面板 and not self._确认回到夜世界主页():
                             return False
                         if not self._夜世界仍在前台():
                             self.上下文.置脚本状态(
@@ -535,15 +527,26 @@ class 收集圣水车任务(夜世界基础任务):
             )
             return False
         if 按钮状态 and 按钮状态.get("空车"):
-            空车文字 = self.执行OCR识别((220, 150, 580, 390))
-            if not self._是否圣水车为空文案(空车文字):
+            # 灰色禁用收集按钮在任何文案下都不能点击。空车（暂无新的防御
+            # 奖励）、圣水储存已满（车上有圣水但无处存放）或文案未确认，
+            # 都只点已确认的圣水车关闭 X 并复核回到夜世界主页，本周期跳过
+            # 收集，不终止夜世界其它流程。
+            面板文字 = self.执行OCR识别((220, 150, 580, 390))
+            if self._是否圣水车为空文案(面板文字):
+                self.上下文.置脚本状态("已确认圣水车为空，不点击灰色收集按钮")
+                self._本轮圣水车为空 = True
+            elif self._是否圣水储存已满(面板文字):
                 self.上下文.置脚本状态(
-                    "圣水车空车结构已命中但文案未确认，停止点击收集或其它按钮",
+                    "圣水储存已满，圣水车收集按钮为灰色禁用；只关闭X，本周期跳过收集"
+                )
+                self._本轮圣水车满仓 = True
+            else:
+                self.上下文.置脚本状态(
+                    "圣水车收集按钮为灰色禁用但文案未确认（可能储存已满）；"
+                    "不点击收集，只关闭X并跳过本周期收集",
                     级别="警告",
                 )
-                return False
-            self.上下文.置脚本状态("已确认圣水车为空，不点击灰色收集按钮")
-            self._本轮圣水车为空 = True
+                self._本轮未发现可收集圣水车 = True
             if not self._关闭圣水车面板并确认主页(空车=True):
                 return False
             self.收集圣水连续出错次数 = 0
@@ -583,6 +586,67 @@ class 收集圣水车任务(夜世界基础任务):
             return False
         self.收集圣水连续出错次数 = 0
         return True
+
+    def _圣水车面板处理完成(self, 点击x: int, 点击y: int) -> bool:
+        """圣水车面板已处理并确认回到夜世界主页后的结果与日志。"""
+        if getattr(self, "_本轮圣水车为空", False):
+            self.上下文.置脚本状态(
+                f"确认圣水车为空并返回夜世界主页：{点击x},{点击y}"
+            )
+            return True
+        if getattr(self, "_本轮圣水车满仓", False):
+            self.上下文.置脚本状态(
+                f"圣水储存已满，未收集圣水车并已返回夜世界主页：{点击x},{点击y}"
+            )
+            return True
+        if getattr(self, "_本轮未发现可收集圣水车", False):
+            # 文案未确认：已安全关闭并回到主页，交由外层跳过收集继续流程。
+            return False
+        self.上下文.置脚本状态(
+            f"已确认圣水车面板并完成收集：{点击x},{点击y}"
+        )
+        return True
+
+    def _确认回到夜世界主页(self, 最多次数: int = 3) -> bool:
+        """关闭面板后用页面识别器复核已回到夜世界主页（只截图不输入）。"""
+        获取识别器 = getattr(self.上下文, "_获取点击页面识别器", None)
+        if not callable(获取识别器):
+            # 旧测试/精简上下文没有页面识别器时沿用世界复核。
+            return self._夜世界仍在前台()
+        当前页 = ""
+        for 次数 in range(最多次数):
+            self.上下文.脚本延时(500)
+            try:
+                屏幕 = self.上下文.op.获取屏幕图像cv(0, 0, 800, 600)
+                当前页 = str(
+                    getattr(获取识别器().识别(屏幕, 战斗中=False), "页面", "")
+                    or ""
+                )
+            except Exception as 异常:
+                当前页 = f"复核异常：{异常}"
+                continue
+            if 当前页 == "夜世界主页":
+                return True
+        self._输入已拒绝 = True
+        self.上下文.置脚本状态(
+            f"关闭面板后未确认回到夜世界主页（当前页面：{当前页 or '未知'}），"
+            "停止剩余候选点击",
+            级别="警告",
+        )
+        return False
+
+    @staticmethod
+    def _是否圣水储存已满(识别结果) -> bool:
+        """圣水车有圣水但储存已满时的提示（简/繁）。"""
+        文本 = "".join(
+            str(项[1])
+            for 项 in 识别结果 or []
+            if isinstance(项, (list, tuple)) and len(项) > 1
+        ).replace(" ", "").replace("\n", "")
+        return any(关键词 in 文本 for 关键词 in (
+            "已满", "已滿", "满了", "滿了", "存储已", "儲存已", "储存已",
+            "容量不足", "空间不足", "空間不足",
+        ))
 
     @staticmethod
     def _是否圣水车为空文案(识别结果) -> bool:
