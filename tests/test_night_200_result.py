@@ -63,10 +63,56 @@ class 夜世界两阶段结算回放测试(unittest.TestCase):
         任务 = self._任务()
         _, 文本, 战斗结果, 摧毁率 = 任务.识别结算帧(图)
         self.assertEqual(摧毁率, 200, 文本)
-        self.assertEqual(等待战斗结束并回营任务.识别星数(图, 文本), 3, 文本)
+        self.assertTrue(任务._两阶段结算已验证(摧毁率))
+        self.assertEqual(
+            等待战斗结束并回营任务.识别星数(图, 文本, 允许两阶段银星=True), 3, 文本
+        )
         # 主世界上限 100：不接受 200%，避免资源数字粘连误读。
         _, _, _, 主世界摧毁率 = self._任务(100).识别结算帧(图)
         self.assertNotEqual(主世界摧毁率, 200)
+
+    def test_主世界原文误读200不计银星(self):
+        """主世界上限 100：原文 OCR 出现 200% 也不得启用两阶段银星。"""
+        图 = 读取(两阶段结算图)
+        主世界任务 = self._任务(100)
+        _, 文本, _, 摧毁率 = 主世界任务.识别结算帧(图)
+        self.assertIn("200%", 文本)
+        self.assertFalse(主世界任务._两阶段结算已验证(摧毁率))
+        self.assertFalse(主世界任务._两阶段结算已验证(200))
+        self.assertIsNone(等待战斗结束并回营任务.识别星数(图, 文本))
+        self.assertIsNone(
+            等待战斗结束并回营任务.识别星数(图, 文本, 允许两阶段银星=False)
+        )
+
+    def test_主世界记录结算不因原文200计银星(self):
+        图 = 读取(两阶段结算图)
+        任务 = self._任务(100)
+        任务._画面仍在战斗 = Mock(return_value=False)
+        任务.保存战斗结果截图 = Mock()
+        任务.更新战斗学习 = Mock(return_value={})
+        任务.生成战斗诊断 = Mock(return_value="主世界")
+        数据库 = Mock()
+        数据库.获取最新完整状态.return_value = SimpleNamespace(状态数据={})
+        上下文 = SimpleNamespace(
+            数据库=数据库, 机器人标志="测试机器人", 置脚本状态=Mock(),
+            本场实时摧毁率=40, 本场最高实时摧毁率=40,
+            本场目标战利品={}, 英雄技能状态={},
+            op=SimpleNamespace(获取屏幕图像cv=lambda *a, **k: 图),
+            脚本延时=Mock(),
+        )
+        self.assertFalse(任务.记录战斗结果(上下文, 图, 结算页已复核=True, 战斗世界="主世界"))
+        统计 = 数据库.更新状态.call_args.args[2]
+        self.assertIsNone(统计["最近星数"])
+        self.assertNotEqual(统计["最近摧毁率"], 200)
+
+    def test_拆框标签邻近无百分号200按上限接收(self):
+        框 = lambda x, y: [[x - 5, y - 5], [x + 5, y - 5], [x + 5, y + 5], [x - 5, y + 5]]
+        OCR结果 = [[框(400, 230), "摧毀率：", 0.9], [框(400, 265), "200", 0.9]]
+        提取 = 等待战斗结束并回营任务.从OCR结果提取摧毁率
+        self.assertEqual(提取(OCR结果, "摧毀率：200", 最大摧毁率=200), 200)
+        self.assertNotEqual(提取(OCR结果, "摧毀率：200", 最大摧毁率=100), 200)
+        单阶段 = [[框(400, 230), "摧毀率：", 0.9], [框(400, 265), "87", 0.9]]
+        self.assertEqual(提取(单阶段, "摧毀率：87", 最大摧毁率=200), 87)
 
     def test_单阶段夜世界结算仍为100与三星(self):
         图 = 读取(单阶段结算图)
@@ -139,6 +185,12 @@ class 安全待命勝利之星獎勵回放测试(unittest.TestCase):
         self.assertEqual(结果.页面, "战斗星级奖励", 结果.摘要())
         x, y = self.识别器.定位战斗星级奖励确定按钮(图)
         self.assertTrue(340 <= x <= 460 and 440 <= y <= 495, (x, y))
+
+    def test_奖励页不返回结算回营坐标(self):
+        图 = 读取(星级奖励图)
+        self.assertIsNone(self.识别器.定位结算回营按钮(图))
+        self.assertIsNone(self.识别器.定位结算回营按钮(图, 允许单帧战斗信号=True))
+        self.assertIsNotNone(self.识别器.定位结算回营按钮(读取(两阶段结算图)))
 
     def test_只点確定并确认弹窗消失(self):
         上下文 = self._上下文([读取(星级奖励图), 读取(夜世界主页图)])
