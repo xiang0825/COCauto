@@ -164,7 +164,7 @@ class 内存保护可恢复与阈值配置测试(unittest.TestCase):
             安全清理=Mock(),
             获取屏幕图像cv=Mock(return_value=np.zeros((600, 800, 3), dtype=np.uint8)),
         )
-        上下文.识别点击画面 = Mock(side_effect=[主页, 主页])
+        上下文.识别点击画面 = Mock(side_effect=[主页, 主页, 主页])
 
         机器人._初始化任务上下文 = Mock(return_value=(设置, 上下文, None))
         机器人._任务计划顺序 = Mock(return_value=["main_resource"])
@@ -188,12 +188,14 @@ class 内存保护可恢复与阈值配置测试(unittest.TestCase):
 
         机器人._执行任务计划项 = Mock(side_effect=模拟执行任务项)
 
-        原始等待 = 机器人.停止事件.wait
+        时钟 = [0.0]
 
         def 快速等待(timeout=None):
-            return 原始等待(timeout=0.01)
+            时钟[0] += float(timeout or 0.0)
+            return False
 
         with patch.object(机器人.停止事件, "wait", side_effect=快速等待), \
+                patch("线程.自动化机器人._安全待命单调时间", side_effect=lambda: 时钟[0]), \
                 patch("线程.自动化机器人.检测游戏登录状态任务") as 检测登录, \
                 patch("线程.自动化机器人.启动模拟器任务") as 启动模拟器, \
                 patch("线程.自动化机器人.检查图像任务") as 检查图像:
@@ -405,9 +407,26 @@ class 未知页面待命通知与现场截图测试(unittest.TestCase):
         上下文.待命通知回调 = lambda **kwargs: 回调记录.append(kwargs)
         上下文._点击识别截图 = 图像
         上下文.置脚本状态 = Mock()
-        上下文.识别点击画面 = Mock(side_effect=[未知页, 未知页, 未知页, 主页, 主页])
+        上下文.识别点击画面 = Mock(
+            side_effect=[未知页, 未知页, 未知页, 主页, 主页, 主页]
+        )
 
-        时钟 = iter([0.0, 100.0, 181.0, 220.0, 230.0, 240.0])
+        时钟 = [0.0]
+        时钟调用数 = [0]
+
+        def 推进时钟():
+            if 时钟调用数[0] == 0:
+                时钟[0] = 0.0
+            elif 时钟调用数[0] == 1:
+                时钟[0] = 60.0
+            elif 时钟调用数[0] == 2:
+                时钟[0] = 120.0
+            elif 时钟调用数[0] == 3:
+                时钟[0] = 181.0
+            else:
+                时钟[0] += 2.5
+            时钟调用数[0] += 1
+            return 时钟[0]
 
         with tempfile.TemporaryDirectory() as 临时目录:
             原始保存 = 任务上下文.保存待命现场截图并通知
@@ -416,7 +435,7 @@ class 未知页面待命通知与现场截图测试(unittest.TestCase):
                 return 原始保存(self_ctx, 原因, 屏幕图像=屏幕图像, 截图目录=临时目录, 最大留图数=50)
 
             with patch.object(任务上下文, "保存待命现场截图并通知", 写入临时目录), \
-                    patch("线程.自动化机器人.time.monotonic", side_effect=lambda: next(时钟)):
+                    patch("线程.自动化机器人._安全待命单调时间", side_effect=推进时钟):
                 self.assertTrue(机器人._等待人工恢复主世界(上下文, Mock()))
 
             保存的文件 = list(Path(临时目录).glob("*.png"))

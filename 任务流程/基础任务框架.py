@@ -71,6 +71,8 @@ _部落竞赛关闭X不可绕过页面 = frozenset({
 
 @dataclass
 class 任务上下文:
+    奖励候选输入挂起上限秒 = 3.0
+
     机器人标志: str
     数据库: 任务数据库
     消息队列: queue.Queue
@@ -2757,6 +2759,10 @@ class 任务上下文:
             # 让调用方等待下一帧，而不是继续发送主世界或夜世界入口点击。
             页面 = str(getattr(结果, "页面", "") or "")
             依据 = tuple(getattr(结果, "依据", ()) or ())
+            if 页面 == "战斗奖励候选超时":
+                self._奖励候选超时安全停止(
+                    "连续新帧仍未确认安全战斗或搜敌页面"
+                )
             上次主页世界 = getattr(self, "_最近确认主页世界", None)
             if (
                 页面 == "夜世界主页"
@@ -3155,6 +3161,71 @@ class 任务上下文:
                 self.触发内存保护("官方评分提示", 异常)
             return False
 
+    def _奖励候选挂起护栏(self, 页面结果) -> bool:
+        """候选等待最多三秒；不确认安全页面就安全停止，避免无限拦截。"""
+        页面 = str(getattr(页面结果, "页面", "") or "")
+        依据 = tuple(getattr(页面结果, "依据", ()) or ())
+        开始时间 = getattr(self, "_奖励候选输入挂起开始时间", None)
+        挂起上限秒 = max(
+            0.5,
+            float(getattr(self, "奖励候选输入挂起上限秒", 3.0) or 3.0),
+        )
+
+        if 页面 == "战斗奖励候选超时":
+            return self._奖励候选超时安全停止(
+                "页面识别器确认候选超过挂起时限仍未有明确安全页面"
+            )
+        if 页面 in {"战斗中", "搜索对手中"}:
+            self._奖励候选输入挂起开始时间 = None
+            self._奖励候选输入挂起日志 = False
+            return False
+
+        有奖励候选 = (
+            页面 == "战斗过渡"
+            and any("奖励选择候选需" in str(项) for 项 in 依据)
+        )
+        当前时间 = None
+        if 有奖励候选 and 开始时间 is None:
+            当前时间 = time.monotonic()
+            开始时间 = 当前时间
+            self._奖励候选输入挂起开始时间 = 开始时间
+
+        if 开始时间 is not None and (
+            页面 in {"", "未知", "战斗过渡"} or 页面结果 is None
+        ):
+            if 当前时间 is None:
+                当前时间 = time.monotonic()
+            已挂起秒 = max(0.0, 当前时间 - float(开始时间))
+            if 已挂起秒 >= 挂起上限秒:
+                return self._奖励候选超时安全停止(
+                    f"连续未知/过渡页面已挂起{已挂起秒:.1f}秒，超过{挂起上限秒:.1f}秒上限"
+                )
+            if not getattr(self, "_奖励候选输入挂起日志", False):
+                self.置脚本状态(
+                    f"奖励选择候选待确认（已等待{已挂起秒:.1f}/{挂起上限秒:.1f}秒）；阻断输入"
+                )
+                self._奖励候选输入挂起日志 = True
+            return True
+
+        if 页面 not in {"战斗过渡", "未知", ""}:
+            self._奖励候选输入挂起开始时间 = None
+            self._奖励候选输入挂起日志 = False
+        return False
+
+    def _奖励候选超时安全停止(self, 原因: str) -> bool:
+        self._奖励候选输入挂起开始时间 = None
+        self.页面恢复失败 = True
+        if not getattr(self, "_奖励候选超时已记录", False):
+            self.置脚本状态(
+                f"奖励选择候选超时：{原因}；安全停止任务并保留当前画面，不点击、不发送ESC"
+            )
+            self._奖励候选超时已记录 = True
+        try:
+            self.停止事件.set()
+        except Exception:
+            pass
+        return True
+
     def 检查宝石商店危险页面(self, 强制: bool = False) -> bool:
         """识别宝石/商店弹窗，ESC 退出后恢复任务，不允许点宝石。
 
@@ -3239,6 +3310,8 @@ class 任务上下文:
         # 避免高频下兵时增加 ADB/CPU 压力或误发 ESC 中断战斗。
         if getattr(self, "_战斗中", False):
             结果 = self.识别点击画面(强制=强制)
+            if self._奖励候选挂起护栏(结果):
+                return True
             # 战斗中无法取到新画面时，不能继续盲目下兵：这会不断创建
             # ADB 客户端并扩大 transport 卡死。保留战斗，不再发送输入。
             if 结果 is None:
@@ -3326,6 +3399,10 @@ class 任务上下文:
                     self._战斗奖励弹窗已确认 = False
                     self.置脚本状态("奖励页特征复核为战斗中，判定为过渡误报，继续下兵")
                     return False
+                if 复核结果 is not None and 复核结果.页面 == "搜索对手中":
+                    self._战斗奖励弹窗已确认 = False
+                    self.置脚本状态("奖励候选跨帧复核为搜敌过渡，继续等待游戏匹配")
+                    return True
                 # 奖励卡片覆盖在战场上，不能把普通地图点击继续发出去；
                 # 奖励内容来自测试服/活动版本，当前没有安全的自动选择规则。
                 # 这里只阻断当前输入并交给进攻/回营状态机继续观察；不要
@@ -3354,8 +3431,18 @@ class 任务上下文:
             # 的鼠标回调会命中 160ms 缓存，不会再次 screencap。
             屏幕图像 = self._获取点击识别截图(强制=强制)
             页面结果 = self.识别点击画面()
+            if self._奖励候选挂起护栏(页面结果):
+                return True
             if self._系统维护页阻断输入(页面结果):
                 return True
+            if getattr(页面结果, "页面", "") == "战斗过渡":
+                if not getattr(self, "_奖励候选输入挂起日志", False):
+                    self.置脚本状态(
+                        "点击护栏：页面仍在过渡状态，阻断当前输入"
+                    )
+                    self._奖励候选输入挂起日志 = True
+                return True
+            self._奖励候选输入挂起日志 = False
 
             # 页面识别优先于中央宝石模板：结算动画和主世界地图中的
             # 绿色/金色纹理可能与旧版宝石小图高度相似。此前即使本帧

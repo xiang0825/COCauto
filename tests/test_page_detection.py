@@ -584,8 +584,8 @@ class 页面识别测试(unittest.TestCase):
         self.assertIsNotNone(候选)
         self.assertEqual(候选["点击点"], (400, 518))
 
-    def test_奖励选择横幅优先于左下角战斗按钮(self):
-        """奖励覆盖层仍带放弃按钮时，不能继续被识别为战斗页。"""
+    def test_战斗放弃按钮与奖励候选同时出现时挂起输入(self):
+        """战斗 HUD 不得让单帧奖励候选直接放行输入。"""
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
         cv2.rectangle(图像, (10, 430), (105, 470), (0, 0, 220), -1)
@@ -596,11 +596,11 @@ class 页面识别测试(unittest.TestCase):
         ):
             cv2.rectangle(图像, (左, 上), (右, 下), (220, 220, 220), 8)
         结果 = self.识别器.识别(图像, 战斗中=True)
-        self.assertEqual(结果.页面, "战斗奖励选择")
-        self.assertTrue(any("奖励选择红色横幅" in 依据 for 依据 in 结果.依据))
+        self.assertEqual(结果.页面, "战斗过渡")
+        self.assertTrue(any("奖励选择" in 依据 for 依据 in 结果.依据))
 
-    def test_战斗倒计时存在时仍识别奖励遮罩(self):
-        """实机活动奖励卡出现时倒计时仍继续，不能放行下兵点击。"""
+    def test_战斗倒计时与奖励候选同时出现时挂起输入(self):
+        """倒计时不能覆盖奖励候选并放行下兵。"""
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
         cv2.rectangle(图像, (10, 430), (105, 470), (0, 0, 220), -1)
@@ -615,11 +615,11 @@ class 页面识别测试(unittest.TestCase):
             1.4, (255, 255, 255), 3, cv2.LINE_AA,
         )
         结果 = self.识别器.识别(图像, 战斗中=True)
-        self.assertEqual(结果.页面, "战斗奖励选择")
-        self.assertTrue(any("奖励选择红色横幅" in 依据 for 依据 in 结果.依据))
+        self.assertEqual(结果.页面, "战斗过渡")
+        self.assertTrue(any("奖励选择" in 依据 for 依据 in 结果.依据))
 
-    def test_红色最后倒计时存在时仍识别奖励遮罩(self):
-        """即使最后几秒倒计时变红，覆盖地图的卡片也要阻断点击。"""
+    def test_红色战斗倒计时与奖励候选同时出现时挂起输入(self):
+        """红色倒计时不能覆盖奖励候选并放行下兵。"""
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
         cv2.rectangle(图像, (10, 430), (105, 470), (0, 0, 220), -1)
@@ -638,8 +638,264 @@ class 页面识别测试(unittest.TestCase):
             1.8, (0, 0, 220), 4, cv2.LINE_AA,
         )
         结果 = self.识别器.识别(图像, 战斗中=True)
-        self.assertEqual(结果.页面, "战斗奖励选择")
-        self.assertTrue(any("奖励选择红色横幅" in 依据 for 依据 in 结果.依据))
+        self.assertEqual(结果.页面, "战斗过渡")
+        self.assertTrue(any("奖励选择" in 依据 for 依据 in 结果.依据))
+
+    def test_真实奖励结构须由间隔半秒的两张新帧确认(self):
+        """无搜敌或战斗 HUD 的奖励页需连续跨帧确认，单帧不定案。"""
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
+        for 左, 上, 右, 下 in (
+            (175, 185, 305, 445),
+            (340, 190, 470, 450),
+            (500, 135, 625, 420),
+        ):
+            cv2.rectangle(图像, (左, 上), (右, 下), (220, 220, 220), 8)
+        识别器 = 页面识别器(self.引擎)
+        第二帧 = 图像.copy()
+        with patch(
+            "模块.检测.页面识别器._奖励候选单调时间",
+            side_effect=[10.0, 10.5],
+        ):
+            首帧结果 = 识别器.识别(图像, 战斗中=False)
+            次帧结果 = 识别器.识别(第二帧, 战斗中=False)
+        self.assertEqual(首帧结果.页面, "战斗过渡")
+        self.assertIn("候选需间隔至少0.5秒", " ".join(首帧结果.依据))
+        self.assertEqual(次帧结果.页面, "战斗奖励选择")
+
+    def test_重复截图不能充作奖励选择的第二帧(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
+        for 左, 上, 右, 下 in (
+            (175, 185, 305, 445),
+            (340, 190, 470, 450),
+            (500, 135, 625, 420),
+        ):
+            cv2.rectangle(图像, (左, 上), (右, 下), (220, 220, 220), 8)
+        识别器 = 页面识别器(self.引擎)
+        with patch(
+            "模块.检测.页面识别器._奖励候选单调时间",
+            side_effect=[1.0, 1.6, 1.7],
+        ):
+            self.assertEqual(识别器.识别(图像, 战斗中=False).页面, "战斗过渡")
+            self.assertEqual(识别器.识别(图像, 战斗中=False).页面, "战斗过渡")
+            self.assertEqual(识别器.识别(图像.copy(), 战斗中=False).页面, "战斗奖励选择")
+
+    def test_带战斗HUD的奖励候选在输入护栏中被挂起(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
+        cv2.rectangle(图像, (10, 430), (105, 470), (0, 0, 220), -1)
+        for 左, 上, 右, 下 in (
+            (175, 185, 305, 445),
+            (340, 190, 470, 450),
+            (500, 135, 625, 420),
+        ):
+            cv2.rectangle(图像, (左, 上), (右, 下), (220, 220, 220), 8)
+        cv2.putText(
+            图像, "45", (380, 80), cv2.FONT_HERSHEY_SIMPLEX,
+            1.4, (255, 255, 255), 3, cv2.LINE_AA,
+        )
+        识别器 = 页面识别器(self.引擎)
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = True
+        上下文.停止事件 = threading.Event()
+        上下文.置脚本状态 = Mock()
+        上下文.脚本延时 = Mock()
+        上下文.识别点击画面 = Mock(
+            return_value=识别器.识别(图像, 战斗中=True)
+        )
+
+        self.assertTrue(上下文.检查宝石商店危险页面())
+        self.assertFalse(上下文.停止事件.is_set())
+        上下文.识别点击画面.assert_called_once_with(强制=False)
+
+    def test_战斗状态尚未建立时奖励候选仍阻断普通输入(self):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文._获取点击识别截图 = Mock(
+            return_value=np.zeros((600, 800, 3), dtype=np.uint8)
+        )
+        上下文.识别点击画面 = Mock(
+            return_value=SimpleNamespace(页面="战斗过渡")
+        )
+        上下文._系统维护页阻断输入 = Mock(return_value=False)
+        上下文.置脚本状态 = Mock()
+
+        self.assertTrue(上下文.检查宝石商店危险页面())
+        上下文.置脚本状态.assert_called_once()
+
+    def test_事故回放帧不再误判奖励选择(self):
+        目录 = self.根目录 / "tests" / "回放样本" / "进攻误判安全待命_20261126"
+        帧路径 = sorted(目录.glob("前序_*.jpg")) + [
+            目录 / "当前_211737.png",
+            目录 / "待命截图_211737.png",
+        ]
+        if not 帧路径 or any(not 路径.exists() for 路径 in 帧路径):
+            self.skipTest("没有完整的事故回放帧")
+        识别器 = 页面识别器(self.引擎)
+        页面序列 = []
+        for 路径 in 帧路径:
+            图像 = cv2.imdecode(
+                np.fromfile(路径, dtype=np.uint8), cv2.IMREAD_COLOR
+            )
+            self.assertIsNotNone(图像, str(路径))
+            页面序列.append(识别器.识别(图像, 战斗中=True).页面)
+
+        self.assertEqual(页面序列, ["战斗中"] * len(帧路径))
+
+    def test_奖励候选消失后下一帧确认普通战斗并恢复输入(self):
+        候选图 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(候选图, (214, 70), (588, 121), (0, 0, 220), -1)
+        cv2.rectangle(候选图, (10, 430), (105, 470), (0, 0, 220), -1)
+        for 左, 上, 右, 下 in (
+            (175, 185, 305, 445),
+            (340, 190, 470, 450),
+            (500, 135, 625, 420),
+        ):
+            cv2.rectangle(候选图, (左, 上), (右, 下), (220, 220, 220), 8)
+        普通战斗图 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(普通战斗图, (10, 430), (105, 470), (0, 0, 220), -1)
+        cv2.putText(
+            普通战斗图, "45", (380, 80), cv2.FONT_HERSHEY_SIMPLEX,
+            1.4, (255, 255, 255), 3, cv2.LINE_AA,
+        )
+        识别器 = 页面识别器(self.引擎)
+        with patch(
+            "模块.检测.页面识别器._奖励候选单调时间", return_value=10.0
+        ):
+            首帧 = 识别器.识别(候选图, 战斗中=True)
+            次帧 = 识别器.识别(普通战斗图, 战斗中=True)
+        self.assertEqual(首帧.页面, "战斗过渡")
+        self.assertEqual(次帧.页面, "战斗中")
+
+    def test_带战斗HUD的持续奖励候选跨帧确认(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
+        cv2.rectangle(图像, (10, 430), (105, 470), (0, 0, 220), -1)
+        for 左, 上, 右, 下 in (
+            (175, 185, 305, 445),
+            (340, 190, 470, 450),
+            (500, 135, 625, 420),
+        ):
+            cv2.rectangle(图像, (左, 上), (右, 下), (220, 220, 220), 8)
+        cv2.putText(
+            图像, "45", (380, 80), cv2.FONT_HERSHEY_SIMPLEX,
+            1.4, (255, 255, 255), 3, cv2.LINE_AA,
+        )
+        识别器 = 页面识别器(self.引擎)
+        with patch(
+            "模块.检测.页面识别器._奖励候选单调时间",
+            side_effect=[10.0, 10.5],
+        ):
+            首帧 = 识别器.识别(图像, 战斗中=True)
+            次帧 = 识别器.识别(图像.copy(), 战斗中=True)
+        self.assertEqual(首帧.页面, "战斗过渡")
+        self.assertEqual(次帧.页面, "战斗奖励选择")
+
+    def test_奖励候选跨帧确认时搜敌特征优先排除奖励页(self):
+        图像 = np.zeros((600, 800, 3), dtype=np.uint8)
+        cv2.rectangle(图像, (214, 70), (588, 121), (0, 0, 220), -1)
+        for 左, 上, 右, 下 in (
+            (175, 185, 305, 445),
+            (340, 190, 470, 450),
+            (500, 135, 625, 420),
+        ):
+            cv2.rectangle(图像, (左, 上), (右, 下), (220, 220, 220), 8)
+        识别器 = 页面识别器(self.引擎)
+        识别器._搜索对手页分数 = Mock(side_effect=[0.0, 0.96])
+        with patch(
+            "模块.检测.页面识别器._奖励候选单调时间",
+            side_effect=[10.0, 10.5],
+        ):
+            首帧 = 识别器.识别(图像, 战斗中=False)
+            次帧 = 识别器.识别(图像.copy(), 战斗中=False)
+        self.assertEqual(首帧.页面, "战斗过渡")
+        self.assertEqual(次帧.页面, "搜索对手中")
+
+    def test_奖励候选持续未知超过三秒返回超时页(self):
+        识别器 = 页面识别器(self.引擎)
+        识别器._识别单帧 = Mock(side_effect=[
+            页面识别结果("战斗奖励候选", None, 0.96, ("奖励选择红色横幅0.96",)),
+            页面识别结果("未知", None, 0.0, ()),
+            页面识别结果("战斗过渡", None, 0.0, ()),
+            页面识别结果("未知", None, 0.0, ()),
+        ])
+        帧 = [np.zeros((600, 800, 3), dtype=np.uint8) for _ in range(4)]
+        with patch(
+            "模块.检测.页面识别器._奖励候选单调时间",
+            side_effect=[10.0, 11.0, 12.9, 13.01],
+        ):
+            页面序列 = [识别器.识别(图, 战斗中=True).页面 for 图 in 帧]
+
+        self.assertEqual(页面序列, [
+            "战斗过渡", "战斗过渡", "战斗过渡", "战斗奖励候选超时"
+        ])
+
+    def test_奖励候选护栏三秒超时在战斗内外都安全停止(self):
+        待确认页 = 页面识别结果(
+            "战斗过渡", None, 0.96, ("奖励选择候选需间隔至少0.5秒的新帧复核",)
+        )
+        for 战斗中 in (True, False):
+            with self.subTest(战斗中=战斗中):
+                上下文 = 任务上下文.__new__(任务上下文)
+                上下文._战斗中 = 战斗中
+                上下文.停止事件 = threading.Event()
+                上下文.页面恢复失败 = False
+                上下文.置脚本状态 = Mock()
+                上下文.脚本延时 = Mock()
+                上下文.点击已确认安全按钮 = Mock()
+                上下文.识别点击画面 = Mock(side_effect=[
+                    待确认页,
+                    页面识别结果("未知", None, 0.0, ()),
+                    页面识别结果("战斗过渡", None, 0.0, ()),
+                ])
+                上下文._系统维护页阻断输入 = Mock(return_value=False)
+                上下文._获取点击识别截图 = Mock(
+                    return_value=np.zeros((600, 800, 3), dtype=np.uint8)
+                )
+                时间序列 = (
+                    [100.0, 100.0, 102.9, 102.9, 103.01, 103.01]
+                    if not 战斗中
+                    else [100.0, 102.9, 103.01]
+                )
+                with patch(
+                    "任务流程.基础任务框架.time.monotonic",
+                    side_effect=时间序列,
+                ):
+                    self.assertTrue(上下文.检查宝石商店危险页面())
+                    self.assertTrue(上下文.检查宝石商店危险页面())
+                    self.assertFalse(上下文.停止事件.is_set())
+                    self.assertTrue(上下文.检查宝石商店危险页面())
+
+                self.assertTrue(上下文.停止事件.is_set())
+                self.assertTrue(上下文.页面恢复失败)
+                上下文.点击已确认安全按钮.assert_not_called()
+                self.assertTrue(any(
+                    "超时" in 调用.args[0]
+                    for 调用 in 上下文.置脚本状态.call_args_list
+                ))
+
+    def test_候选挂起后确认战斗护栏恢复输入(self):
+        待确认页 = 页面识别结果(
+            "战斗过渡", None, 0.96, ("奖励选择候选需间隔至少0.5秒的新帧复核",)
+        )
+        战斗页 = 页面识别结果("战斗中", None, 0.96, ("战斗倒计时0.96",))
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = True
+        上下文.停止事件 = threading.Event()
+        上下文.置脚本状态 = Mock()
+        上下文.脚本延时 = Mock()
+        上下文.识别点击画面 = Mock(side_effect=[待确认页, 战斗页])
+
+        with patch("任务流程.基础任务框架.time.monotonic", return_value=50.0):
+            self.assertTrue(上下文.检查宝石商店危险页面())
+            self.assertFalse(上下文.检查宝石商店危险页面())
+
+        self.assertFalse(上下文.停止事件.is_set())
+        上下文.识别点击画面.assert_has_calls([
+            unittest.mock.call(强制=False),
+            unittest.mock.call(强制=False),
+        ])
 
     def test_结果横幅和底部回营按钮优先识别结算页(self):
         """回营模板失配时，真实结算画面的视觉结构仍优先于奖励页。"""
@@ -2366,12 +2622,12 @@ class 页面识别测试(unittest.TestCase):
         self.assertFalse(进攻任务.执行())
         进攻上下文.清理宝箱领奖页.assert_called_once()
 
-        # 4) 自动化机器人._安全待命单次 遇到宝箱领奖页能安全收起并在双帧主页后恢复
+        # 4) 安全待命遇到领奖页必须保持只读，不点击领奖按钮。
         from 线程.自动化机器人 import 自动化机器人
         机器人 = 自动化机器人.__new__(自动化机器人)
         机器人.停止事件 = Mock()
         机器人.停止事件.is_set.return_value = False
-        机器人.停止事件.wait.return_value = False
+        机器人.停止事件.wait.return_value = True
         机器人.继续事件 = threading.Event()
         机器人.继续事件.set()
         机器人.停止原因 = None
@@ -2379,8 +2635,6 @@ class 页面识别测试(unittest.TestCase):
         机器人.记录日志 = Mock()
         页面序列 = iter([
             SimpleNamespace(页面="宝箱领奖页", 世界=None, 可信度=0.96),
-            SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.95),
-            SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.95),
         ])
         待命上下文 = SimpleNamespace(
             设置=SimpleNamespace(未知页面待命通知秒数=180),
@@ -2396,9 +2650,9 @@ class 页面识别测试(unittest.TestCase):
             置脚本状态=Mock(),
         )
         with patch("线程.自动化机器人.检测游戏登录状态任务"):
-            self.assertTrue(机器人._安全待命单次(待命上下文, "主世界"))
-        待命上下文.清理宝箱领奖页.assert_called_once()
-        self.assertEqual(待命上下文.识别点击画面.call_count, 3)
+            self.assertFalse(机器人._安全待命单次(待命上下文, "主世界"))
+        待命上下文.清理宝箱领奖页.assert_not_called()
+        self.assertEqual(待命上下文.识别点击画面.call_count, 1)
 
     def test_宝箱领奖页清理_OCR期间触发停止事件立即中止且不点击(self):
         领奖图 = self._读取宝箱领奖实机图()
@@ -2565,11 +2819,11 @@ class 页面识别测试(unittest.TestCase):
         mock_失败开箱.assert_called_once_with(失败上下文)
         失败上下文.点击已确认安全按钮.assert_not_called()
 
-        # c) 安全待命（_等待人工恢复主世界 / _安全待命单次）直接遇到敲宝箱页立即触发开启奖励宝箱并恢复
+        # c) 安全待命遇到未分类的宝箱画面时保持只读，不启动开箱流程。
         机器人 = 自动化机器人.__new__(自动化机器人)
         机器人.停止事件 = Mock()
         机器人.停止事件.is_set.return_value = False
-        机器人.停止事件.wait.return_value = False
+        机器人.停止事件.wait.return_value = True
         机器人.继续事件 = threading.Event()
         机器人.继续事件.set()
         机器人.停止原因 = None
@@ -2577,8 +2831,6 @@ class 页面识别测试(unittest.TestCase):
         机器人.记录日志 = Mock()
         页面序列 = iter([
             SimpleNamespace(页面="未知", 世界=None, 可信度=0.0),
-            SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.95),
-            SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.95),
         ])
         待命上下文 = SimpleNamespace(
             设置=SimpleNamespace(未知页面待命通知秒数=180),
@@ -2595,9 +2847,9 @@ class 页面识别测试(unittest.TestCase):
         )
         with patch("线程.自动化机器人.检测游戏登录状态任务"), \
              patch("任务流程.主世界打鱼.奖励宝箱.开启奖励宝箱", return_value=True) as mock_待命开箱:
-            self.assertTrue(机器人._等待人工恢复主世界(待命上下文, Mock()))
-        mock_待命开箱.assert_called_once_with(待命上下文)
-        self.assertEqual(待命上下文.识别点击画面.call_count, 3)
+            self.assertFalse(机器人._等待人工恢复主世界(待命上下文, Mock()))
+        mock_待命开箱.assert_not_called()
+        self.assertEqual(待命上下文.识别点击画面.call_count, 1)
 
         # d) 输入前安全检查与打开进攻页面遇到敲宝箱页时均触发开启奖励宝箱，并遵守重入锁与次数上限
         护栏上下文 = 任务上下文.__new__(任务上下文)
