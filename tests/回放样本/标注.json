@@ -166,6 +166,17 @@
         "buttons": {"收集": [591, 509], "关闭": [670, 60]},
         "resources": {"金币": 3020459, "圣水": 2975754}
       }
+    },
+    {
+      "id": "standby_20261127_elixir_cart_empty",
+      "image": "standby_20261127_elixir_cart_empty.png",
+      "source": "E:/codex.task/coc/数据集/待命现场/standby_20261127_114843_392_0001.png",
+      "expected": {
+        "page": "圣水车弹窗",
+        "world": "夜世界",
+        "empty": true,
+        "buttons": {"收集": null, "关闭": [670, 60]}
+      }
     }
   ]
 }

@@ -9,6 +9,53 @@ from 任务流程.夜世界.收集圣水车 import 收集圣水车任务
 
 
 class 夜世界圣水车测试(unittest.TestCase):
+    def test_其它弹窗误读圣水车标题仍不点收集(self):
+        任务 = self._任务(np.zeros((600, 800, 3), dtype=np.uint8))
+        识别器 = SimpleNamespace(
+            定位圣水车弹窗按钮=Mock(return_value=None),
+        )
+        任务.上下文._获取点击页面识别器 = lambda: 识别器
+        任务.上下文.点击 = Mock(return_value=True)
+        任务.上下文.点击已确认安全按钮 = Mock(return_value=True)
+        任务.上下文.脚本延时 = Mock()
+        任务.执行OCR识别 = Mock(return_value=[([], "聖水車", .99)])
+        任务._查找OCR文本中心 = Mock(return_value=(588, 507))
+
+        self.assertFalse(任务.尝试收集圣水())
+
+        任务.上下文.点击.assert_not_called()
+        任务.上下文.点击已确认安全按钮.assert_not_called()
+
+    def test_空圣水车确认后只点关闭且按已完成返回(self):
+        屏幕 = np.zeros((600, 800, 3), dtype=np.uint8)
+        任务 = self._任务(屏幕)
+        按钮 = {"收集": None, "关闭": (650, 40, 690, 80), "空车": True}
+        识别器 = SimpleNamespace(
+            定位圣水车弹窗按钮=Mock(return_value=按钮),
+            识别=Mock(side_effect=[
+                SimpleNamespace(页面="圣水车弹窗"),
+                SimpleNamespace(页面="夜世界主页"),
+            ]),
+        )
+        任务.上下文._获取点击页面识别器 = lambda: 识别器
+        任务.上下文.点击 = Mock()
+        任务.上下文.点击已确认安全按钮 = Mock(return_value=True)
+        任务.上下文.脚本延时 = Mock()
+        任务.执行OCR识别 = Mock(side_effect=[
+            [([], "聖水車", .99)],
+            [([], "暫無新的防禦獎勵", .99)],
+        ])
+
+        self.assertTrue(任务.尝试收集圣水())
+
+        任务.上下文.点击.assert_not_called()
+        任务.上下文.点击已确认安全按钮.assert_called_once_with(670, 60, 延时=180)
+        self.assertTrue(any(
+            "圣水车为空" in 调用.args[0]
+            for 调用 in 任务.上下文.置脚本状态.call_args_list
+        ))
+        self.assertFalse(getattr(任务, "_收集已点击", False))
+
     def test_完整收集调用链遇到输入拒绝不重试其它候选或关闭(self):
         for 拒绝阶段 in ("收集", "安全关闭", "候选关闭"):
             with self.subTest(拒绝阶段=拒绝阶段):
@@ -28,7 +75,11 @@ class 夜世界圣水车测试(unittest.TestCase):
                     识别器 = SimpleNamespace(
                         识别=Mock(return_value=SimpleNamespace(页面="圣水车弹窗")),
                         定位圣水车弹窗按钮=Mock(
-                            return_value={"关闭": (650, 40, 690, 80)}
+                            return_value={
+                                "收集": (539, 481, 638, 532),
+                                "关闭": (650, 40, 690, 80),
+                                "空车": False,
+                            }
                         ),
                     )
                     任务.上下文._获取点击页面识别器 = lambda: 识别器
