@@ -197,6 +197,23 @@
         "world": "夜世界",
         "buttons": {"收集": [593, 508], "关闭": [670, 60]}
       }
+    },
+    {
+      "id": "night_200_result_20261127_195602",
+      "image": "night_200_result_20261127_195602.png",
+      "source": "E:/codex.task/coc/数据集/待命现场/night_等待回营或第二次战斗_20261127_195602_179.png",
+      "expected": {
+        "page": "战斗结算",
+        "world": null,
+        "buttons": {"回营": [400, 508]},
+        "settlement": {"结果": "胜利", "星数": 3, "摧毁率": 200}
+      }
+    },
+    {
+      "id": "night_star_reward_20261127_195902",
+      "image": "night_star_reward_20261127_195902.png",
+      "source": "E:/codex.task/coc/数据集/待命现场/standby_20261127_195902_599_0001.png",
+      "expected": {"page": "战斗星级奖励", "world": null, "buttons": {"確定": [400, 466]}}
     }
   ]
 }

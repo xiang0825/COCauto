@@ -1036,6 +1036,97 @@ class 任务上下文:
             self.置脚本状态(f"星级奖励弹窗处理失败，阻止后续输入：{异常}")
             return True
 
+    星级奖励标题词 = ("勝利之星", "胜利之星", "勝利之星獎勵", "胜利之星奖励")
+    星级奖励确定词 = ("確定", "确定")
+    星级奖励危险词 = (
+        "宝石", "寶石", "购买", "購買", "加速", "立即完成",
+        "跳过", "跳過", "商店购买", "充值",
+    )
+
+    def 安全待命确认战斗星级奖励(self) -> bool:
+        """安全待命中只点击夜世界“勝利之星獎勵！”单按钮弹窗的“確定”。
+
+        rc162 19:56 现场：弹窗已被识别为“战斗星级奖励”(0.96)，但安全
+        待命一律只读等待，弹窗永不消失导致 180 秒后卡死。这里只做一件事：
+        新截图确认页面与中央确定按钮 → 整帧 OCR 确认“勝利之星”标题与
+        “確定”文字、无宝石/购买/加速等危险字样、中央无宝石模板 → 只点
+        確定 → 再抓新帧确认弹窗已消失。任何一步不满足都不发送输入。
+        返回 True 仅表示确认弹窗已经消失。
+        """
+        if getattr(self, "_内存保护已触发", False) or getattr(
+            self, "_宝石保护已触发", False
+        ):
+            return False
+        停止事件 = getattr(self, "停止事件", None)
+        if 停止事件 is not None and callable(getattr(停止事件, "is_set", None)) and 停止事件.is_set():
+            return False
+        try:
+            识别器 = self._获取点击页面识别器()
+            屏幕 = self._刷新部落竞赛复核截图()
+            页面 = 识别器.识别(屏幕, 战斗中=False)
+            if (
+                getattr(页面, "页面", "") != "战斗星级奖励"
+                or float(getattr(页面, "可信度", 0.0) or 0.0) < 0.90
+            ):
+                return False
+            确认点 = 识别器.定位战斗星级奖励确定按钮(屏幕)
+            if 确认点 is None:
+                self.置脚本状态("安全待命星级奖励弹窗未定位到確定按钮，不点击")
+                return False
+            OCR返回 = self.获取OCR引擎()(屏幕)
+            OCR结果 = OCR返回[0] if isinstance(OCR返回, tuple) else OCR返回
+            文本 = "".join(
+                str(项[1])
+                for 项 in (OCR结果 or [])
+                if isinstance(项, (list, tuple)) and len(项) > 1
+            ).replace(" ", "").replace("\n", "")
+            危险词 = next((词 for 词 in self.星级奖励危险词 if 词 in 文本), None)
+            if 危险词 is not None:
+                self.页面恢复失败 = True
+                self.置脚本状态(
+                    f"[安全拦截] 星级奖励弹窗画面出现『{危险词}』，禁止点击并保留现场"
+                )
+                return False
+            if not any(词 in 文本 for 词 in self.星级奖励标题词) or not any(
+                词 in 文本 for 词 in self.星级奖励确定词
+            ):
+                self.置脚本状态(
+                    "安全待命星级奖励弹窗未通过『勝利之星』+『確定』OCR 确认，不点击"
+                )
+                return False
+            宝石命中, 命中说明 = self._存在中央宝石危险模板(屏幕)
+            if 宝石命中:
+                self.页面恢复失败 = True
+                self._宝石保护已触发 = True
+                self.置脚本状态(
+                    f"[安全拦截] 星级奖励弹窗中央出现宝石模板（{命中说明}），禁止点击"
+                )
+                return False
+            self._战斗中 = False
+            if not self.点击已确认安全按钮(确认点[0], 确认点[1], 延时=350):
+                self.置脚本状态("安全待命星级奖励確定按钮输入被安全护栏拒绝，保持只读")
+                return False
+            self.置脚本状态(
+                f"安全待命已确认勝利之星獎勵弹窗，只点击確定：{确认点[0]},{确认点[1]}"
+            )
+            self.脚本延时(800)
+            新屏幕 = self._刷新部落竞赛复核截图()
+            新页面 = 识别器.识别(新屏幕, 战斗中=False)
+            if getattr(新页面, "页面", "") == "战斗星级奖励":
+                self.置脚本状态("安全待命点击確定后星级奖励弹窗仍在，保持只读待命")
+                return False
+            self.清除战斗结算保护状态()
+            self._夜世界星级奖励确认次数 = int(
+                getattr(self, "_夜世界星级奖励确认次数", 0) or 0
+            ) + 1
+            self.置脚本状态(
+                f"安全待命确认星级奖励弹窗已消失（当前：{getattr(新页面, '页面', '未知')}）"
+            )
+            return True
+        except Exception as 异常:
+            self.置脚本状态(f"安全待命星级奖励弹窗处理失败，保持只读：{异常}")
+            return False
+
     @staticmethod
     def _检测升级详情弹窗关闭点(屏幕图像) -> tuple[int, int] | None:
         """只检测升级详情弹窗右上角的红色关闭按钮。

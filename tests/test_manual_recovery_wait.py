@@ -253,7 +253,32 @@ class 人工安全恢复等待测试(unittest.TestCase):
         self.assertGreater(上下文._战后星级奖励检查截止时间, 0)
         self.assertEqual(上下文.识别点击画面.call_count, 5)
         self.assertTrue(any(
-            "只读检测到战后奖励页" in 调用.args[0]
+            "勝利之星獎勵弹窗" in 调用.args[0]
+            for 调用 in 上下文.置脚本状态.call_args_list
+        ))
+
+    def test_安全待命连续两帧星级奖励只调用确認处理且最多两次(self):
+        """rc162 19:56：勝利之星獎勵弹窗只读等待导致卡死 180 秒。"""
+        机器人 = self._创建机器人()
+        self._启用虚拟待命时钟(机器人)
+        奖励 = self._页面("战斗星级奖励", 可信度=0.96)
+        页面序列 = iter([奖励] * 6 + [self._页面("夜世界主页", "夜世界", 0.95)] * 3)
+        上下文 = SimpleNamespace(
+            识别点击画面=Mock(side_effect=lambda **_参数: next(页面序列)),
+            处理战斗星级奖励弹窗=Mock(return_value=True),
+            安全待命确认战斗星级奖励=Mock(return_value=False),
+            _待命恢复世界="夜世界",
+            _战斗结束已确认=True,
+            置脚本状态=Mock(),
+            脚本延时=Mock(),
+        )
+
+        self.assertTrue(机器人._等待人工恢复主世界(上下文, Mock()))
+
+        上下文.处理战斗星级奖励弹窗.assert_not_called()
+        self.assertEqual(上下文.安全待命确认战斗星级奖励.call_count, 2)
+        self.assertTrue(any(
+            "只点確定（第1/2次）" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
