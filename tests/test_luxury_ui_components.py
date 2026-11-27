@@ -382,7 +382,7 @@ class 高级UI组件测试(unittest.TestCase):
         try:
             self.assertFalse(控制器.是否可用)
             self.assertFalse(控制器.显示())
-            self.assertFalse(控制器.发送提示("标题", "内容"))
+            self.assertFalse(hasattr(控制器, "发送提示"))
             控制器.更新运行状态("运行中", "今日 8 场 · 金币 520万")
             self.assertIn("运行中", 控制器.概览动作.text())
             self.assertIn("520万", 控制器.概览动作.text())
@@ -436,8 +436,7 @@ class 高级UI组件测试(unittest.TestCase):
 
                 控制器.更新运行状态("运行中", "今日 3 场")
                 假托盘实例.setToolTip.assert_called()
-                self.assertTrue(控制器.发送提示("任务完成", "已收获资源"))
-                假托盘实例.showMessage.assert_called_once()
+                假托盘实例.showMessage.assert_not_called()
 
                 控制器._处理激活(QSystemTrayIcon.Trigger)
                 主窗.唤醒.assert_called_once()

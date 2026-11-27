@@ -118,25 +118,21 @@ class 可领奖提醒测试(unittest.TestCase):
         原OCR = 游戏.ocr结果
         游戏.ocr结果 = lambda: 原OCR() + ([([[300, 300], [400, 300], [400, 320], [300, 320]], "領取獎勵", 0.9)]
                                        if 游戏.状态 == "panel" else [])
-        桌面 = []
         任务, 上下文, 日志, 通知, _ = 构造任务(游戏)
-        上下文.发送桌面通知 = lambda *a, **k: 桌面.append((a, k))
         任务.执行()
         self.assertEqual(任务.结果, "可领奖")
         面板点击 = [记录 for 记录 in 游戏.点击记录 if 记录[0] == "panel" and 记录[1:] != (709, 40)]
         self.assertEqual(面板点击, [])
-        self.assertEqual(len(桌面), 1)
-        self.assertEqual(桌面[0][0][0], "部落竞赛领奖")
-        self.assertFalse(桌面[0][1]["需要恢复通知"])
+        self.assertEqual(len(通知), 1)
+        self.assertIn("可以领奖了", 通知[0])
 
-    def test_满分也弹桌面通知(self):
+    def test_满分也写日志提醒(self):
         游戏 = 模拟游戏(卡片=标准卡片(), 个人积分="10000/10000")
-        桌面 = []
-        任务, 上下文, _, _, _ = 构造任务(游戏)
-        上下文.发送桌面通知 = lambda *a, **k: 桌面.append(a)
+        任务, 上下文, _, 通知, _ = 构造任务(游戏)
         任务.执行()
         self.assertEqual(任务.结果, "已满分")
-        self.assertEqual(桌面[0][0], "部落竞赛满分")
+        self.assertEqual(len(通知), 1)
+        self.assertIn("个人积分已满", 通知[0])
 
     def test_代码中没有领奖点击(self):
         from pathlib import Path

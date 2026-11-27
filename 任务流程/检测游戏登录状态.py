@@ -66,7 +66,6 @@ class 检测游戏登录状态任务(基础任务):
                 30,
             )
             上下文.页面恢复失败 = True
-            self._桌面通知重连失败("断线弹窗连续恢复 3 次仍未消失，已停止点击，请检查网络/账号")
             停止事件 = getattr(上下文, "停止事件", None)
             if 停止事件 is not None:
                 停止事件.set()
@@ -86,29 +85,12 @@ class 检测游戏登录状态任务(基础任务):
                 30,
             )
             上下文.页面恢复失败 = True
-            self._桌面通知重连失败("断线弹窗的重新载入按钮未能安全点击，已停止任务")
             停止事件 = getattr(上下文, "停止事件", None)
             if 停止事件 is not None:
                 停止事件.set()
             return False
         上下文.脚本延时(等待毫秒)
         return True
-
-    def _桌面通知登录恢复(self) -> None:
-        恢复 = getattr(self.上下文, "桌面通知已恢复", None)
-        if callable(恢复):
-            try:
-                恢复("断线重连", "已重新登录游戏")
-            except Exception:
-                pass
-
-    def _桌面通知重连失败(self, 正文: str) -> None:
-        通知 = getattr(self.上下文, "发送桌面通知", None)
-        if callable(通知):
-            try:
-                通知("断线重连", "断线重连失败", 正文, 级别="错误")
-            except Exception:
-                pass
 
     def _启动阶段处理结算页(
         self,
@@ -1144,7 +1126,6 @@ class 检测游戏登录状态任务(基础任务):
                 if not self._登录主页已确认(屏幕图像, 页面识别):
                     continue
                 上下文.置脚本状态("出现家乡进攻图标，已经成功登录")
-                self._桌面通知登录恢复()
                 break
 
             # 检查宝石图标
@@ -1154,7 +1135,6 @@ class 检测游戏登录状态任务(基础任务):
                 if not self._登录主页已确认(屏幕图像, 页面识别):
                     continue
                 上下文.置脚本状态("出现宝石图标，已经成功登录")
-                self._桌面通知登录恢复()
                 上下文.脚本延时(1000)
                 break
 

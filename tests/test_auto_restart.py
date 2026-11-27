@@ -236,16 +236,17 @@ class 监控中心接线测试(unittest.TestCase):
             中心._检查自动重启("robot_1", 机器人)
         线程类.assert_not_called()
 
-    def test_放弃时弹桌面通知(self):
+    def test_放弃时写日志(self):
         中心 = self._中心()
         机器人 = self._机器人(原因="未处理异常：x")
         中心.自动重启._状态["robot_1"] = {
             "停止线程": id(机器人.主线程), "停止时间": 0.0, "上次重启": None,
             "上次尝试": 0.0, "连续失败": 3, "已放弃": False, "复核中": False,
         }
-        with mock.patch("工具包.桌面通知.机器人桌面通知") as 通知:
+        with mock.patch("threading.Thread") as 线程类:
             中心._检查自动重启("robot_1", 机器人)
-        self.assertEqual(通知.call_args[0][3], "自动重启已放弃")
+        线程类.assert_not_called()
+        self.assertIn("不再自动重启", 机器人.记录日志.call_args[0][0])
 
 
 if __name__ == "__main__":

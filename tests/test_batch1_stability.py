@@ -155,9 +155,6 @@ class 内存保护可恢复与阈值配置测试(unittest.TestCase):
         上下文.置脚本状态 = Mock()
         上下文.释放识别模型 = Mock()
         上下文.页面恢复失败 = False
-        上下文.企业微信通知器 = None
-        上下文.上报间隔秒 = 0
-        上下文.发送企业微信通知 = Mock()
         上下文.发送死亡通知 = Mock()
         上下文.op = SimpleNamespace(
             检查主机内存预算=Mock(side_effect=lambda 强制刷新=True: next(预算状态)),
@@ -166,7 +163,7 @@ class 内存保护可恢复与阈值配置测试(unittest.TestCase):
         )
         上下文.识别点击画面 = Mock(side_effect=[主页, 主页, 主页])
 
-        机器人._初始化任务上下文 = Mock(return_value=(设置, 上下文, None))
+        机器人._初始化任务上下文 = Mock(return_value=(设置, 上下文))
         机器人._任务计划顺序 = Mock(return_value=["main_resource"])
         机器人._同步官方账号数据 = Mock()
         机器人._接管启动时战斗 = Mock(return_value=True)
@@ -238,9 +235,6 @@ class 内存保护可恢复与阈值配置测试(unittest.TestCase):
         上下文.置脚本状态 = Mock()
         上下文.释放识别模型 = Mock()
         上下文.页面恢复失败 = False
-        上下文.企业微信通知器 = None
-        上下文.上报间隔秒 = 0
-        上下文.发送企业微信通知 = Mock()
         上下文.发送死亡通知 = Mock()
         上下文.op = SimpleNamespace(
             检查主机内存预算=Mock(side_effect=模拟检查预算),
@@ -248,7 +242,7 @@ class 内存保护可恢复与阈值配置测试(unittest.TestCase):
         )
         上下文.识别点击画面 = Mock()
 
-        机器人._初始化任务上下文 = Mock(return_value=(设置, 上下文, None))
+        机器人._初始化任务上下文 = Mock(return_value=(设置, 上下文))
         机器人._任务计划顺序 = Mock(return_value=["main_resource"])
         机器人._同步官方账号数据 = Mock()
         机器人._接管启动时战斗 = Mock(return_value=True)
@@ -299,7 +293,6 @@ class 搜索敌人上限与熔断测试(unittest.TestCase):
             数据库=SimpleNamespace(获取机器人设置=Mock(return_value=设置)),
             置脚本状态=Mock(),
             脚本延时=Mock(),
-            发送企业微信通知=Mock(),
         )
         任务 = 搜索目标敌人任务.__new__(搜索目标敌人任务)
         任务.上下文 = 上下文
@@ -308,7 +301,7 @@ class 搜索敌人上限与熔断测试(unittest.TestCase):
         任务.模板识别 = Mock()
         return 任务, 上下文
 
-    def test_搜索达到最大次数上限后安全退出并通知待命(self):
+    def test_搜索达到最大次数上限后安全退出并转入待命(self):
         任务, 上下文 = self._创建搜索任务(最大搜索次数=3, 最长搜索分钟=15, 熔断次数=10)
         任务.执行单次搜索 = Mock(return_value=False)
 
@@ -317,13 +310,12 @@ class 搜索敌人上限与熔断测试(unittest.TestCase):
         self.assertFalse(结果)
         self.assertEqual(任务.执行单次搜索.call_count, 3)
         self.assertTrue(上下文.页面恢复失败)
-        上下文.发送企业微信通知.assert_called_once()
         self.assertTrue(any(
             "最大搜索次数上限（3次）" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
-    def test_搜索达到最长时间上限后安全退出并通知待命(self):
+    def test_搜索达到最长时间上限后安全退出并转入待命(self):
         任务, 上下文 = self._创建搜索任务(最大搜索次数=150, 最长搜索分钟=2, 熔断次数=10)
         任务.执行单次搜索 = Mock(return_value=False)
         时钟 = iter([0.0, 10.0, 121.0])
@@ -334,7 +326,6 @@ class 搜索敌人上限与熔断测试(unittest.TestCase):
         self.assertFalse(结果)
         self.assertEqual(任务.执行单次搜索.call_count, 1)
         self.assertTrue(上下文.页面恢复失败)
-        上下文.发送企业微信通知.assert_called_once()
         self.assertTrue(any(
             "最长搜索时间上限（2分钟）" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
@@ -373,15 +364,14 @@ class 搜索敌人上限与熔断测试(unittest.TestCase):
         # 第6次触发熔断时不得再点击“下一个”
         self.assertEqual(任务.点击下一个按钮.call_count, 5)
         self.assertTrue(上下文.页面恢复失败)
-        上下文.发送企业微信通知.assert_called_once()
         self.assertTrue(any(
             "熔断" in 调用.args[0]
             for 调用 in 上下文.置脚本状态.call_args_list
         ))
 
 
-class 未知页面待命通知与现场截图测试(unittest.TestCase):
-    def test_待命超过三分钟触发一次通知和回调兜底(self):
+class 未知页面待命告警与现场截图测试(unittest.TestCase):
+    def test_待命超过三分钟触发一次告警并留图(self):
         机器人 = 自动化机器人.__new__(自动化机器人)
         机器人.机器人标志 = "robot_standby"
         机器人.停止事件 = threading.Event()
@@ -391,7 +381,6 @@ class 未知页面待命通知与现场截图测试(unittest.TestCase):
         机器人.记录日志 = Mock()
         机器人.停止事件.wait = Mock(return_value=False)
 
-        回调记录 = []
         消息队列 = queue.Queue()
         图像 = np.zeros((600, 800, 3), dtype=np.uint8)
         主页 = SimpleNamespace(页面="主世界主页", 世界="主世界", 可信度=0.80)
@@ -403,8 +392,6 @@ class 未知页面待命通知与现场截图测试(unittest.TestCase):
             获取机器人设置=Mock(return_value=机器人设置(未知页面待命通知秒数=180))
         )
         上下文.消息队列 = 消息队列
-        上下文.企业微信通知器 = None
-        上下文.待命通知回调 = lambda **kwargs: 回调记录.append(kwargs)
         上下文._点击识别截图 = 图像
         上下文.置脚本状态 = Mock()
         上下文.识别点击画面 = Mock(
@@ -429,27 +416,24 @@ class 未知页面待命通知与现场截图测试(unittest.TestCase):
             return 时钟[0]
 
         with tempfile.TemporaryDirectory() as 临时目录:
-            原始保存 = 任务上下文.保存待命现场截图并通知
+            原始保存 = 任务上下文.保存待命现场截图
 
             def 写入临时目录(self_ctx, 原因, 屏幕图像=None, **_kwargs):
                 return 原始保存(self_ctx, 原因, 屏幕图像=屏幕图像, 截图目录=临时目录, 最大留图数=50)
 
-            with patch.object(任务上下文, "保存待命现场截图并通知", 写入临时目录), \
+            with patch.object(任务上下文, "保存待命现场截图", 写入临时目录), \
                     patch("线程.自动化机器人._安全待命单调时间", side_effect=推进时钟):
                 self.assertTrue(机器人._等待人工恢复主世界(上下文, Mock()))
 
             保存的文件 = list(Path(临时目录).glob("*.png"))
             self.assertEqual(len(保存的文件), 1)
-            self.assertEqual(len(回调记录), 1)
             self.assertEqual(消息队列.qsize(), 1)
-            self.assertEqual(消息队列.get_nowait()["类型"], "待命超时通知")
+            self.assertEqual(消息队列.get_nowait()["类型"], "待命超时告警")
 
-    def _截图上下文(self, 通知器=None):
+    def _截图上下文(self):
         上下文 = 任务上下文.__new__(任务上下文)
         上下文.机器人标志 = "robot_cap"
-        上下文.企业微信通知器 = 通知器
         上下文.消息队列 = queue.Queue()
-        上下文.待命通知回调 = None
         上下文.置脚本状态 = Mock()
         上下文.记录警告 = Mock()
         return 上下文
@@ -460,10 +444,9 @@ class 未知页面待命通知与现场截图测试(unittest.TestCase):
             for 序号 in range(50):
                 (目录 / f"standby_old_{序号:03d}.png").write_bytes(b"png")
             (目录 / "user_note.png").write_bytes(b"png")
-            通知器 = SimpleNamespace(发送状态消息=Mock(return_value=True))
-            上下文 = self._截图上下文(通知器)
+            上下文 = self._截图上下文()
 
-            保存路径 = 上下文.保存待命现场截图并通知(
+            保存路径 = 上下文.保存待命现场截图(
                 "未知页面待命超3分钟",
                 屏幕图像=np.full((60, 80, 3), 120, dtype=np.uint8),
                 截图目录=目录,
@@ -474,8 +457,10 @@ class 未知页面待命通知与现场截图测试(unittest.TestCase):
             self.assertEqual(len(list(目录.glob("*.png"))), 51)
             self.assertTrue((目录 / "standby_old_000.png").is_file())
             self.assertTrue((目录 / "user_note.png").is_file())
-            # 未保存截图时仍发出通知（附内存中的截图）。
-            通知器.发送状态消息.assert_called_once()
+            # 未保存截图时仍写待命告警日志。
+            self.assertTrue(any(
+                "[待命告警]" in str(调用.args[0]) for 调用 in 上下文.置脚本状态.call_args_list
+            ))
 
     def test_待命现场截图未达上限时保存且不删除旧图(self):
         with tempfile.TemporaryDirectory() as 临时目录:
@@ -483,7 +468,7 @@ class 未知页面待命通知与现场截图测试(unittest.TestCase):
             for 序号 in range(3):
                 (目录 / f"standby_old_{序号:03d}.png").write_bytes(b"png")
             上下文 = self._截图上下文()
-            保存路径 = 上下文.保存待命现场截图并通知(
+            保存路径 = 上下文.保存待命现场截图(
                 "未知页面待命超3分钟",
                 屏幕图像=np.full((60, 80, 3), 120, dtype=np.uint8),
                 截图目录=目录,
@@ -492,7 +477,7 @@ class 未知页面待命通知与现场截图测试(unittest.TestCase):
             self.assertTrue(保存路径.is_file())
             self.assertEqual(len(list(目录.glob("*.png"))), 4)
             # 上限 4 已满，下一次不再保存。
-            self.assertIsNone(上下文.保存待命现场截图并通知(
+            self.assertIsNone(上下文.保存待命现场截图(
                 "再次待命",
                 屏幕图像=np.full((60, 80, 3), 120, dtype=np.uint8),
                 截图目录=目录,
@@ -500,10 +485,10 @@ class 未知页面待命通知与现场截图测试(unittest.TestCase):
             ))
             self.assertEqual(len(list(目录.glob("*.png"))), 4)
 
-    def test_未配置通知时安静跳过不写未配置日志(self):
+    def test_待命留图不写未配置日志(self):
         with tempfile.TemporaryDirectory() as 临时目录:
-            上下文 = self._截图上下文(None)
-            上下文.保存待命现场截图并通知(
+            上下文 = self._截图上下文()
+            上下文.保存待命现场截图(
                 "待命",
                 屏幕图像=np.full((60, 80, 3), 120, dtype=np.uint8),
                 截图目录=临时目录,

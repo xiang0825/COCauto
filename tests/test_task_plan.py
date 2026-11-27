@@ -43,13 +43,12 @@ class 任务计划测试(unittest.TestCase):
         )
         上下文 = SimpleNamespace(
             页面恢复失败=False,
-            发送企业微信通知=Mock(),
             置脚本状态=Mock(),
             释放识别模型=Mock(),
             op=SimpleNamespace(安全清理=Mock()),
             脚本延时=Mock(),
         )
-        机器人._初始化任务上下文 = Mock(return_value=(设置, 上下文, None))
+        机器人._初始化任务上下文 = Mock(return_value=(设置, 上下文))
         机器人._任务计划顺序 = Mock(return_value=["main_resource"])
         机器人._接管启动时战斗 = Mock(return_value=True)
         机器人._满仓待机并监测断线 = Mock(return_value=True)
@@ -103,7 +102,7 @@ class 任务计划测试(unittest.TestCase):
             op=SimpleNamespace(安全清理=Mock()),
             释放识别模型=Mock(),
         )
-        机器人._初始化任务上下文.return_value = (机器人设置(), 上下文, None)
+        机器人._初始化任务上下文.return_value = (机器人设置(), 上下文)
 
         with patch("线程.自动化机器人.检测游戏登录状态任务"), \
              patch("线程.自动化机器人.启动模拟器任务") as 启动模拟器, \
@@ -128,7 +127,7 @@ class 任务计划测试(unittest.TestCase):
             发送死亡通知=Mock(),
         )
         机器人._初始化任务上下文 = Mock(
-            return_value=(机器人设置(), 上下文, None)
+            return_value=(机器人设置(), 上下文)
         )
 
         with patch("线程.自动化机器人.检测游戏登录状态任务"), \
@@ -150,11 +149,10 @@ class 任务计划测试(unittest.TestCase):
         上下文 = SimpleNamespace(
             op=SimpleNamespace(安全清理=Mock()),
             释放识别模型=Mock(),
-            发送企业微信通知=Mock(),
             置脚本状态=Mock(),
             页面恢复失败=False,
         )
-        机器人._初始化任务上下文 = Mock(return_value=(设置, 上下文, None))
+        机器人._初始化任务上下文 = Mock(return_value=(设置, 上下文))
         机器人._接管启动时战斗 = Mock(return_value=True)
         机器人._任务计划顺序 = Mock(return_value=["main_resource"])
         调用次数 = 0
@@ -768,48 +766,23 @@ class 任务计划测试(unittest.TestCase):
         self.assertIn("初始化失败", 机器人.停止原因)
         机器人.记录日志.assert_called_once()
 
-    def test_通知器创建后上下文初始化失败会关闭通知器(self):
-        机器人 = 自动化机器人.__new__(自动化机器人)
-        机器人.机器人标志 = "测试机器人"
-        机器人.停止事件 = threading.Event()
-        机器人.数据库 = SimpleNamespace(
-            获取机器人设置=Mock(
-                return_value=机器人设置(
-                    ADB已确认模拟器=True,
-                    ADB设备序列号="127.0.0.1:16416",
-                    企业微信webhook="https://example.invalid/webhook",
-                )
-            )
-        )
-        机器人.记录日志 = Mock()
+    def test_旧配置里的通知字段读取时被忽略(self):
+        from 数据库.任务数据库 import 任务数据库
 
-        class 假设备:
-            def 设置目标包名(self, _包名):
-                return None
-
-        class 假通知器:
-            实例 = None
-
-            def __init__(self, _webhook):
-                type(self).实例 = self
-                self.关闭次数 = 0
-
-            def 关闭(self):
-                self.关闭次数 += 1
-
-        假通知模块 = SimpleNamespace(企业微信通知器=假通知器)
-        with patch(
-            "线程.自动化机器人.ADB设备操作类",
-            return_value=假设备(),
-        ), patch(
-            "线程.自动化机器人.鼠标控制器",
-            side_effect=RuntimeError("模拟输入控制器初始化失败"),
-        ), patch.dict(sys.modules, {"工具包.企业微信通知": 假通知模块}):
-            机器人._任务流程()
-
-        self.assertIsNotNone(假通知器.实例)
-        self.assertEqual(假通知器.实例.关闭次数, 1)
-        self.assertTrue(机器人.停止事件.is_set())
+        旧设置 = {
+            "桌面通知": False,
+            "企业微信webhook": "https://example.invalid/webhook",
+            "状态上报间隔分钟": 30,
+            "每日完成通知": True,
+            "每日通知时间": "23:30",
+            "开启刷墙": True,
+        }
+        规范化 = 任务数据库._规范化机器人设置JSON(旧设置)
+        self.assertEqual(规范化, {"开启刷墙": True})
+        设置 = 机器人设置(**规范化)
+        for 字段 in 旧设置:
+            if 字段 != "开启刷墙":
+                self.assertFalse(hasattr(设置, 字段))
 
     def test_战利品优先级和自动配兵配置有安全默认值(self):
         设置 = 机器人设置(
@@ -2196,13 +2169,12 @@ class 满仓内层调度与净变化防护测试(unittest.TestCase):
         机器人.数据库 = SimpleNamespace(获取机器人设置=Mock(return_value=设置))
         上下文 = SimpleNamespace(
             页面恢复失败=False,
-            发送企业微信通知=Mock(),
             置脚本状态=Mock(),
             释放识别模型=Mock(),
             op=SimpleNamespace(安全清理=Mock()),
             脚本延时=Mock(),
         )
-        机器人._初始化任务上下文 = Mock(return_value=(设置, 上下文, None))
+        机器人._初始化任务上下文 = Mock(return_value=(设置, 上下文))
         机器人._同步官方账号数据 = Mock(return_value=None)
         机器人._任务计划顺序 = Mock(return_value=["main_resource", "building"])
         机器人._接管启动时战斗 = Mock(return_value=True)
