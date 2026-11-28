@@ -47,8 +47,10 @@ def 保存夜世界现场截图(
         if 屏幕图像 is None or not hasattr(屏幕图像, "shape"):
             return None
 
+        from 工具包.运行路径 import 解析数据子路径
+
         目录 = 截图目录 or getattr(上下文, "_夜世界现场截图目录", None)
-        目标目录 = Path(目录) if 目录 else Path("数据集") / "待命现场"
+        目标目录 = Path(目录) if 目录 else 解析数据子路径("数据集", "待命现场")
         目标目录.mkdir(parents=True, exist_ok=True)
         上限 = max(1, int(最大留图数))
         if sum(1 for _ in 目标目录.glob("night_*.png")) >= 上限:

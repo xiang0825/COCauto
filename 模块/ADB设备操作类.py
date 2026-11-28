@@ -436,10 +436,18 @@ class ADB设备操作类:
         if sys.platform == "darwin":
             用户目录 = Path.home()
             候选.extend([
-                # BlueStacks Air (macOS)
+                # 1. BlueStacks Air (macOS) 自带 hd-adb
                 Path("/Applications/BlueStacks.app/Contents/MacOS/hd-adb"),
                 用户目录 / "Applications" / "BlueStacks.app" / "Contents" / "MacOS" / "hd-adb",
-                # MuMuPlayer / MuMuPlayer Pro (macOS)
+                # 2. Android SDK platform-tools
+                用户目录 / "Library" / "Android" / "sdk" / "platform-tools" / "adb",
+            ])
+            # 3. PATH 中的 adb
+            系统路径 = shutil.which("adb")
+            if 系统路径:
+                候选.append(Path(系统路径))
+            候选.extend([
+                # 4. 其他已有 macOS 候选路径：MuMuPlayer / MuMuPlayer Pro / Homebrew
                 Path("/Applications/MuMuPlayer.app/Contents/MacOS/tools/adb"),
                 Path("/Applications/MuMuPlayer.app/Contents/MacOS/MuMuEmulator.app/Contents/MacOS/tools/adb"),
                 Path("/Applications/MuMuPlayerPro.app/Contents/MacOS/tools/adb"),
@@ -447,8 +455,6 @@ class ADB设备操作类:
                 Path("/Applications/MuMuAndroidDevice.app/Contents/MacOS/tools/adb"),
                 用户目录 / "Applications" / "MuMuPlayer.app" / "Contents" / "MacOS" / "tools" / "adb",
                 用户目录 / "Applications" / "MuMuPlayerPro.app" / "Contents" / "MacOS" / "tools" / "adb",
-                # Android SDK / Homebrew (macOS)
-                用户目录 / "Library" / "Android" / "sdk" / "platform-tools" / "adb",
                 Path("/opt/homebrew/bin/adb"),
                 Path("/usr/local/bin/adb"),
             ])

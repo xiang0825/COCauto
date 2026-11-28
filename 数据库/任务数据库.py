@@ -1036,6 +1036,12 @@ class 任务数据库:
             os.makedirs(os.path.dirname(共享数据库), exist_ok=True)
             return 共享数据库
         if getattr(sys, "frozen", False):
+            if sys.platform == "darwin":
+                from 工具包.运行路径 import 获取macOS数据根目录
+
+                数据目录 = os.path.join(str(获取macOS数据根目录(创建=True)), "数据库")
+                os.makedirs(数据目录, exist_ok=True)
+                return os.path.join(数据目录, "任务系统.db")
             # 打包版只使用 EXE 旁的持久数据库。上级目录即使恰好有同名库，
             # 也可能是源码开发库；隔离测试或复制发布包时不能误写进去。
             # 确实要共享数据库时，由 COCAUTO_DB_PATH 显式指定。

@@ -135,7 +135,9 @@ class 现场图服务:
                 (str(分类), Path(路径)) for 分类, 路径 in 目录映射.items()
             )
         else:
-            根 = Path(数据集根目录) if 数据集根目录 is not None else Path("数据集")
+            from 工具包.运行路径 import 解析数据子路径
+
+            根 = Path(数据集根目录) if 数据集根目录 is not None else 解析数据子路径("数据集")
             self._目录映射 = (
                 ("待命现场", 根 / "待命现场"),
                 ("低星复盘", 根 / "低星复盘"),

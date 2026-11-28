@@ -1356,7 +1356,9 @@ class 部落竞赛任务(基础任务):
                 图像 = self._截图()
             if 图像 is None or not hasattr(图像, "shape"):
                 return
-            目录 = Path(getattr(self.上下文, "待命现场目录", None) or (Path("数据集") / "待命现场"))
+            from 工具包.运行路径 import 解析数据子路径
+
+            目录 = Path(getattr(self.上下文, "待命现场目录", None) or 解析数据子路径("数据集", "待命现场"))
             目录.mkdir(parents=True, exist_ok=True)
             上限 = int(self.配置.get("入口现场最多张数", 30))
             if sum(1 for _ in 目录.glob("clan_entry_*.png")) >= 上限:

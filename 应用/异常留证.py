@@ -35,8 +35,12 @@ _非法文件名字符 = re.compile(r'[\\/:*?"<>|\s]+')
 
 
 def 程序目录() -> Path:
-    """打包版为 EXE 所在目录；源码运行为仓库根目录。"""
+    """打包版在 Windows 为 EXE 所在目录、macOS .app 为用户数据目录；源码运行为仓库根目录。"""
     if getattr(sys, "frozen", False):
+        if sys.platform == "darwin":
+            from 工具包.运行路径 import 获取macOS数据根目录
+
+            return 获取macOS数据根目录(创建=True)
         return Path(os.path.abspath(sys.executable)).parent
     return Path(__file__).resolve().parent.parent
 

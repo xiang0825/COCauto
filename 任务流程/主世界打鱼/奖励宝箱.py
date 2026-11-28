@@ -80,7 +80,9 @@ def 识别宝箱页(图像) -> int | None:
 
 def _保存截图(图像, 步骤: str) -> None:
     try:
-        目录 = Path("数据集") / "奖励宝箱"
+        from 工具包.运行路径 import 解析数据子路径
+
+        目录 = 解析数据子路径("数据集", "奖励宝箱")
         目录.mkdir(parents=True, exist_ok=True)
         成功, 数据 = cv2.imencode(".png", 图像)
         if 成功:

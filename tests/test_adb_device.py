@@ -69,7 +69,9 @@ class ADB设备测试(unittest.TestCase):
     def test_单文件模式数据库放在EXE旁而非临时解包目录(self):
         with tempfile.TemporaryDirectory() as 临时目录:
             exe路径 = str(Path(临时目录) / "app.exe")
-            with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", exe路径):
+            with patch.object(sys, "platform", "win32"), \
+                    patch.object(sys, "frozen", True, create=True), \
+                    patch.object(sys, "executable", exe路径):
                 数据库路径 = 任务数据库.默认数据库路径()
             self.assertEqual(Path(数据库路径), Path(临时目录) / "数据库" / "任务系统.db")
 
@@ -80,7 +82,8 @@ class ADB设备测试(unittest.TestCase):
             共享路径 = 根目录 / "数据库" / "任务系统.db"
             共享路径.parent.mkdir(parents=True)
             共享路径.touch()
-            with patch.object(sys, "frozen", True, create=True), \
+            with patch.object(sys, "platform", "win32"), \
+                    patch.object(sys, "frozen", True, create=True), \
                     patch.object(sys, "executable", str(exe路径)), \
                     patch.dict("os.environ", {"COCAUTO_DB_PATH": ""}, clear=False):
                 数据库路径 = 任务数据库.默认数据库路径()
@@ -1529,12 +1532,73 @@ FocusedWindows:
         self.assertEqual(调用次数["getprop"], 2)
 
     def test_macOS候选ADB路径包含BlueStacksAir和MuMuMac版(self):
-        with patch("模块.ADB设备操作类.sys.platform", "darwin"):
+        with patch("模块.ADB设备操作类.sys.platform", "darwin"), \
+                patch("模块.ADB设备操作类.shutil.which", return_value="/custom/bin/adb"):
             候选 = ADB设备操作类._候选ADB路径()
-        路径集合 = {str(项) for 项 in 候选}
-        self.assertIn("/Applications/BlueStacks.app/Contents/MacOS/hd-adb", 路径集合)
-        self.assertIn("/Applications/MuMuPlayer.app/Contents/MacOS/tools/adb", 路径集合)
-        self.assertIn("/Applications/MuMuPlayerPro.app/Contents/MacOS/tools/adb", 路径集合)
+        路径列表 = [str(项) for 项 in 候选]
+        路径集合 = set(路径列表)
+        bs路径 = "/Applications/BlueStacks.app/Contents/MacOS/hd-adb"
+        sdk路径 = str(Path.home() / "Library" / "Android" / "sdk" / "platform-tools" / "adb")
+        path路径 = "/custom/bin/adb"
+        mumu路径 = "/Applications/MuMuPlayer.app/Contents/MacOS/tools/adb"
+        mumupro路径 = "/Applications/MuMuPlayerPro.app/Contents/MacOS/tools/adb"
+        self.assertIn(bs路径, 路径集合)
+        self.assertIn(sdk路径, 路径集合)
+        self.assertIn(path路径, 路径集合)
+        self.assertIn(mumu路径, 路径集合)
+        self.assertIn(mumupro路径, 路径集合)
+        # 严格校验优先级：BlueStacks > Android SDK > PATH > 其他 macOS 候选
+        self.assertLess(路径列表.index(bs路径), 路径列表.index(sdk路径))
+        self.assertLess(路径列表.index(sdk路径), 路径列表.index(path路径))
+        self.assertLess(路径列表.index(path路径), 路径列表.index(mumu路径))
+
+    def test_macOS查找ADB路径按优先级回退(self):
+        with tempfile.TemporaryDirectory() as 临时目录:
+            根 = Path(临时目录)
+            假BS = 根 / "BlueStacks" / "hd-adb"
+            假SDK = 根 / "sdk" / "adb"
+            假PATH = 根 / "path" / "adb"
+            假MuMu = 根 / "mumu" / "adb"
+            for 文件 in (假BS, 假SDK, 假PATH, 假MuMu):
+                文件.parent.mkdir(parents=True, exist_ok=True)
+                文件.write_text("#!/bin/sh\n", encoding="utf-8")
+
+            with patch("模块.ADB设备操作类.sys.platform", "darwin"), \
+                    patch.dict("os.environ", {"ANDROID_ADB": ""}, clear=False), \
+                    patch("模块.ADB设备操作类.shutil.which", return_value=str(假PATH)), \
+                    patch.object(
+                        ADB设备操作类,
+                        "_候选ADB路径",
+                        return_value=[假BS, 假SDK, 假PATH, 假MuMu],
+                    ):
+                结果路径 = ADB设备操作类.查找ADB路径("", 自动检测=True)
+            self.assertEqual(
+                结果路径,
+                [str(假BS.resolve()), str(假SDK.resolve()), str(假PATH.resolve()), str(假MuMu.resolve())],
+            )
+
+            # BlueStacks 不存在时回退到 SDK；SDK 也不存在时回退到 PATH
+            假BS.unlink()
+            with patch("模块.ADB设备操作类.sys.platform", "darwin"), \
+                    patch.dict("os.environ", {"ANDROID_ADB": ""}, clear=False), \
+                    patch("模块.ADB设备操作类.shutil.which", return_value=str(假PATH)), \
+                    patch.object(
+                        ADB设备操作类,
+                        "_候选ADB路径",
+                        return_value=[假BS, 假SDK, 假PATH, 假MuMu],
+                    ):
+                self.assertEqual(ADB设备操作类.解析ADB路径("", 自动检测=True), str(假SDK.resolve()))
+
+            假SDK.unlink()
+            with patch("模块.ADB设备操作类.sys.platform", "darwin"), \
+                    patch.dict("os.environ", {"ANDROID_ADB": ""}, clear=False), \
+                    patch("模块.ADB设备操作类.shutil.which", return_value=str(假PATH)), \
+                    patch.object(
+                        ADB设备操作类,
+                        "_候选ADB路径",
+                        return_value=[假BS, 假SDK, 假PATH, 假MuMu],
+                    ):
+                self.assertEqual(ADB设备操作类.解析ADB路径("", 自动检测=True), str(假PATH.resolve()))
 
     def test_POSIX无exe后缀adb路径下emulator别名可识别为MuMu(self):
         with tempfile.TemporaryDirectory() as 临时目录:

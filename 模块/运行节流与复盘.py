@@ -241,7 +241,12 @@ class 低星战局复盘记录器:
         最大留档数: int = 默认最大留档数,
         战斗世界: str = 默认战斗世界,
     ) -> None:
-        self.输出目录 = Path(输出目录)
+        from 工具包.运行路径 import 是macOS打包环境, 解析数据子路径
+
+        if 输出目录 == 默认低星复盘目录 and 是macOS打包环境():
+            self.输出目录 = 解析数据子路径("数据集", "低星复盘")
+        else:
+            self.输出目录 = Path(输出目录)
         self.连续触发次数 = max(1, int(连续触发次数))
         self.摧毁率阈值 = max(1, min(100, int(摧毁率阈值)))
         self.最大留档数 = max(1, int(最大留档数))

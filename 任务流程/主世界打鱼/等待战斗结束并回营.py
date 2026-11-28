@@ -1728,7 +1728,9 @@ class 等待战斗结束并回营任务(基础任务):
         try:
             if not 上下文.设置.是否采集进攻界面图像:
                 return
-            目录 = Path("数据集") / "战斗结果"
+            from 工具包.运行路径 import 解析数据子路径
+
+            目录 = 解析数据子路径("数据集", "战斗结果")
             目录.mkdir(parents=True, exist_ok=True)
             文件名 = 目录 / f"result_{int(time.time() * 1000)}.png"
             # Windows 版 OpenCV 的 imwrite 对包含中文目录的路径可能静默

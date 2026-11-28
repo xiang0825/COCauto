@@ -73,6 +73,10 @@ def 退出应用():
 
 def 界面设置() -> QSettings:
     """窗口尺寸、主题等界面偏好；测试里替换成临时文件，避免清掉真实设置。"""
+    from 工具包.运行路径 import 获取macOS数据根目录, 是macOS打包环境
+
+    if 是macOS打包环境():
+        return QSettings(str(获取macOS数据根目录(创建=True) / "settings.ini"), QSettings.IniFormat)
     return QSettings("COCauto", "城控")
 
 

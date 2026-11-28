@@ -3512,8 +3512,9 @@ class 进攻任务(基础任务):
     def _保存闪电诊断图(上下文, 槽位图像, 已使用: int) -> None:
         """闪电停在中途时保存当时的槽位小图和全屏，供离线排查 OCR 为何读不到。"""
         try:
-            from pathlib import Path
-            目录 = Path("数据集") / "闪电诊断"
+            from 工具包.运行路径 import 解析数据子路径
+
+            目录 = 解析数据子路径("数据集", "闪电诊断")
             目录.mkdir(parents=True, exist_ok=True)
             前缀 = 目录 / f"{int(time.time() * 1000)}_已用{已使用}"
             if isinstance(槽位图像, np.ndarray) and 槽位图像.size:

@@ -3954,7 +3954,9 @@ class 任务上下文:
 
         if 屏幕图像 is not None and hasattr(屏幕图像, "shape"):
             try:
-                目标目录 = Path(截图目录) if 截图目录 else Path("数据集") / "待命现场"
+                from 工具包.运行路径 import 解析数据子路径
+
+                目标目录 = Path(截图目录) if 截图目录 else 解析数据子路径("数据集", "待命现场")
                 目标目录.mkdir(parents=True, exist_ok=True)
                 上限 = max(1, int(最大留图数))
                 # 达到上限后不再新增，也绝不自动删除已有现场截图；
