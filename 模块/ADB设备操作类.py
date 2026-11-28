@@ -16,7 +16,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
 
 from 核心.异常 import ADB异常
 from 模块.截图后端 import (
@@ -145,19 +145,14 @@ class ADB设备操作类:
     _BlueStacks探测缓存锁 = threading.Lock()
     _BlueStacks探测缓存秒数 = 300.0
 
-    @staticmethod
-    def _解析容量文本字节数(文本: str) -> int:
-        匹配 = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?)(?:i?B)?", str(文本 or ""), re.IGNORECASE)
-        if not 匹配:
-            return 0
-        数值 = float(匹配.group(1))
-        单位 = (匹配.group(2) or "").upper()
-        倍率 = {"": 1, "K": 1024, "M": 1024 ** 2, "G": 1024 ** 3, "T": 1024 ** 4}.get(单位, 1)
-        return max(0, int(数值 * 倍率))
+    _MACOS内存保护最低可用百分比 = 10
+    _MACOS内存保护极端可用百分比 = 5
+    _MACOS内存保护最低可用物理MB = 512
+    _MACOS回退内存保护最高负载百分比 = 95
 
     @classmethod
-    def _获取macOS主机内存状态(cls) -> dict[str, int] | None:
-        """通过 macOS 内置 sysctl hw.memsize 与 vm_stat 读取真实主机内存预算。"""
+    def _获取macOS主机内存状态(cls) -> dict[str, Any] | None:
+        """读取 macOS 主机内存预算：优先 sysctl kern.memorystatus_level，配合/回退 vm_stat（含 file-backed 与 purgeable）。"""
         try:
             总内存输出 = subprocess.run(
                 ["sysctl", "-n", "hw.memsize"],
@@ -172,71 +167,86 @@ class ADB设备操作类:
             if 总物理内存 <= 0:
                 return None
 
-            vm输出 = subprocess.run(
-                ["vm_stat"],
-                capture_output=True,
-                text=True,
-                timeout=2.0,
-                check=False,
-            )
-            if vm输出.returncode != 0 or not vm输出.stdout:
-                return None
-
-            页大小匹配 = re.search(r"page size of\s+(\d+)\s+bytes", vm输出.stdout, re.IGNORECASE)
-            if 页大小匹配:
-                页大小 = int(页大小匹配.group(1))
-            else:
-                try:
-                    页大小 = int(os.sysconf("SC_PAGE_SIZE"))
-                except (AttributeError, ValueError, OSError):
-                    页大小 = 4096
-            if 页大小 <= 0:
-                return None
-
-            页计数: dict[str, int] = {}
-            for 行 in vm输出.stdout.splitlines():
-                if ":" not in 行:
-                    continue
-                键, 值 = 行.split(":", 1)
-                数字匹配 = re.search(r"(\d+)", 值)
-                if 数字匹配:
-                    页计数[键.strip().lower()] = int(数字匹配.group(1))
-
-            if "pages free" not in 页计数 and "pages inactive" not in 页计数:
-                return None
-
-            可用页数 = (
-                页计数.get("pages free", 0)
-                + 页计数.get("pages inactive", 0)
-                + 页计数.get("pages speculative", 0)
-            )
-            可用物理内存 = max(0, min(总物理内存, 可用页数 * 页大小))
-            内存负载 = max(0, min(100, round((总物理内存 - 可用物理内存) * 100 / 总物理内存)))
-
-            可用交换内存 = 0
+            系统可用百分比: int | None = None
             try:
-                swap输出 = subprocess.run(
-                    ["sysctl", "-n", "vm.swapusage"],
+                级别输出 = subprocess.run(
+                    ["sysctl", "-n", "kern.memorystatus_level"],
                     capture_output=True,
                     text=True,
                     timeout=2.0,
                     check=False,
                 )
-                if swap输出.returncode == 0 and swap输出.stdout:
-                    free匹配 = re.search(
-                        r"free\s*=\s*([0-9]+(?:\.[0-9]+)?\s*[KMGT]?)",
-                        swap输出.stdout,
-                        re.IGNORECASE,
-                    )
-                    if free匹配:
-                        可用交换内存 = cls._解析容量文本字节数(free匹配.group(1))
+                if 级别输出.returncode == 0 and (级别输出.stdout or "").strip():
+                    原始级别 = int(级别输出.stdout.strip())
+                    if 0 <= 原始级别 <= 100:
+                        系统可用百分比 = 原始级别
             except (OSError, ValueError, subprocess.SubprocessError):
-                可用交换内存 = 0
+                系统可用百分比 = None
+
+            vm可用物理内存: int | None = None
+            try:
+                vm输出 = subprocess.run(
+                    ["vm_stat"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2.0,
+                    check=False,
+                )
+                if vm输出.returncode == 0 and vm输出.stdout:
+                    页大小匹配 = re.search(r"page size of\s+(\d+)\s+bytes", vm输出.stdout, re.IGNORECASE)
+                    if 页大小匹配:
+                        页大小 = int(页大小匹配.group(1))
+                    else:
+                        try:
+                            页大小 = int(os.sysconf("SC_PAGE_SIZE"))
+                        except (AttributeError, ValueError, OSError):
+                            页大小 = 4096
+                    if 页大小 > 0:
+                        页计数: dict[str, int] = {}
+                        for 行 in vm输出.stdout.splitlines():
+                            if ":" not in 行:
+                                continue
+                            键, 值 = 行.split(":", 1)
+                            数字匹配 = re.search(r"(\d+)", 值)
+                            if 数字匹配:
+                                页计数[键.strip().lower()] = int(数字匹配.group(1))
+
+                        if any(
+                            键 in 页计数
+                            for 键 in ("pages free", "pages inactive", "file-backed pages", "pages purgeable")
+                        ):
+                            可用页数 = (
+                                页计数.get("pages free", 0)
+                                + 页计数.get("pages inactive", 0)
+                                + 页计数.get("pages speculative", 0)
+                                + 页计数.get("file-backed pages", 0)
+                                + 页计数.get("pages purgeable", 0)
+                            )
+                            锁定字节 = 页计数.get("pages wired down", 0) * 页大小
+                            可回收上限 = max(0, 总物理内存 - 锁定字节)
+                            vm可用物理内存 = max(0, min(总物理内存, 可回收上限, 可用页数 * 页大小))
+            except (OSError, ValueError, subprocess.SubprocessError):
+                vm可用物理内存 = None
+
+            if 系统可用百分比 is None and vm可用物理内存 is None:
+                return None
+
+            if 系统可用百分比 is not None:
+                内存负载 = max(0, min(100, 100 - 系统可用百分比))
+                按级别可用物理 = max(0, min(总物理内存, round(总物理内存 * 系统可用百分比 / 100)))
+                可用物理内存 = vm可用物理内存 if vm可用物理内存 is not None else 按级别可用物理
+            else:
+                assert vm可用物理内存 is not None
+                可用物理内存 = vm可用物理内存
+                内存负载 = max(0, min(100, round((总物理内存 - 可用物理内存) * 100 / 总物理内存)))
 
             return {
+                "平台": "darwin",
+                "总物理内存": int(总物理内存),
                 "内存负载": int(内存负载),
                 "可用物理内存": int(可用物理内存),
-                "可用提交额度": int(可用物理内存 + 可用交换内存),
+                "系统可用内存百分比": 系统可用百分比,
+                "跳过提交额度判定": True,
             }
         except (OSError, ValueError, subprocess.SubprocessError):
             return None
@@ -276,7 +286,7 @@ class ADB设备操作类:
         }
 
     @classmethod
-    def _获取主机内存状态(cls) -> dict[str, int] | None:
+    def _获取主机内存状态(cls) -> dict[str, Any] | None:
         """读取宿主机的实际可用内存和提交额度，不依赖额外第三方库。"""
         if os.name == "nt":
             class MEMORYSTATUSEX(ctypes.Structure):
@@ -2707,6 +2717,39 @@ class ADB设备操作类:
         if not 状态:
             return
         MB = 1024 * 1024
+        if 状态.get("平台") == "darwin" or 状态.get("跳过提交额度判定"):
+            # macOS 跳过提交额度（swap 按需增长）判定，按 macOS 自身语义：
+            # 仅在 kern.memorystatus_level 极低且物理可用极低（或极端 <=5%）时触发保护，
+            # 回退到 vm_stat 时要求负载 >= 95% 且可用物理内存（含 file-backed/purgeable）< 512MB。
+            系统可用百分比 = 状态.get("系统可用内存百分比")
+            可用物理内存 = int(状态.get("可用物理内存", 0))
+            内存负载 = int(状态.get("内存负载", 0))
+            物理极低 = 可用物理内存 < self._MACOS内存保护最低可用物理MB * MB
+            if 系统可用百分比 is not None:
+                触发保护 = (
+                    系统可用百分比 <= self._MACOS内存保护极端可用百分比
+                    or (系统可用百分比 <= self._MACOS内存保护最低可用百分比 and 物理极低)
+                )
+                指标说明 = (
+                    f"macOS可用内存{系统可用百分比}%（负载{内存负载}%），"
+                    f"可用物理内存{可用物理内存 // MB}MB"
+                )
+            else:
+                触发保护 = (
+                    内存负载 >= self._MACOS回退内存保护最高负载百分比
+                    and 物理极低
+                )
+                指标说明 = (
+                    f"macOS内存负载{内存负载}%，"
+                    f"可用物理内存{可用物理内存 // MB}MB"
+                )
+            if 触发保护:
+                raise ADB错误(
+                    f"主机内存保护已触发：{指标说明}（跳过提交额度判定）；"
+                    "禁止继续截图/OCR，已保留模拟器和游戏进程。"
+                )
+            return
+
         提交额度阈值MB = self._规范化内存保护提交额度阈值MB(
             getattr(self, "内存保护提交额度阈值MB", 1536)
         )
@@ -2742,6 +2785,17 @@ class ADB设备操作类:
             return True, "当前平台主机内存状态暂不可用，按安全回退放行"
 
         MB = 1024 * 1024
+        if 状态.get("平台") == "darwin" or 状态.get("跳过提交额度判定"):
+            系统可用百分比 = 状态.get("系统可用内存百分比")
+            if 系统可用百分比 is not None:
+                return True, (
+                    f"主机内存预算健康：macOS可用内存{系统可用百分比}%（负载{状态['内存负载']}%），"
+                    f"可用物理内存{状态['可用物理内存'] // MB}MB（跳过提交额度判定）"
+                )
+            return True, (
+                f"主机内存预算健康：macOS内存负载{状态['内存负载']}%，"
+                f"可用物理内存{状态['可用物理内存'] // MB}MB（跳过提交额度判定）"
+            )
         return True, (
             f"主机内存预算健康：负载{状态['内存负载']}%，"
             f"可用物理内存{状态['可用物理内存'] // MB}MB，"
