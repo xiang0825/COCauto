@@ -1416,3 +1416,86 @@ class 入口不存在诊断测试(unittest.TestCase):
         if 最佳 is not None:
             self.assertLess(最佳[0], 0.75)
         self.assertIsNone(部落竞赛任务._匹配模板(任务, 图, "活动按钮"))
+
+
+class 简体竞赛面板识别测试(unittest.TestCase):
+    """rc167 实机复验：简体客户端竞赛面板标题应被稳定识别，且不误判非竞赛界面。"""
+
+    @staticmethod
+    def _读取素材(文件名: str):
+        import cv2
+
+        路径 = Path(__file__).resolve().parent / "fixtures" / 文件名
+        assert 路径.is_file(), f"缺少测试素材：{路径}"
+        图像 = cv2.imdecode(np.fromfile(str(路径), dtype=np.uint8), cv2.IMREAD_COLOR)
+        assert 图像 is not None, f"无法解码素材：{路径}"
+        if 图像.shape[:2] != (600, 800):
+            图像 = cv2.resize(图像, (800, 600), interpolation=cv2.INTER_AREA)
+        return 图像
+
+    def _构造真实识别任务(self, 帧, ocr回调=None):
+        游戏 = 模拟游戏()
+        任务, 上下文, _, _, _ = 构造任务(游戏)
+        del 任务._匹配模板  # 使用真实 OpenCV 模板匹配
+        任务._截图 = lambda: 帧
+        if ocr回调 is not None:
+            任务._OCR = ocr回调
+        return 任务
+
+    def test_简体实机竞赛面板帧识别成功且阈值不变(self):
+        self.assertEqual(配置["模板"]["面板标题"]["阈值"], 0.8)
+        self.assertIn("部落竞赛/面板标题_简体.png", 配置["模板"]["面板标题"]["路径"])
+
+        帧 = self._读取素材("clan_games_panel_sc.png")
+        调用记录 = []
+
+        def 模拟标题与内容OCR(_图像, 区域=None):
+            调用记录.append(区域)
+            if 区域 is not None:
+                return [文字项("部落竞赛", (102, 34, 206, 86))]
+            return [
+                文字项("部落竞赛", (102, 34, 206, 86)),
+                文字项("7600/10000", (112, 531, 210, 553)),
+            ]
+
+        任务 = self._构造真实识别任务(帧, 模拟标题与内容OCR)
+        self.assertIsNotNone(任务._匹配模板(帧, "面板标题"))
+        self.assertIsNotNone(任务._匹配模板(帧, "关闭按钮"))
+        面板 = 任务._识别竞赛面板()
+        self.assertIsNotNone(面板, "简体竞赛面板实机帧应当识别成功")
+        self.assertEqual(len(调用记录), 2)
+        self.assertIsNotNone(调用记录[0])
+        self.assertIsNone(调用记录[1])
+
+    def test_面板标题模板未命中时关闭X加标题区域OCR并列确认(self):
+        帧 = self._读取素材("clan_games_panel_sc.png")
+        任务 = self._构造真实识别任务(
+            帧,
+            lambda _图, 区域=None: [文字项("部落竞赛", (102, 34, 206, 86))],
+        )
+        原匹配 = 任务._匹配模板
+        任务._匹配模板 = lambda 图, 名称, 区域=None: None if 名称 == "面板标题" else 原匹配(图, 名称, 区域)
+        面板 = 任务._识别竞赛面板()
+        self.assertIsNotNone(面板, "关闭按钮模板 + 标题区域 OCR 精确命中应并列确认")
+
+    def test_非竞赛实机帧与伪造其他活动面板均不会误判通过(self):
+        for 文件名 in (
+            "coc_home_18_647_5.png",
+            "coc_idle_disconnect_18_647_5.png",
+            "coc_army_config_live_ui.png",
+            "wall_selected_panel.png",
+        ):
+            with self.subTest(素材=文件名):
+                帧 = self._读取素材(文件名)
+                ocr_mock = Mock(return_value=[文字项("部落竞赛", (102, 34, 206, 86))])
+                任务 = self._构造真实识别任务(帧, ocr_mock)
+                self.assertIsNone(任务._识别竞赛面板())
+                ocr_mock.assert_not_called()
+
+        # 其他带相同红 X 关闭按钮的弹窗，只要标题区不是“部落竞赛/部落競賽”，绝不误判
+        竞赛帧 = self._读取素材("clan_games_panel_sc.png")
+        其他活动任务 = self._构造真实识别任务(
+            竞赛帧,
+            lambda _图, 区域=None: [文字项("每日特惠", (102, 34, 206, 86))],
+        )
+        self.assertIsNone(其他活动任务._识别竞赛面板())

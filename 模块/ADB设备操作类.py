@@ -146,33 +146,166 @@ class ADB设备操作类:
     _BlueStacks探测缓存秒数 = 300.0
 
     @staticmethod
-    def _获取主机内存状态() -> dict[str, int] | None:
-        """读取 Windows 的实际可用内存和提交额度，不依赖额外第三方库。"""
-        if os.name != "nt":
+    def _解析容量文本字节数(文本: str) -> int:
+        匹配 = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?)(?:i?B)?", str(文本 or ""), re.IGNORECASE)
+        if not 匹配:
+            return 0
+        数值 = float(匹配.group(1))
+        单位 = (匹配.group(2) or "").upper()
+        倍率 = {"": 1, "K": 1024, "M": 1024 ** 2, "G": 1024 ** 3, "T": 1024 ** 4}.get(单位, 1)
+        return max(0, int(数值 * 倍率))
+
+    @classmethod
+    def _获取macOS主机内存状态(cls) -> dict[str, int] | None:
+        """通过 macOS 内置 sysctl hw.memsize 与 vm_stat 读取真实主机内存预算。"""
+        try:
+            总内存输出 = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+                check=False,
+            )
+            if 总内存输出.returncode != 0:
+                return None
+            总物理内存 = int((总内存输出.stdout or "").strip())
+            if 总物理内存 <= 0:
+                return None
+
+            vm输出 = subprocess.run(
+                ["vm_stat"],
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+                check=False,
+            )
+            if vm输出.returncode != 0 or not vm输出.stdout:
+                return None
+
+            页大小匹配 = re.search(r"page size of\s+(\d+)\s+bytes", vm输出.stdout, re.IGNORECASE)
+            if 页大小匹配:
+                页大小 = int(页大小匹配.group(1))
+            else:
+                try:
+                    页大小 = int(os.sysconf("SC_PAGE_SIZE"))
+                except (AttributeError, ValueError, OSError):
+                    页大小 = 4096
+            if 页大小 <= 0:
+                return None
+
+            页计数: dict[str, int] = {}
+            for 行 in vm输出.stdout.splitlines():
+                if ":" not in 行:
+                    continue
+                键, 值 = 行.split(":", 1)
+                数字匹配 = re.search(r"(\d+)", 值)
+                if 数字匹配:
+                    页计数[键.strip().lower()] = int(数字匹配.group(1))
+
+            if "pages free" not in 页计数 and "pages inactive" not in 页计数:
+                return None
+
+            可用页数 = (
+                页计数.get("pages free", 0)
+                + 页计数.get("pages inactive", 0)
+                + 页计数.get("pages speculative", 0)
+            )
+            可用物理内存 = max(0, min(总物理内存, 可用页数 * 页大小))
+            内存负载 = max(0, min(100, round((总物理内存 - 可用物理内存) * 100 / 总物理内存)))
+
+            可用交换内存 = 0
+            try:
+                swap输出 = subprocess.run(
+                    ["sysctl", "-n", "vm.swapusage"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2.0,
+                    check=False,
+                )
+                if swap输出.returncode == 0 and swap输出.stdout:
+                    free匹配 = re.search(
+                        r"free\s*=\s*([0-9]+(?:\.[0-9]+)?\s*[KMGT]?)",
+                        swap输出.stdout,
+                        re.IGNORECASE,
+                    )
+                    if free匹配:
+                        可用交换内存 = cls._解析容量文本字节数(free匹配.group(1))
+            except (OSError, ValueError, subprocess.SubprocessError):
+                可用交换内存 = 0
+
+            return {
+                "内存负载": int(内存负载),
+                "可用物理内存": int(可用物理内存),
+                "可用提交额度": int(可用物理内存 + 可用交换内存),
+            }
+        except (OSError, ValueError, subprocess.SubprocessError):
             return None
 
-        class MEMORYSTATUSEX(ctypes.Structure):
-            _fields_ = [
-                ("dwLength", ctypes.c_ulong),
-                ("dwMemoryLoad", ctypes.c_ulong),
-                ("ullTotalPhys", ctypes.c_ulonglong),
-                ("ullAvailPhys", ctypes.c_ulonglong),
-                ("ullTotalPageFile", ctypes.c_ulonglong),
-                ("ullAvailPageFile", ctypes.c_ulonglong),
-                ("ullTotalVirtual", ctypes.c_ulonglong),
-                ("ullAvailVirtual", ctypes.c_ulonglong),
-                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-            ]
-
-        状态 = MEMORYSTATUSEX()
-        状态.dwLength = ctypes.sizeof(状态)
-        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(状态)):
+    @staticmethod
+    def _获取Linux主机内存状态() -> dict[str, int] | None:
+        """在 Linux 下通过 /proc/meminfo 只读查询可用内存。"""
+        try:
+            文本 = Path("/proc/meminfo").read_text(encoding="utf-8", errors="ignore")
+        except OSError:
             return None
+        字段: dict[str, int] = {}
+        for 行 in 文本.splitlines():
+            匹配 = re.match(r"^([^:]+):\s*(\d+)\s*kB", 行.strip(), re.IGNORECASE)
+            if 匹配:
+                字段[匹配.group(1).strip()] = int(匹配.group(2)) * 1024
+        总物理内存 = 字段.get("MemTotal", 0)
+        if 总物理内存 <= 0:
+            return None
+        if "MemAvailable" in 字段:
+            可用物理内存 = 字段["MemAvailable"]
+        elif "MemFree" in 字段:
+            可用物理内存 = (
+                字段.get("MemFree", 0)
+                + 字段.get("Buffers", 0)
+                + 字段.get("Cached", 0)
+            )
+        else:
+            return None
+        可用物理内存 = max(0, min(总物理内存, 可用物理内存))
+        内存负载 = max(0, min(100, round((总物理内存 - 可用物理内存) * 100 / 总物理内存)))
+        可用交换内存 = max(0, 字段.get("SwapFree", 0))
         return {
-            "内存负载": int(状态.dwMemoryLoad),
-            "可用物理内存": int(状态.ullAvailPhys),
-            "可用提交额度": int(状态.ullAvailPageFile),
+            "内存负载": int(内存负载),
+            "可用物理内存": int(可用物理内存),
+            "可用提交额度": int(可用物理内存 + 可用交换内存),
         }
+
+    @classmethod
+    def _获取主机内存状态(cls) -> dict[str, int] | None:
+        """读取宿主机的实际可用内存和提交额度，不依赖额外第三方库。"""
+        if os.name == "nt":
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            状态 = MEMORYSTATUSEX()
+            状态.dwLength = ctypes.sizeof(状态)
+            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(状态)):
+                return None
+            return {
+                "内存负载": int(状态.dwMemoryLoad),
+                "可用物理内存": int(状态.ullAvailPhys),
+                "可用提交额度": int(状态.ullAvailPageFile),
+            }
+        if sys.platform == "darwin":
+            return cls._获取macOS主机内存状态()
+        if sys.platform.startswith("linux"):
+            return cls._获取Linux主机内存状态()
+        return None
 
     def __init__(
             self,
@@ -2604,7 +2737,9 @@ class ADB设备操作类:
 
         状态 = self._主机内存状态缓存
         if not 状态:
-            return False, "主机内存状态暂不可用，不能确认截图预算安全"
+            if os.name == "nt":
+                return False, "主机内存状态暂不可用，不能确认截图预算安全"
+            return True, "当前平台主机内存状态暂不可用，按安全回退放行"
 
         MB = 1024 * 1024
         return True, (

@@ -213,6 +213,115 @@ class 心跳超时测试(unittest.TestCase):
         self.assertFalse(任务._超时前双帧复核主世界(object(), 页面识别器实例))
         self.assertEqual(页面识别器实例.识别.call_count, 2)
 
+    def test_长时等待期间定期续期心跳不会触发心跳超时(self):
+        虚拟时间 = [1000.0]
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.机器人标志 = "robot_long_wait"
+        机器人.停止事件 = threading.Event()
+        机器人.继续事件 = threading.Event()
+        机器人.继续事件.set()
+        机器人._最近心跳续期 = None
+        最后日志 = SimpleNamespace(
+            日志内容="本轮任务计划完成，约60分钟后重新检查（都城未校准）",
+            记录时间=1000.0,
+            下次超时=1060.0,
+        )
+        机器人.数据库 = SimpleNamespace(读取最后日志=Mock(return_value=最后日志))
+        机器人.记录日志 = Mock()
+
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.机器人标志 = 机器人.机器人标志
+        上下文.停止事件 = 机器人.停止事件
+        上下文.继续事件 = 机器人.继续事件
+        上下文.置脚本状态 = 机器人.记录日志
+        上下文.续期心跳 = 机器人.续期心跳
+        上下文._任务计划长时间等待 = True
+        上下文._长时等待说明 = "任务计划等待（都城未校准）"
+        上下文._战斗中 = False
+        上下文._最近点击页面结果 = None
+        上下文._部落竞赛占用画面 = lambda: True
+        上下文.自动确认升级完成弹窗 = Mock()
+        上下文.检查空闲或内存释放识别模型 = Mock(return_value=(False, ""))
+        上下文.op = None
+
+        心跳检查样本 = []
+        上次抽样 = [1000.0]
+
+        def 推进等待(timeout=None):
+            虚拟时间[0] += float(timeout or 0.0)
+            if 虚拟时间[0] - 上次抽样[0] >= 1.0:
+                上次抽样[0] = 虚拟时间[0]
+                心跳检查样本.append(机器人.检查超时())
+            return False
+
+        机器人.停止事件.wait = Mock(side_effect=推进等待)
+
+        with patch("任务流程.基础任务框架.time.monotonic", side_effect=lambda: 虚拟时间[0]), \
+             patch("线程.自动化机器人.time.time", side_effect=lambda: 虚拟时间[0]):
+            上下文.脚本延时(200_000)
+
+        self.assertGreaterEqual(len(心跳检查样本), 150)
+        self.assertTrue(all(not 超时 for 超时, _ in 心跳检查样本), 心跳检查样本[:5])
+        self.assertIsNotNone(机器人._最近心跳续期)
+        # 续期走无刷屏心跳通道，不往数据库/UI反复写日志
+        机器人.记录日志.assert_not_called()
+
+    def test_长时等待期间真正卡死停止续期后仍触发心跳超时(self):
+        机器人 = 自动化机器人.__new__(自动化机器人)
+        机器人.机器人标志 = "robot_stuck"
+        机器人.停止事件 = threading.Event()
+        机器人.继续事件 = threading.Event()
+        机器人.继续事件.set()
+        机器人._最近心跳续期 = None
+        最后日志 = SimpleNamespace(
+            日志内容="本轮任务计划完成，约60分钟后重新检查",
+            记录时间=1000.0,
+            下次超时=1060.0,
+        )
+        机器人.数据库 = SimpleNamespace(读取最后日志=Mock(return_value=最后日志))
+
+        with patch("线程.自动化机器人.time.time", return_value=1025.0):
+            机器人.续期心跳(60.0, "任务计划等待（剩余约59分钟）")
+
+        # 续期后 50 秒（1075s <= 1085s + 5s）正常未超时
+        with patch("线程.自动化机器人.time.time", return_value=1075.0):
+            self.assertEqual(机器人.检查超时(), (False, ""))
+
+        # 随后线程卡死不再续期，超过 60s + 5s 宽限（1091s > 1090s）必须触发超时
+        with patch("线程.自动化机器人.time.time", return_value=1091.0):
+            超时, 原因 = 机器人.检查超时()
+
+        self.assertTrue(超时)
+        self.assertIn("最近保活：任务计划等待", 原因)
+        self.assertIn("实际间隔 66 秒超过阈值 60 秒（含5秒宽限）", 原因)
+
+    def test_短延时循环不续期心跳以免掩盖活锁(self):
+        虚拟时间 = [2000.0]
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文.机器人标志 = "robot_livelock"
+        上下文.停止事件 = threading.Event()
+        上下文.继续事件 = threading.Event()
+        上下文.继续事件.set()
+        上下文.置脚本状态 = Mock()
+        上下文.续期心跳 = Mock()
+        上下文._任务计划长时间等待 = False
+        上下文._战斗中 = False
+        上下文._最近点击页面结果 = None
+        上下文._部落竞赛占用画面 = lambda: True
+        上下文.自动确认升级完成弹窗 = Mock()
+        上下文.op = None
+
+        def 推进(timeout=None):
+            虚拟时间[0] += float(timeout or 0.0)
+            return False
+
+        上下文.停止事件.wait = Mock(side_effect=推进)
+        with patch("任务流程.基础任务框架.time.monotonic", side_effect=lambda: 虚拟时间[0]):
+            for _ in range(10):
+                上下文.脚本延时(500)
+
+        上下文.续期心跳.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -85,6 +85,10 @@ class 任务上下文:
     置脚本状态:Callable
     任务计划等待秒: float = 0.0  # 当前轮任务请求的下一次检查等待时间
     内存保护标志: threading.Event = field(default_factory=threading.Event)
+    续期心跳: Callable | None = None
+
+    长时等待心跳续期间隔秒 = 25.0
+    长时等待心跳超时秒 = 60.0
 
     # 弹窗 OCR 关键词（无类型注解：类属性，不是 dataclass 字段）；
     # 可在 资源/识别/弹窗.json 的“任务上下文”节覆盖，默认值与原内联常量一致。
@@ -4091,6 +4095,28 @@ class 任务上下文:
             防休眠.保持唤醒()
         return 已暂停
 
+    def _续期长时等待心跳(self, 剩余秒数: float) -> bool:
+        """在合法长时等待循环内定期续期心跳，避免监控中心误判无心跳。"""
+        说明 = str(getattr(self, "_长时等待说明", "") or "长时等待中").strip()
+        if 剩余秒数 >= 60:
+            说明 = f"{说明}（剩余约{int(剩余秒数 // 60)}分钟）"
+        else:
+            说明 = f"{说明}（剩余约{max(1, int(剩余秒数))}秒）"
+        超时秒数 = float(getattr(self, "长时等待心跳超时秒", 60.0))
+        续期回调 = getattr(self, "续期心跳", None)
+        if callable(续期回调):
+            try:
+                续期回调(超时秒数, 说明)
+            except TypeError:
+                续期回调(超时秒数)
+            return True
+        if bool(getattr(self, "_任务计划长时间等待", False)):
+            置状态 = getattr(self, "置脚本状态", None)
+            if callable(置状态):
+                置状态(说明, 超时秒数)
+                return True
+        return False
+
     def 脚本延时(self, 毫秒数):
         """脚本延时方法 - 可中断、可暂停、支持定时任务的智能延时
 
@@ -4141,7 +4167,14 @@ class 任务上下文:
         # 累积起来会变成每个机器人每秒约 1000 次唤醒，多个机器人或
         # Tk/ONNX 同时运行时会明显抬高 CPU。使用 Event.wait 休眠，仍
         # 保留停止/暂停的及时响应，并把唤醒频率限制在每秒最多 5 次。
-        截止时间 = time.monotonic() + 总秒数
+        开始单调时间 = time.monotonic()
+        截止时间 = 开始单调时间 + 总秒数
+        心跳续期间隔 = max(5.0, float(getattr(self, "长时等待心跳续期间隔秒", 25.0)))
+        需要保活 = (
+            bool(getattr(self, "_任务计划长时间等待", False))
+            or 总秒数 >= 心跳续期间隔
+        )
+        上次心跳时间 = 开始单调时间
         while True:
             if self.停止事件.is_set():
                 self.置脚本状态("收到停止事件")
@@ -4152,6 +4185,7 @@ class 任务上下文:
 
             if not self.继续事件.is_set():
                 self.等待暂停恢复(轮询秒=0.25)
+                上次心跳时间 = time.monotonic()
                 continue
 
             if bool(getattr(self, "_任务计划长时间等待", False)):
@@ -4162,6 +4196,10 @@ class 任务上下文:
             当前单调时间 = time.monotonic()
             if 当前单调时间 >= 截止时间:
                 break
+
+            if 需要保活 and 当前单调时间 - 上次心跳时间 >= 心跳续期间隔:
+                self._续期长时等待心跳(max(0.0, 截止时间 - 当前单调时间))
+                上次心跳时间 = 当前单调时间
 
             # 升级完成弹窗只做低频、双帧确认，不参与战斗输入路径。这样
             # 可在主世界等待期间自动处理确认，同时不会给下兵循环增加 OCR。

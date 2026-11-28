@@ -88,7 +88,7 @@ class 模型空闲释放协调器:
                     预算健康, 内存诊断 = 内存预算检查函数(强制刷新=False)
                 except TypeError:
                     预算健康, 内存诊断 = 内存预算检查函数()
-                if not 预算健康:
+                if not 预算健康 and "暂不可用" not in str(内存诊断 or ""):
                     return True, f"宿主机内存预算紧张（{内存诊断 or '预算不足'}），立即释放识别模型"
             except Exception:
                 pass
