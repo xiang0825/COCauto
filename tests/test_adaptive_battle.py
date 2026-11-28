@@ -986,6 +986,35 @@ class 自适应战斗测试(unittest.TestCase):
         self.assertEqual(结果[0]["数量"], 20)
         self.assertTrue(结果[0]["数量已确认"])
 
+    def test_未匹配攻城器械保留OCR数量2或3并在无有效数量时回退1(self):
+        for ocr数量, 期望数量, 期望确认 in (
+            (2, 2, True),
+            (3, 3, True),
+            (0, 1, False),
+            (None, 1, False),
+        ):
+            with self.subTest(ocr数量=ocr数量):
+                任务 = 进攻任务.__new__(进攻任务)
+                任务.兵栏槽位 = [("第1格", (0, 0, 10, 10))]
+                任务.取本次兵种模板列表 = lambda _上下文: ["兵种_攻城气球.bmp"]
+                任务._识别槽位文本 = lambda _图像: (f"x{ocr数量}" if ocr数量 is not None else "", "")
+                任务._识别槽位数量 = lambda _图像, _文本, 值=ocr数量: 值
+                任务._槽位最佳模板 = Mock(side_effect=[
+                    ("未匹配攻城器械模板", 0.55), ("", 0.0), ("", 0.0),
+                ])
+                任务.是否为灰色图片 = lambda *_参数, **_关键字: False
+                上下文 = SimpleNamespace(
+                    op=SimpleNamespace(
+                        获取屏幕图像cv=lambda *_区域: np.zeros((10, 10, 3), dtype=np.uint8),
+                    ),
+                    置脚本状态=lambda *_a, **_k: None,
+                )
+                结果 = 任务.检查当前配兵(上下文)
+                self.assertEqual(结果[0]["类别"], "攻城器械")
+                self.assertEqual(结果[0]["名称"], "未匹配攻城器械模板")
+                self.assertEqual(结果[0]["数量"], 期望数量)
+                self.assertEqual(结果[0]["数量已确认"], 期望确认)
+
     def test_九条雷龙模板失配时不能判成攻城器械(self):
         任务 = 进攻任务.__new__(进攻任务)
         任务.兵栏槽位 = [("第1格", (0, 0, 10, 10))]

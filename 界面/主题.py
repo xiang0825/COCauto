@@ -278,7 +278,7 @@ QPushButton#分段 {{ padding: 3px 9px; border-radius: 6px; font-size: 12px; min
 QPushButton#分段:checked {{
     background: {色.强调浅}; color: {色.强调文字}; border-color: {色.强调}; font-weight: 600;
 }}
-QListWidget#任务列表::item {{ padding: 5px 4px; }}
+QListWidget#任务列表::item {{ padding: 2px 4px; margin: 0; }}
 QListWidget#设置导航::item {{ padding: 7px 10px; }}
 QTableWidget {{
     background: {色.卡片}; color: {色.文字}; gridline-color: {色.分隔};

@@ -7,6 +7,7 @@ fixtures/coc_army_config_live_ui.png 是 MuMu 实机 800×600 编辑军队主页
 import os
 import tempfile
 import threading
+import time
 import unittest
 import unittest.mock
 from types import SimpleNamespace
@@ -584,7 +585,9 @@ class 复审其它项测试(unittest.TestCase):
             _竞赛配兵任务文本="至少需使用攻城车x1",
         )
         上下文.数据库.获取最新完整状态.return_value = SimpleNamespace(状态数据={
-            编.最近确认攻城状态类型: {"单位": {"攻城飞艇": 1}, "容量": [1, 3]},
+            编.最近确认攻城状态类型: {
+                "单位": {"攻城飞艇": 1}, "容量": [1, 3], "时间": int(time.time()),
+            },
         })
         任务 = 挂页面桩(新任务(上下文))
         任务._读取分区阵容 = Mock(return_value=(None, "攻城第1张卡片无法区分"))
@@ -594,11 +597,51 @@ class 复审其它项测试(unittest.TestCase):
 
         快照 = 编.读取竞赛快照(上下文)
         self.assertEqual(快照["分区"]["攻城"]["单位"], {"攻城飞艇": 1})
+        self.assertFalse(快照["分区"]["攻城"].get("不确定"))
         任务._配置分区.assert_called_once_with(
             "攻城", {"攻城战车": 1}, ("攻城战车",), ("攻城战车",), 精确=True
         )
         日志 = " ".join(c.args[0] for c in 上下文.置脚本状态.call_args_list)
         self.assertIn("恢复来源=最近高置信识别", 日志)
+
+    def test_攻城缓存超过24小时过期或缺失时间写入不确定标记并触发下游防线(self):
+        现在 = int(time.time())
+        for 名称, 记录 in (
+            ("超过24小时过期", {"单位": {"攻城飞艇": 1}, "容量": [1, 3], "时间": 现在 - 25 * 3600}),
+            ("缺失时间戳", {"单位": {"攻城飞艇": 1}, "容量": [1, 3]}),
+        ):
+            with self.subTest(场景=名称):
+                上下文 = 竞赛上下文(
+                    _竞赛配兵关键单位={"攻城": ["攻城战车"]},
+                    _竞赛配兵任务键="指定兵种:攻城车",
+                    _部落竞赛配兵任务类型="指定兵种",
+                    _竞赛配兵任务文本="至少需使用攻城车x1",
+                )
+                上下文.数据库.获取最新完整状态.return_value = SimpleNamespace(状态数据={
+                    编.最近确认攻城状态类型: 记录,
+                })
+                任务 = 挂页面桩(新任务(上下文))
+                恢复快照, 来源 = 任务._竞赛攻城恢复快照()
+                self.assertEqual(来源, "过期缓存")
+                self.assertTrue(恢复快照.get("不确定"))
+
+                # 下游策略防线直接拒绝构建临时阵容
+                临时, 原因 = 按快照构建临时阵容(
+                    "指定兵种", "至少需使用攻城车x1", {"攻城": ["攻城战车"]}, {"攻城": 恢复快照}
+                )
+                self.assertIsNone(临时)
+                self.assertIn("攻城原阵容不确定", 原因)
+
+                # 下游恢复防线也拒绝恢复不确定快照
+                self.assertFalse(任务._在编辑页按快照恢复({"攻城": 恢复快照}))
+
+                # 完整换兵流程不改动攻城器械且不保存快照
+                任务._读取分区阵容 = Mock(return_value=(None, "攻城第1张卡片无法区分"))
+                任务._配置分区 = Mock()
+                self.assertTrue(任务.执行())
+                任务._配置分区.assert_not_called()
+                self.assertFalse(编.有待恢复竞赛快照(上下文))
+                self.assertEqual(上下文._竞赛配兵失败任务键, "指定兵种:攻城车")
 
     def test_攻城区无任何恢复来源时不换兵并放弃该分区(self):
         上下文 = 竞赛上下文(

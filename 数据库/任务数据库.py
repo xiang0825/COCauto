@@ -65,9 +65,27 @@ class 任务计划定义:
 # 旧版默认只有 4 项且当时没有其它可选项；仍是这 4 项的设置视为“未自定义”，升级为新默认。
 部落竞赛旧默认白名单 = frozenset(("掠夺金币", "掠夺圣水", "掠夺黑油", "摧毁资源建筑"))
 
-# 这些状态本身包含滚动统计/近期样本；每次追加都会重复保存同一批历史。
-# 其他状态（例如家乡资源）仍逐条保留，供峰值识别和历史查询使用。
-仅保留最新快照的状态类型 = frozenset({"战斗学习", "战斗胜率", "战斗资源分析", "阵容学习", "今日统计", "日志统计归档"})
+# 这些状态本身包含滚动统计/近期样本或仅关心当前最新快照；每次追加都会造成表持续膨胀。
+# 其他状态（例如家乡资源、城墙升级记录）仍逐条保留，供峰值识别和历史查询使用。
+仅保留最新快照的状态类型 = frozenset({
+    "战斗学习",
+    "战斗胜率",
+    "战斗资源分析",
+    "阵容学习",
+    "今日统计",
+    "日志统计归档",
+    "最近确认攻城阵容",
+    "竞赛原阵容快照",
+    "部落竞赛检查记录",
+    "日常任务记录",
+    "自动配兵",
+    "工人状态",
+    "官方账号数据",
+    "研究升级失败记录",
+    "建筑升级失败记录",
+    "战宠升级失败记录",
+    "城墙识别",
+})
 
 
 def 规范化任务计划顺序(任务顺序) -> list[str]:
@@ -1014,7 +1032,7 @@ class 任务数据库:
         # 容易造成“日志没更新、配置像丢失、测试读错库”的假故障。
         共享数据库 = os.environ.get("COCAUTO_DB_PATH", "").strip()
         if 共享数据库:
-            共享数据库 = os.path.abspath(os.path.expandvars(共享数据库))
+            共享数据库 = os.path.realpath(os.path.abspath(os.path.expandvars(共享数据库)))
             os.makedirs(os.path.dirname(共享数据库), exist_ok=True)
             return 共享数据库
         if getattr(sys, "frozen", False):
@@ -1039,7 +1057,10 @@ class 任务数据库:
 
     @property
     def _缓存键(self) -> str:
-        return os.path.normcase(os.path.abspath(str(self.文件路径)))
+        路径 = str(self.文件路径)
+        if 路径 == ":memory:":
+            return 路径
+        return os.path.normcase(os.path.realpath(os.path.abspath(路径)))
 
     def __init__(self, 文件路径=None):
         self.文件路径 = 文件路径 or self.默认数据库路径()
@@ -1090,6 +1111,10 @@ class 任务数据库:
                     状态类型 TEXT NOT NULL,  -- 如：resources/builder/upgrade_queue
                     状态值 TEXT NOT NULL    -- JSON格式存储
                 )""")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_运行时状态_机器人类型记录 "
+                "ON 运行时状态 (机器人标志, 状态类型, 记录ID DESC)"
+            )
 
 
             # 任务日志表

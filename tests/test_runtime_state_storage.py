@@ -88,6 +88,23 @@ class 运行时状态存储测试(unittest.TestCase):
         self.assertIn("金币", 状态值)
         self.assertNotIn("\\u91d1", 状态值)
 
+    def test_攻城缓存与竞赛快照及常见快照状态重复写入仅保留最新一条(self):
+        快照类型们 = (
+            "最近确认攻城阵容",
+            "竞赛原阵容快照",
+            "部落竞赛检查记录",
+            "日常任务记录",
+            "工人状态",
+        )
+        for 轮次 in range(10):
+            for 类型 in 快照类型们:
+                self.数据库.更新状态("robot_1", 类型, {"轮次": 轮次 + 1})
+
+        完整 = self.数据库.获取最新完整状态("robot_1").状态数据
+        for 类型 in 快照类型们:
+            self.assertEqual(self._状态记录数("robot_1", 类型), 1, 类型)
+            self.assertEqual(完整[类型]["轮次"], 10, 类型)
+
 
 if __name__ == "__main__":
     unittest.main()

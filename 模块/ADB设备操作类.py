@@ -11,6 +11,7 @@ import logging
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -47,13 +48,28 @@ class ADB设备信息:
     序列号: str
     状态: str
     描述: str = ""
+    已确认模拟器: bool = False
 
     @property
     def 显示文本(self) -> str:
         return f"{self.序列号}  [{self.状态}]" + (f"  {self.描述}" if self.描述 else "")
 
     @property
+    def 是本机BlueStacks候选端口(self) -> bool:
+        """BlueStacks 5/Air 默认监听本机 5555-5585 端口。"""
+        序列号 = self.序列号.strip().lower()
+        if not 序列号.startswith(("127.0.0.1:", "localhost:")):
+            return False
+        try:
+            端口 = int(序列号.rsplit(":", 1)[1])
+        except (ValueError, IndexError):
+            return False
+        return 5555 <= 端口 <= 5585
+
+    @property
     def 疑似实体设备(self) -> bool:
+        if self.已确认模拟器:
+            return False
         # Android Emulator、MuMu 某些版本以及部分兼容层会使用
         # ``emulator-<port>`` 作为 serial，但描述可能伪装成手机型号。
         # serial 本身是 ADB 的虚拟设备标识，不能再被后面的 Samsung/SM
@@ -177,6 +193,9 @@ class ADB设备操作类:
         )
         self._日志回调 = 日志回调
         self._屏幕尺寸: tuple[int, int] | None = None
+        # 保留最近一次有效截图的真实宽高；_标记目标未验证() 不会清空它，
+        # 避免 BlueStacks Air 等原生竖屏模拟器在重连或缓存命中后退回竖屏 wm size。
+        self._最近截图尺寸: tuple[int, int] | None = None
         self._截图显示ID: str | None = None
         self._截图显示ID更新时间 = 0.0
         # MuMu 转场期间 dumpsys window/display 可能短暂返回空内容。
@@ -262,45 +281,69 @@ class ADB设备操作类:
     @staticmethod
     def _候选ADB路径() -> list[Path]:
         """返回常见模拟器和 Android SDK 的 adb 客户端位置。"""
-        程序文件目录 = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
-        程序文件目录x86 = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
-        本地应用目录 = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
-        用户应用目录 = Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
-        候选 = [
-            # BlueStacks
-            程序文件目录 / "BlueStacks_nxt" / "HD-Adb.exe",
-            程序文件目录x86 / "BlueStacks_nxt" / "HD-Adb.exe",
-            程序文件目录 / "BlueStacks" / "HD-Adb.exe",
-            # MuMu
-            程序文件目录 / "Netease" / "MuMuPlayer" / "nx_main" / "adb.exe",
-            程序文件目录 / "Netease" / "MuMuPlayer-12.0" / "shell" / "adb.exe",
-            程序文件目录x86 / "Netease" / "MuMuPlayer" / "nx_main" / "adb.exe",
-            本地应用目录 / "Netease" / "MuMuPlayer-12.0" / "shell" / "adb.exe",
-            用户应用目录 / "Netease" / "MuMuPlayer-12.0" / "shell" / "adb.exe",
-            # 雷电
-            Path(r"E:\LDPlayer\LDPlayer14\adb.exe"),
-            Path(r"E:\LDPlayer\LDPlayer9\adb.exe"),
-            Path(r"C:\LDPlayer\LDPlayer14\adb.exe"),
-            Path(r"C:\LDPlayer\LDPlayer9\adb.exe"),
-            Path(r"C:\leidian\LDPlayer9\adb.exe"),
-            程序文件目录 / "LDPlayer" / "LDPlayer9" / "adb.exe",
-            程序文件目录x86 / "LDPlayer" / "LDPlayer9" / "adb.exe",
-            # 夜神、逍遥和 Genymotion
-            程序文件目录 / "Nox" / "bin" / "nox_adb.exe",
-            程序文件目录x86 / "Nox" / "bin" / "nox_adb.exe",
-            程序文件目录 / "Microvirt" / "MEmu" / "adb.exe",
-            程序文件目录x86 / "Microvirt" / "MEmu" / "adb.exe",
-            程序文件目录 / "Genymobile" / "Genymotion" / "tools" / "adb.exe",
-            # Android SDK / PATH
-            本地应用目录 / "Android" / "Sdk" / "platform-tools" / "adb.exe",
-            Path(os.environ.get("ANDROID_HOME", "")) / "platform-tools" / "adb.exe"
-            if os.environ.get("ANDROID_HOME") else Path(),
-            Path(os.environ.get("ANDROID_SDK_ROOT", "")) / "platform-tools" / "adb.exe"
-            if os.environ.get("ANDROID_SDK_ROOT") else Path(),
-        ]
+        adb文件名 = "adb.exe" if os.name == "nt" else "adb"
+        候选: list[Path] = []
+        if sys.platform == "darwin":
+            用户目录 = Path.home()
+            候选.extend([
+                # BlueStacks Air (macOS)
+                Path("/Applications/BlueStacks.app/Contents/MacOS/hd-adb"),
+                用户目录 / "Applications" / "BlueStacks.app" / "Contents" / "MacOS" / "hd-adb",
+                # MuMuPlayer / MuMuPlayer Pro (macOS)
+                Path("/Applications/MuMuPlayer.app/Contents/MacOS/tools/adb"),
+                Path("/Applications/MuMuPlayer.app/Contents/MacOS/MuMuEmulator.app/Contents/MacOS/tools/adb"),
+                Path("/Applications/MuMuPlayerPro.app/Contents/MacOS/tools/adb"),
+                Path("/Applications/MuMuPlayerPro.app/Contents/MacOS/MuMuEmulator.app/Contents/MacOS/tools/adb"),
+                Path("/Applications/MuMuAndroidDevice.app/Contents/MacOS/tools/adb"),
+                用户目录 / "Applications" / "MuMuPlayer.app" / "Contents" / "MacOS" / "tools" / "adb",
+                用户目录 / "Applications" / "MuMuPlayerPro.app" / "Contents" / "MacOS" / "tools" / "adb",
+                # Android SDK / Homebrew (macOS)
+                用户目录 / "Library" / "Android" / "sdk" / "platform-tools" / "adb",
+                Path("/opt/homebrew/bin/adb"),
+                Path("/usr/local/bin/adb"),
+            ])
+        else:
+            程序文件目录 = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+            程序文件目录x86 = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+            本地应用目录 = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+            用户应用目录 = Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
+            候选.extend([
+                # BlueStacks
+                程序文件目录 / "BlueStacks_nxt" / "HD-Adb.exe",
+                程序文件目录x86 / "BlueStacks_nxt" / "HD-Adb.exe",
+                程序文件目录 / "BlueStacks" / "HD-Adb.exe",
+                # MuMu
+                程序文件目录 / "Netease" / "MuMuPlayer" / "nx_main" / "adb.exe",
+                程序文件目录 / "Netease" / "MuMuPlayer-12.0" / "shell" / "adb.exe",
+                程序文件目录x86 / "Netease" / "MuMuPlayer" / "nx_main" / "adb.exe",
+                本地应用目录 / "Netease" / "MuMuPlayer-12.0" / "shell" / "adb.exe",
+                用户应用目录 / "Netease" / "MuMuPlayer-12.0" / "shell" / "adb.exe",
+                # 雷电
+                Path(r"E:\LDPlayer\LDPlayer14\adb.exe"),
+                Path(r"E:\LDPlayer\LDPlayer9\adb.exe"),
+                Path(r"C:\LDPlayer\LDPlayer14\adb.exe"),
+                Path(r"C:\LDPlayer\LDPlayer9\adb.exe"),
+                Path(r"C:\leidian\LDPlayer9\adb.exe"),
+                程序文件目录 / "LDPlayer" / "LDPlayer9" / "adb.exe",
+                程序文件目录x86 / "LDPlayer" / "LDPlayer9" / "adb.exe",
+                # 夜神、逍遥和 Genymotion
+                程序文件目录 / "Nox" / "bin" / "nox_adb.exe",
+                程序文件目录x86 / "Nox" / "bin" / "nox_adb.exe",
+                程序文件目录 / "Microvirt" / "MEmu" / "adb.exe",
+                程序文件目录x86 / "Microvirt" / "MEmu" / "adb.exe",
+                程序文件目录 / "Genymobile" / "Genymotion" / "tools" / "adb.exe",
+                # Android SDK
+                本地应用目录 / "Android" / "Sdk" / "platform-tools" / adb文件名,
+            ])
+
+        if os.environ.get("ANDROID_HOME"):
+            候选.append(Path(os.environ["ANDROID_HOME"]) / "platform-tools" / adb文件名)
+        if os.environ.get("ANDROID_SDK_ROOT"):
+            候选.append(Path(os.environ["ANDROID_SDK_ROOT"]) / "platform-tools" / adb文件名)
+
         雷电目录 = os.environ.get("COC_LDPLAYER_DIR", "").strip()
         if 雷电目录:
-            候选.insert(0, Path(雷电目录) / ("adb.exe" if os.name == "nt" else "adb"))
+            候选.insert(0, Path(雷电目录) / adb文件名)
 
         去重 = []
         已见 = set()
@@ -578,8 +621,12 @@ class ADB设备操作类:
             time.sleep(0.35)
 
     def _连接已保存网络设备(self) -> None:
-        """MuMu 网络 ADB 从设备列表消失时，仅重连保存的本机地址。"""
-        if not self._是MuMu连接() or not re.fullmatch(r"(?:127\.0\.0\.1|localhost):\d+", self.设备序列号):
+        """MuMu/BlueStacks 本机网络 ADB 从设备列表消失时，仅重连保存的本机地址。"""
+        是本机BlueStacks = ADB设备信息(self.设备序列号, "device", "").是本机BlueStacks候选端口
+        if (
+            not (self._是MuMu连接() or 是本机BlueStacks)
+            or not re.fullmatch(r"(?:127\.0\.0\.1|localhost):\d+", self.设备序列号)
+        ):
             return
         startupinfo = None
         creationflags = 0
@@ -659,6 +706,88 @@ class ADB设备操作类:
                     "当前模式不会主动关闭游戏或模拟器。"
                 )
 
+    @staticmethod
+    def _解析BlueStacks属性输出(文本: str) -> bool:
+        """从 ``getprop`` 输出识别明确的 BlueStacks 特征，绝不放宽普通三星真机。"""
+        内容 = str(文本 or "")
+        for 匹配 in re.finditer(
+            r"(?mi)^\s*\[ro\.bluestacks\.[^\]]*\]\s*:\s*\[([^\]]*)\]",
+            内容,
+        ):
+            if 匹配.group(1).strip():
+                return True
+        for 匹配 in re.finditer(r"(?mi)^\s*ro\.bluestacks\.[^=\s]+\s*=\s*(\S+)", 内容):
+            if 匹配.group(1).strip():
+                return True
+        for 匹配 in re.finditer(
+            r"(?mi)^\s*\[ro\.product\.brand\]\s*:\s*\[([^\]]*)\]",
+            内容,
+        ):
+            if "bluestacks" in 匹配.group(1).lower():
+                return True
+        for 匹配 in re.finditer(r"(?mi)^\s*ro\.product\.brand\s*=\s*(\S+)", 内容):
+            if "bluestacks" in 匹配.group(1).lower():
+                return True
+        return False
+
+    @classmethod
+    def _探测BlueStacks设备(
+            cls,
+            adb路径: str,
+            序列号: str,
+            runner: Callable = subprocess.run,
+    ) -> bool:
+        """仅对本机 5555-5585 端口做只读 BlueStacks 白名单判定。"""
+        信息 = ADB设备信息(序列号, "device", "")
+        if not 信息.是本机BlueStacks候选端口:
+            return False
+        startupinfo = None
+        creationflags = 0
+        if os.name == "nt":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+        def 执行探测(参数: list[str]) -> tuple[int, str, str]:
+            命令 = cls.构造设备命令(adb路径, 序列号, 参数)
+            结果 = runner(
+                命令,
+                capture_output=True,
+                timeout=5,
+                check=False,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
+                env=cls._ADB子进程环境(),
+            )
+            stdout = 结果.stdout or b""
+            stderr = 结果.stderr or b""
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode("utf-8", errors="replace")
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode("utf-8", errors="replace")
+            return int(getattr(结果, "returncode", 1)), str(stdout), str(stderr)
+
+        try:
+            返回码, 输出, _ = 执行探测(["shell", "getprop"])
+            if 返回码 == 0 and cls._解析BlueStacks属性输出(输出):
+                return True
+        except (ADB错误, OSError, subprocess.TimeoutExpired):
+            return False
+
+        try:
+            返回码, 输出, 错误 = 执行探测(["shell", "ls", "/data/.bluestacks.prop"])
+            合并低 = f"{输出}\n{错误}".lower()
+            if (
+                返回码 == 0
+                and "/data/.bluestacks.prop" in 输出
+                and "no such file" not in 合并低
+                and "permission denied" not in 合并低
+            ):
+                return True
+        except (ADB错误, OSError, subprocess.TimeoutExpired):
+            return False
+        return False
+
     @classmethod
     def 扫描设备(
             cls,
@@ -693,7 +822,19 @@ class ADB设备操作类:
         输出 = 结果.stdout or ""
         if isinstance(输出, bytes):
             输出 = 输出.decode("utf-8", errors="replace")
-        return 解析ADB设备列表(输出)
+        设备列表 = 解析ADB设备列表(输出)
+        结果列表: list[ADB设备信息] = []
+        for 设备 in 设备列表:
+            if (
+                设备.状态 == "device"
+                and 设备.疑似实体设备
+                and 设备.是本机BlueStacks候选端口
+                and cls._探测BlueStacks设备(临时适配器.adb路径, 设备.序列号, runner=runner)
+            ):
+                结果列表.append(ADB设备信息(设备.序列号, 设备.状态, 设备.描述, 已确认模拟器=True))
+            else:
+                结果列表.append(设备)
+        return 结果列表
 
     @classmethod
     def 自动选择游戏设备(
@@ -973,6 +1114,7 @@ class ADB设备操作类:
                 新设备 = None
             if 新设备 is not None:
                 self.设备序列号 = 新设备.序列号
+                self._最近截图尺寸 = None
                 self._MuMu连接判定 = None
                 self._MuMu连接判定序列号 = ""
                 self._MuMu连接判定时间 = 0.0
@@ -1003,7 +1145,11 @@ class ADB设备操作类:
         return 当前设备
 
     def _标记目标未验证(self) -> None:
-        """使下一次重试先重新扫描设备，避免复用掉线的旧 transport。"""
+        """使下一次重试先重新扫描设备，避免复用掉线的旧 transport。
+
+        不清空 ``_最近截图尺寸``，避免 BlueStacks Air 等原生竖屏模拟器在
+        重连或命中截图缓存后退回竖屏 ``wm size`` 导致点击映射错位。
+        """
         self._目标已验证 = False
         self._屏幕尺寸 = None
         self._截图显示ID = None
@@ -1044,7 +1190,7 @@ class ADB设备操作类:
         """识别 MuMu ADB；不把普通网络/USB Android 设备当成模拟器。"""
         路径 = str(self.adb路径 or "").lower().replace("\\", "/")
         序列号 = str(self.设备序列号 or "").strip()
-        if "mumuplayer" in 路径:
+        if "mumuplayer" in 路径 or "mumuandroiddevice" in 路径:
             return True
         if 序列号.startswith(("127.0.0.1:", "localhost:")):
             try:
@@ -1056,9 +1202,11 @@ class ADB设备操作类:
 
         # MuMu Android 15 可能把网络 serial 别名成 emulator-5556；其
         # dumpsys display 仍会暴露 mumuscreen 物理显示层。只对 emulator-*
-        # 查询，并缓存结果，避免把普通设备误判为 MuMu 或拖慢截图循环。
+        # 且使用标准 adb/adb.exe 可执行文件时查询，并缓存结果，兼容 macOS/POSIX
+        # 无 .exe 后缀的 adb，同时避免测试桩或非 adb 路径误触发探测。
+        可执行名 = 路径.rsplit("/", 1)[-1]
         if (
-            not 路径.endswith("/adb.exe")
+            可执行名 not in {"adb", "adb.exe"}
             or not re.fullmatch(r"emulator-\d+", 序列号, flags=re.IGNORECASE)
         ):
             return False
@@ -2272,7 +2420,7 @@ class ADB设备操作类:
         if 图像 is None:
             raise 最后错误 or ADB错误("ADB 截图失败。")
         高, 宽 = 图像.shape[:2]
-        self._屏幕尺寸 = (宽, 高)
+        self.记录截图尺寸(宽, 高)
         from 模块.画面几何 import 记录设备尺寸
 
         记录设备尺寸(宽, 高)
@@ -2376,8 +2524,19 @@ class ADB设备操作类:
             f"可用提交额度{状态['可用提交额度'] // MB}MB"
         )
 
+    def 记录截图尺寸(self, 宽度: int, 高度: int) -> None:
+        """记录最近一次有效截图的真实宽高，供点击映射与缓存命中复用。"""
+        宽度, 高度 = int(宽度), int(高度)
+        if 宽度 > 0 and 高度 > 0:
+            self._屏幕尺寸 = (宽度, 高度)
+            self._最近截图尺寸 = (宽度, 高度)
+
     def 取屏幕尺寸(self) -> tuple[int, int]:
         if self._屏幕尺寸 is None:
+            最近尺寸 = getattr(self, "_最近截图尺寸", None)
+            if 最近尺寸:
+                self._屏幕尺寸 = 最近尺寸
+                return self._屏幕尺寸
             self._验证目标()
             try:
                 self._屏幕尺寸 = self.查询屏幕尺寸()
@@ -2388,9 +2547,24 @@ class ADB设备操作类:
                 self._屏幕尺寸 = (self.参考宽度, self.参考高度)
         return self._屏幕尺寸
 
+    def _确保输入屏幕尺寸(self) -> tuple[int, int]:
+        """点击/滑动前确保已知真实尺寸；尺寸未知时先保守截一帧拿到真实宽高。"""
+        if self._屏幕尺寸 is not None:
+            return self._屏幕尺寸
+        最近尺寸 = getattr(self, "_最近截图尺寸", None)
+        if 最近尺寸:
+            self._屏幕尺寸 = 最近尺寸
+            return self._屏幕尺寸
+        try:
+            self.获取屏幕图像cv(0, 0, 2000, 2000)
+        except ADB错误 as 异常:
+            if any(词 in str(异常) for 词 in ("主机内存保护", "安全冷却", "实体 Android 设备")):
+                raise
+        return self.取屏幕尺寸()
+
     def 参考坐标转设备坐标(self, x: int | float, y: int | float) -> tuple[int, int]:
         """把任务参考坐标映射到实际 ADB 屏幕；实际尺寸由截图自动更新。"""
-        宽度, 高度 = self.取屏幕尺寸()
+        宽度, 高度 = self._确保输入屏幕尺寸()
         设备x = round(float(x) * 宽度 / self.参考宽度)
         设备y = round(float(y) * 高度 / self.参考高度)
         return max(0, min(宽度 - 1, 设备x)), max(0, min(高度 - 1, 设备y))
@@ -2491,6 +2665,80 @@ class ADB设备操作类:
         输出 = self.执行(["shell", "getprop", 属性名], timeout=8)
         return 输出.decode("utf-8", errors="replace").strip() if isinstance(输出, bytes) else str(输出).strip()
 
+    @staticmethod
+    def _解析逻辑视口尺寸(文本: str, 逻辑显示ID: str | None = None) -> tuple[int, int] | None:
+        """解析 ``dumpsys display`` / ``dumpsys input`` 的 logicalFrame 尺寸。"""
+        内容 = str(文本 or "")
+        候选块: list[tuple[bool, str]] = []
+        for 匹配块 in re.finditer(r"DisplayViewport\{([^}]*)\}", 内容, re.S):
+            块 = 匹配块.group(1)
+            命中 = (
+                bool(re.search(rf"\bdisplayId\s*=\s*{re.escape(逻辑显示ID)}\b", 块))
+                if 逻辑显示ID is not None
+                else bool(re.search(r"\bdisplayId\s*=\s*0\b", 块))
+            )
+            候选块.append((命中, 块))
+        for 行 in 内容.splitlines():
+            if "logicalFrame" not in 行:
+                continue
+            if "Viewport" in 行 or "displayId" in 行:
+                命中 = (
+                    bool(re.search(rf"\bdisplayId\s*=\s*{re.escape(逻辑显示ID)}\b", 行))
+                    if 逻辑显示ID is not None
+                    else bool(re.search(r"\bdisplayId\s*=\s*0\b", 行))
+                )
+                候选块.append((命中, 行))
+
+        def 提取框(片段: str) -> tuple[int, int] | None:
+            for 模式 in (
+                r"\blogicalFrame=Rect\(\s*(\d+)\s*,\s*(\d+)\s*-\s*(\d+)\s*,\s*(\d+)\s*\)",
+                r"\blogicalFrame=\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]",
+            ):
+                匹配 = re.search(模式, 片段)
+                if 匹配:
+                    左, 上, 右, 下 = map(int, 匹配.groups())
+                    宽, 高 = 右 - 左, 下 - 上
+                    if 宽 > 0 and 高 > 0:
+                        return 宽, 高
+            return None
+
+        # 指定 displayId 时只接受匹配项；未指定时优先 valid!=false 且 displayId=0，再退回首个有效项。
+        def 优先排序(项: tuple[bool, str]) -> tuple[int, int]:
+            命中, 片段 = 项
+            无效 = bool(re.search(r"\bvalid\s*=\s*false\b", 片段, re.IGNORECASE))
+            return (0 if not 无效 else 1, 0 if 命中 else 1)
+
+        已排序 = sorted(候选块, key=优先排序)
+        for 命中, 片段 in 已排序:
+            if 命中:
+                尺寸 = 提取框(片段)
+                if 尺寸:
+                    return 尺寸
+        if 逻辑显示ID is None:
+            for _, 片段 in 已排序:
+                尺寸 = 提取框(片段)
+                if 尺寸:
+                    return 尺寸
+            return 提取框(内容)
+        return None
+
+    @staticmethod
+    def _解析当前旋转方向(文本: str) -> int | None:
+        """解析 ``dumpsys window`` 的旋转角度（0/1/2/3）。"""
+        内容 = str(文本 or "")
+        映射 = {
+            "0": 0, "90": 1, "180": 2, "270": 3,
+            "1": 1, "2": 2, "3": 3,
+        }
+        for 模式 in (
+            r"\bmCurrentRotation\s*=\s*(?:ROTATION_)?(\d+)\b",
+            r"\bSurfaceOrientation\s*:\s*(\d+)\b",
+        ):
+            匹配 = re.search(模式, 内容, re.IGNORECASE)
+            if 匹配:
+                return 映射.get(匹配.group(1))
+        return None
+
     def 查询屏幕尺寸(self) -> tuple[int, int] | None:
         if self._是MuMu连接():
             # MuMu organized display 的 ``wm size`` 可能只返回竖向物理
@@ -2504,24 +2752,46 @@ class ADB设备操作类:
                     输出 = self.执行(["shell", "dumpsys", "display"], timeout=8)
                     if isinstance(输出, bytes):
                         输出 = 输出.decode("utf-8", errors="replace")
-                    for 匹配块 in re.finditer(r"DisplayViewport\{([^}]*)\}", str(输出), re.S):
-                        块 = 匹配块.group(1)
-                        if not re.search(rf"\bdisplayId\s*=\s*{re.escape(逻辑显示ID)}\b", 块):
-                            continue
-                        匹配 = re.search(
-                            r"\blogicalFrame=Rect\(\s*\d+\s*,\s*\d+\s*-\s*(\d+)\s*,\s*(\d+)\s*\)",
-                            块,
-                        )
-                        if 匹配:
-                            宽, 高 = map(int, 匹配.groups())
-                            if 宽 > 0 and 高 > 0:
-                                return 宽, 高
+                    尺寸 = self._解析逻辑视口尺寸(输出, 逻辑显示ID)
+                    if 尺寸:
+                        return 尺寸
             except (ADB错误, ValueError, TypeError, re.error):
                 pass
+        else:
+            # 非 MuMu 设备（如 BlueStacks Air 原生竖屏）``wm size`` 报的是未旋转
+            # 物理尺寸 1080×1920，优先读取 dumpsys display/input 的 logicalFrame。
+            for 子命令 in (["shell", "dumpsys", "display"], ["shell", "dumpsys", "input"]):
+                try:
+                    输出 = self.执行(子命令, timeout=8)
+                    if isinstance(输出, bytes):
+                        输出 = 输出.decode("utf-8", errors="replace")
+                    尺寸 = self._解析逻辑视口尺寸(输出)
+                    if 尺寸:
+                        return 尺寸
+                except ADB错误 as 异常:
+                    if "安全冷却" in str(异常):
+                        raise
+                except (ValueError, TypeError, re.error):
+                    pass
+
         输出 = self.执行(["shell", "wm", "size"], timeout=8)
         if isinstance(输出, bytes):
             输出 = 输出.decode("utf-8", errors="replace")
-        return self.解析屏幕尺寸(输出)
+        尺寸 = self.解析屏幕尺寸(输出)
+        if 尺寸 and not self._是MuMu连接():
+            try:
+                窗口输出 = self.执行(["shell", "dumpsys", "window"], timeout=8)
+                if isinstance(窗口输出, bytes):
+                    窗口输出 = 窗口输出.decode("utf-8", errors="replace")
+                旋转 = self._解析当前旋转方向(窗口输出)
+                if 旋转 in (1, 3):
+                    return 尺寸[1], 尺寸[0]
+            except ADB错误 as 异常:
+                if "安全冷却" in str(异常):
+                    raise
+            except (ValueError, TypeError, re.error):
+                pass
+        return 尺寸
 
     def 设置屏幕尺寸(self, 宽度: int = 800, 高度: int = 600) -> None:
         self._验证目标()
@@ -2530,11 +2800,13 @@ class ADB设备操作类:
             raise ADB错误("分辨率超出安全范围：宽度 320–4096，高度 240–4096。")
         self.执行(["shell", "wm", "size", f"{宽度}x{高度}"], timeout=8)
         self._屏幕尺寸 = (宽度, 高度)
+        self._最近截图尺寸 = None
 
     def 恢复屏幕尺寸(self) -> None:
         self._验证目标()
         self.执行(["shell", "wm", "size", "reset"], timeout=8)
         self._屏幕尺寸 = None
+        self._最近截图尺寸 = None
 
     def 是否已启动(self) -> bool:
         return self.获取属性("sys.boot_completed") == "1"

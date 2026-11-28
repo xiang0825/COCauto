@@ -59,7 +59,9 @@ class 任务计划组件:
 
     # ------------------------------------------------------------ 构建
     def _构建任务卡(self) -> 卡片:
-        卡 = 卡片("任务", 边距=14)
+        卡 = 卡片("任务", 边距=12)
+        卡.布局.setContentsMargins(12, 10, 12, 10)
+        卡.布局.setSpacing(6)
         卡.setMinimumWidth(190)
         卡.setMaximumWidth(240)
         self.任务列表 = QListWidget()

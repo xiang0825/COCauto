@@ -25,6 +25,7 @@ import os
 import re
 import socket
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
@@ -312,8 +313,14 @@ def MuMu候选地址(安装目录: Path, runner=subprocess.run) -> list[候选�
 
 def 蓝叠候选地址(配置路径: Iterable[Path] | None = None) -> list[候选地址]:
     if 配置路径 is None:
-        数据目录 = Path(os.environ.get("ProgramData", r"C:\ProgramData"))
-        配置路径 = (数据目录 / "BlueStacks_nxt" / "bluestacks.conf", 数据目录 / "BlueStacks" / "bluestacks.conf")
+        if sys.platform == "darwin":
+            配置路径 = (
+                Path("/Users/Shared/Library/Application Support/BlueStacks/bluestacks.conf"),
+                Path.home() / "Library" / "Application Support" / "BlueStacks" / "bluestacks.conf",
+            )
+        else:
+            数据目录 = Path(os.environ.get("ProgramData", r"C:\ProgramData"))
+            配置路径 = (数据目录 / "BlueStacks_nxt" / "bluestacks.conf", 数据目录 / "BlueStacks" / "bluestacks.conf")
     结果 = []
     for 路径 in 配置路径:
         try:

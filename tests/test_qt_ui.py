@@ -105,16 +105,21 @@ class 主窗口测试(unittest.TestCase):
 
     def test_任务列表八项全部可见(self):
         """旧版通用设置列表把任务列表挤到只剩 3 行；现在 800×540 下 8 项都要露出来。"""
-        self.窗口.resize(800, 540)
-        self.应用.processEvents()
-        列表 = self.运行页.计划.任务列表
         from 数据库.任务数据库 import 任务计划定义列表
 
-        self.assertEqual(列表.count(), len(任务计划定义列表))
-        视口 = 列表.viewport().rect()
-        for 行 in range(列表.count()):
-            区域 = 列表.visualItemRect(列表.item(行))
-            self.assertTrue(视口.contains(区域), f"第 {行 + 1} 项被遮住：{区域} 不在 {视口}")
+        for _ in range(2):
+            self.窗口.resize(800, 540)
+            self.应用.processEvents()
+            列表 = self.运行页.计划.任务列表
+            self.assertEqual(列表.count(), len(任务计划定义列表))
+            视口 = 列表.viewport().rect()
+            for 行 in range(列表.count()):
+                区域 = 列表.visualItemRect(列表.item(行))
+                self.assertTrue(
+                    视口.contains(区域),
+                    f"[{self.窗口._配色.名称}] 第 {行 + 1} 项被遮住：{区域} 不在 {视口}",
+                )
+            self.窗口._切换主题()
 
     def test_兵种多选在高级设置里不重叠(self):
         设置窗 = self._打开高级页("adv_combat")

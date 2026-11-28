@@ -1610,35 +1610,39 @@ class 部落竞赛任务(基础任务):
         """最近一场进攻识别到的兵栏签名；还没打过仗时为空，指定兵种任务一律不接。"""
         return str(getattr(self.上下文, "本场阵容签名", "") or "")
 
+    @staticmethod
+    def _解析有效进度(规范文本值: str) -> tuple[int, int] | None:
+        匹配 = re.fullmatch(r"(\d{1,5})/(\d{1,5})", 规范文本值)
+        if not 匹配:
+            return None
+        当前, 目标 = int(匹配.group(1)), int(匹配.group(2))
+        if 目标 >= 1 and 当前 <= 目标:
+            return 当前, 目标
+        return None
+
     def _读取进度(self, 项列表: list[文字项]) -> tuple[int, int] | None:
         """卡片区里的 a/b 就是进行中任务的进度（个人积分和主页建筑工人计数都在卡片区外）。"""
         卡片区 = self.配置.get("面板", {}).get("卡片区ROI")
         候选 = []
         for 项 in (区域文字(项列表, 卡片区) if 卡片区 else []):
-            匹配 = re.fullmatch(r"(\d{1,5})/(\d{1,5})", 项.规范)
-            if not 匹配:
-                continue
-            当前, 目标 = int(匹配.group(1)), int(匹配.group(2))
-            if 目标 >= 1 and 当前 <= 目标:
+            进度 = self._解析有效进度(项.规范)
+            if 进度 is not None:
+                当前, 目标 = 进度
                 候选.append((项.中心[1], 项.中心[0], 当前, 目标))
         if not 候选:
             return None
         _, _, 当前, 目标 = min(候选)
         return 当前, 目标
 
-    def _定位进行中任务卡(self, 项列表: list[文字项]) -> tuple[int, int] | None:
-        """按进度坐标回查当前页卡片中心；任务接取后的动画期间允许稍后重读。"""
+    def _定位进行中任务卡(self, 项列表: list[文字项]) -> tuple[tuple[int, int], 文字项] | None:
+        """按有效进度坐标回查当前页卡片中心，并一并返回选中的活动进度项。"""
         卡片区 = self.配置.get("面板", {}).get("卡片区ROI")
         if not 卡片区:
             return None
-        进度项 = []
-        for 项 in 区域文字(项列表, 卡片区):
-            匹配 = re.fullmatch(r"(\d{1,5})/(\d{1,5})", 项.规范)
-            if not 匹配:
-                continue
-            当前, 目标 = int(匹配.group(1)), int(匹配.group(2))
-            if 目标 >= 1 and 当前 <= 目标:
-                进度项.append(项)
+        进度项 = [
+            项 for 项 in 区域文字(项列表, 卡片区)
+            if self._解析有效进度(项.规范) is not None
+        ]
         if not 进度项:
             return None
         活动进度 = min(进度项, key=lambda 项: (项.中心[1], 项.中心[0]))
@@ -1651,22 +1655,16 @@ class 部落竞赛任务(基础任务):
             卡心,
             key=lambda 点: abs(点[0] - 进度x) + abs(点[1] - 进度y),
         )
-        return 卡心x, 卡心y
+        return (卡心x, 卡心y), 活动进度
 
     def _读取当前任务卡文本(self, 项列表: list[文字项]) -> str | None:
         """用进度定位进行中卡；卡面无文案时只读打开该卡的详情，不猜缓存任务。"""
         卡片区 = self.配置.get("面板", {}).get("卡片区ROI")
-        卡位 = self._定位进行中任务卡(项列表)
-        if not 卡位:
+        定位 = self._定位进行中任务卡(项列表)
+        if not 定位:
             return None
+        卡位, 活动进度 = 定位
         卡心x, 卡心y = 卡位
-        进度项 = [
-            项 for 项 in 区域文字(项列表, 卡片区)
-            if re.fullmatch(r"\d{1,5}/\d{1,5}", 项.规范)
-        ]
-        if not 进度项:
-            return None
-        活动进度 = min(进度项, key=lambda 项: (项.中心[1], 项.中心[0]))
 
         # 进行中卡的弹窗可能仍开着（开始后按钮变成“放弃”）。优先从弹窗读目标，
         # 读完安全收起，避免把详情内容当成卡面文字或把它留给后续流程。
@@ -1684,7 +1682,7 @@ class 部落竞赛任务(基础任务):
         半高 = int(self.配置.get("面板", {}).get("卡片文本半高", 70))
         卡内文字 = []
         for 项 in 区域文字(项列表, 卡片区):
-            if 项 is 活动进度 or re.fullmatch(r"\d{1,5}/\d{1,5}", 项.规范):
+            if 项 is 活动进度 or self._解析有效进度(项.规范) is not None:
                 continue
             if 解析积分([项]) is not None:
                 continue
@@ -1772,6 +1770,8 @@ class 部落竞赛任务(基础任务):
             if not 卡心:
                 return ""
             置顶卡位 = 卡心[0]
+            上次非置顶卡位 = None
+            非置顶连续次数 = 0
             for 次 in range(5):
                 图像 = self._截图()
                 卡片区 = self.配置.get("面板", {}).get("卡片区ROI")
@@ -1788,15 +1788,31 @@ class 部落竞赛任务(基础任务):
                         self._日志(f"接任务后详情收起失败，不沿用任务文本：{异常}")
                         return ""
                     return 当前详情
-                当前卡位 = self._定位进行中任务卡(项列表)
+                定位 = self._定位进行中任务卡(项列表)
+                当前卡位 = 定位[0] if 定位 else None
                 if 当前卡位 != 置顶卡位:
-                    if 次 < 4:
+                    if 当前卡位 is None:
+                        上次非置顶卡位 = None
+                        非置顶连续次数 = 0
+                        if 次 < 4:
+                            self._日志("接任务后尚未定位到进行中任务卡，等待重排")
+                            self._延时(250)
+                            continue
+                        return ""
+                    if 当前卡位 == 上次非置顶卡位:
+                        非置顶连续次数 += 1
+                    else:
+                        上次非置顶卡位 = 当前卡位
+                        非置顶连续次数 = 1
+                    if 次 < 4 and 非置顶连续次数 < 2:
                         self._日志(
-                            f"接任务后进行中卡尚未稳定在第一页置顶位置（当前{当前卡位 or '未定位'}），等待重排"
+                            f"接任务后进行中卡尚未稳定在第一页置顶位置（当前{当前卡位}），等待重排"
                         )
                         self._延时(250)
                         continue
-                    return ""
+                    self._日志(
+                        f"接任务后进行中卡未置顶（当前{当前卡位}），退回按进行中进度定位读取"
+                    )
                 卡文 = self._读取当前任务卡文本(项列表)
                 if 卡文:
                     return 卡文

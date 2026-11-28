@@ -97,6 +97,17 @@ class 发现测试(unittest.TestCase):
             候选 = 探测.蓝叠候选地址([配置])
         self.assertEqual([项.地址 for 项 in 候选], ["127.0.0.1:5565"])
 
+    def test_macOS默认查找BlueStacks共享目录配置(self):
+        with tempfile.TemporaryDirectory() as 临时:
+            假家目录 = Path(临时)
+            用户配置 = 假家目录 / "Library" / "Application Support" / "BlueStacks" / "bluestacks.conf"
+            用户配置.parent.mkdir(parents=True)
+            用户配置.write_text('bst.instance.Tiramisu64.status.adb_port="5555"\n', encoding="utf-8")
+            with patch("模块.模拟器探测.sys.platform", "darwin"), \
+                    patch("模块.模拟器探测.Path.home", return_value=假家目录):
+                候选 = 探测.蓝叠候选地址()
+        self.assertIn("127.0.0.1:5555", [项.地址 for 项 in 候选])
+
     def test_没发现模拟器时尝试全部常见端口(self):
         地址 = [项.地址 for 项 in 探测.收集候选地址([])]
         for 端口 in (16384, 5555, 62001, 21503):

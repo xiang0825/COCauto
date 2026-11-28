@@ -638,23 +638,32 @@ Input Reader State:
             设备.触控(22, 33)
         self.assertEqual(len(runner.命令), 1)
 
+    @staticmethod
+    def _测试PNG字节(宽: int = 800, 高: int = 600) -> bytes:
+        图像 = np.zeros((高, 宽, 3), dtype=np.uint8)
+        编码成功, 编码 = cv2.imencode(".png", 图像)
+        assert 编码成功
+        return 编码.tobytes()
+
     def test_触控命令固定绑定选中序列号(self):
-        runner = 假Runner(结果(在线模拟器), 结果(b"Physical size: 800x600"), 结果())
+        runner = 假Runner(结果(在线模拟器), 结果(self._测试PNG字节(800, 600)), 结果())
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
-        self.assertTrue(设备.触控(12, 34))
+        with self._内存充足():
+            self.assertTrue(设备.触控(12, 34))
         self.assertEqual(runner.命令[-1][1:], ["-s", "emulator-5554", "shell", "input", "tap", "12", "34"])
 
     def test_ADB传输断线会重连后重试(self):
         runner = 假Runner(
             结果(在线模拟器),
-            结果(b"Physical size: 800x600"),
+            结果(self._测试PNG字节(800, 600)),
             结果(code=1, 错误=b"error: protocol fault (couldn't read status): connection reset"),
             结果(),
             结果(在线模拟器),
             结果(),
         )
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
-        self.assertTrue(设备.触控(12, 34))
+        with self._内存充足():
+            self.assertTrue(设备.触控(12, 34))
         self.assertTrue(any(命令[1:] == ["reconnect", "offline"] for 命令 in runner.命令))
         self.assertEqual(
             runner.命令[-1][1:],
@@ -747,20 +756,22 @@ Input Reader State:
     def test_实际分辨率自动映射参考坐标(self):
         runner = 假Runner(
             结果(在线模拟器),
-            结果(b"Physical size: 1280x720"),
+            结果(self._测试PNG字节(1280, 720)),
             结果(),
         )
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
-        self.assertTrue(设备.触控(12, 34))
+        with self._内存充足():
+            self.assertTrue(设备.触控(12, 34))
         self.assertEqual(
             runner.命令[-1][1:],
             ["-s", "emulator-5554", "shell", "input", "tap", "19", "41"],
         )
 
     def test_ADB连续触控复用一次shell会话(self):
-        runner = 假Runner(结果(在线模拟器), 结果(b"Physical size: 800x600"), 结果())
+        runner = 假Runner(结果(在线模拟器), 结果(self._测试PNG字节(800, 600)), 结果())
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
-        self.assertTrue(设备.连续触控([(12, 34), (12, 34)], 间隔毫秒=8))
+        with self._内存充足():
+            self.assertTrue(设备.连续触控([(12, 34), (12, 34)], 间隔毫秒=8))
         self.assertEqual(
             runner.命令[-1][1:],
              ["-s", "emulator-5554", "shell", "sh", "-c",
@@ -768,9 +779,10 @@ Input Reader State:
         )
 
     def test_ADB长按使用同点swipe(self):
-        runner = 假Runner(结果(在线模拟器), 结果(b"Physical size: 800x600"), 结果())
+        runner = 假Runner(结果(在线模拟器), 结果(self._测试PNG字节(800, 600)), 结果())
         设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
-        self.assertTrue(设备.长按触控(12, 34, 220))
+        with self._内存充足():
+            self.assertTrue(设备.长按触控(12, 34, 220))
         self.assertEqual(
             runner.命令[-1][1:],
             ["-s", "emulator-5554", "shell", "input", "swipe",
@@ -1264,6 +1276,221 @@ FocusedWindows:
         self.assertEqual(键盘控制器._转换ADB按键码("esc"), 4)
         self.assertEqual(键盘控制器._转换ADB按键码("f5"), 135)
         self.assertEqual(键盘控制器._转换ADB按键码("a"), 29)
+
+    def test_wm_size竖屏但截图横屏时点击按截图尺寸映射(self):
+        """BlueStacks Air 原生竖屏 wm size=1080x1920，但截图为横屏 1920x1080。"""
+        class 竖屏WMRunner:
+            def __init__(自身, png字节):
+                自身.png字节 = png字节
+                自身.命令 = []
+
+            def __call__(自身, 命令, **_参数):
+                自身.命令.append(命令)
+                if 命令[1:] == ["devices", "-l"]:
+                    return 结果(在线模拟器)
+                if "screencap" in 命令:
+                    return 结果(自身.png字节)
+                if 命令[-2:] == ["wm", "size"]:
+                    return 结果(b"Physical size: 1080x1920\n")
+                return 结果()
+
+        runner = 竖屏WMRunner(self._测试PNG字节(1920, 1080))
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        with self._内存充足():
+            设备.获取屏幕图像cv(0, 0, 2000, 2000)
+            self.assertEqual(设备.取屏幕尺寸(), (1920, 1080))
+            self.assertTrue(设备.触控(400, 300))
+        self.assertEqual(
+            runner.命令[-1][1:],
+            ["-s", "emulator-5554", "shell", "input", "tap", "960", "540"],
+        )
+        self.assertFalse(any(命令[-2:] == ["wm", "size"] for 命令 in runner.命令))
+
+    def test_标记目标未验证后缓存命中与点击仍复用最近截图尺寸(self):
+        class 缓存点击Runner:
+            def __init__(自身, png字节):
+                自身.png字节 = png字节
+                自身.命令 = []
+
+            def __call__(自身, 命令, **_参数):
+                自身.命令.append(命令)
+                if 命令[1:] == ["devices", "-l"]:
+                    return 结果(在线模拟器)
+                if "screencap" in 命令:
+                    return 结果(自身.png字节)
+                if 命令[-2:] == ["wm", "size"]:
+                    return 结果(b"Physical size: 1080x1920\n")
+                return 结果()
+
+        runner = 缓存点击Runner(self._测试PNG字节(1920, 1080))
+        设备 = ADB设备操作类(ADB, "emulator-5554", runner=runner)
+        屏幕 = ADB屏幕(设备)
+        with self._内存充足():
+            屏幕.获取屏幕图像cv(0, 0, 800, 600)
+            # 模拟断连重连/确认在线清空 _屏幕尺寸，但 _最近截图尺寸 仍保留。
+            设备._标记目标未验证()
+            self.assertIsNone(设备._屏幕尺寸)
+            self.assertEqual(设备._最近截图尺寸, (1920, 1080))
+            # 命中 ADB屏幕 截图缓存，不会重新调用设备 screencap，同时应同步尺寸。
+            屏幕.获取屏幕图像cv(0, 0, 800, 600)
+            self.assertEqual(设备._屏幕尺寸, (1920, 1080))
+            # 再次标记未验证后直接点击，不经过截图缓存也应优先用 _最近截图尺寸。
+            设备._标记目标未验证()
+            self.assertTrue(设备.触控(400, 300))
+        self.assertEqual(
+            runner.命令[-1][1:],
+            ["-s", "emulator-5554", "shell", "input", "tap", "960", "540"],
+        )
+        self.assertFalse(any(命令[-2:] == ["wm", "size"] for 命令 in runner.命令))
+
+    def test_非MuMu查询屏幕尺寸解析logicalFrame及旋转交换宽高(self):
+        # 1) dumpsys display logicalFrame=Rect(...)
+        runner1 = 假Runner(
+            结果(b"DisplayViewport{type=INTERNAL, displayId=0, logicalFrame=Rect(0, 0 - 1920, 1080)}"),
+        )
+        设备1 = ADB设备操作类(ADB, "emulator-5554", runner=runner1)
+        self.assertEqual(设备1.查询屏幕尺寸(), (1920, 1080))
+
+        # 2) dumpsys input logicalFrame=[...]
+        runner2 = 假Runner(
+            结果(b"no viewport here"),
+            结果(b"Viewport INTERNAL: displayId=0, orientation=1, logicalFrame=[0, 0, 1920, 1080]"),
+        )
+        设备2 = ADB设备操作类(ADB, "emulator-5554", runner=runner2)
+        self.assertEqual(设备2.查询屏幕尺寸(), (1920, 1080))
+
+        # 3) wm size=1080x1920 + dumpsys window rotation=1/3 交换宽高；rotation=0 保持原值
+        for 旋转文本, 期望尺寸 in (
+            (b"mCurrentRotation=ROTATION_90\n", (1920, 1080)),
+            (b"mCurrentRotation=3\n", (1920, 1080)),
+            (b"mCurrentRotation=ROTATION_0\n", (1080, 1920)),
+        ):
+            with self.subTest(旋转文本=旋转文本):
+                runner3 = 假Runner(
+                    结果(b""),
+                    结果(b""),
+                    结果(b"Physical size: 1080x1920\n"),
+                    结果(旋转文本),
+                )
+                设备3 = ADB设备操作类(ADB, "emulator-5554", runner=runner3)
+                self.assertEqual(设备3.查询屏幕尺寸(), 期望尺寸)
+
+    def test_尺寸未知时点击和滑动前保守先截一帧拿到真实尺寸(self):
+        png = self._测试PNG字节(1920, 1080)
+        # 点击场景
+        runner_tap = 假Runner(结果(在线模拟器), 结果(png), 结果())
+        设备1 = ADB设备操作类(ADB, "emulator-5554", runner=runner_tap)
+        self.assertIsNone(设备1._屏幕尺寸)
+        self.assertIsNone(设备1._最近截图尺寸)
+        with self._内存充足():
+            self.assertTrue(设备1.触控(400, 300))
+        self.assertEqual(runner_tap.命令[1][1:], ["-s", "emulator-5554", "exec-out", "screencap"])
+        self.assertEqual(runner_tap.命令[2][1:], ["-s", "emulator-5554", "shell", "input", "tap", "960", "540"])
+
+        # 滑动场景
+        runner_swipe = 假Runner(结果(在线模拟器), 结果(png), 结果())
+        设备2 = ADB设备操作类(ADB, "emulator-5554", runner=runner_swipe)
+        with self._内存充足():
+            self.assertTrue(设备2.滑动((200, 300), (600, 300), 300))
+        self.assertEqual(runner_swipe.命令[1][1:], ["-s", "emulator-5554", "exec-out", "screencap"])
+        self.assertEqual(
+            runner_swipe.命令[2][1:],
+            ["-s", "emulator-5554", "shell", "input", "swipe", "480", "540", "1440", "540", "300"],
+        )
+
+    def test_BlueStacks本机端口伪装三星通过特征白名单放行(self):
+        # 方式1：getprop 含 ro.bluestacks.*
+        bs列表 = b"List of devices attached\n127.0.0.1:5555 device product:dm3q model:SM_S908E device:dm3q\n"
+        runner1 = 假Runner(
+            结果(bs列表),
+            结果(b"[ro.product.brand]: [samsung]\n[ro.bluestacks.version]: [5.21.100]\n"),
+        )
+        设备1 = ADB设备操作类(ADB, "127.0.0.1:5555", runner=runner1)
+        在线1 = 设备1.确认在线()
+        self.assertEqual(在线1.序列号, "127.0.0.1:5555")
+        self.assertFalse(在线1.疑似实体设备)
+
+        # 方式2：/data/.bluestacks.prop 存在
+        bs列表2 = b"List of devices attached\nlocalhost:5555 device product:dm3q model:SM_S908E device:dm3q\n"
+        runner2 = 假Runner(
+            结果(bs列表2),
+            结果(b"[ro.product.brand]: [samsung]\n"),
+            结果(b"/data/.bluestacks.prop\n"),
+        )
+        设备2 = ADB设备操作类(ADB, "localhost:5555", runner=runner2)
+        在线2 = 设备2.确认在线()
+        self.assertEqual(在线2.序列号, "localhost:5555")
+        self.assertFalse(在线2.疑似实体设备)
+
+    def test_三星真机USB与无BlueStacks特征端口均仍被拦截(self):
+        # USB 真机：不执行 getprop 探测，直接拦截
+        runner_usb = 假Runner(
+            结果(b"List of devices attached\nR58M9999999 device product:dm3q model:SM_S908E\n")
+        )
+        设备_usb = ADB设备操作类(ADB, "R58M9999999", runner=runner_usb)
+        with self.assertRaisesRegex(ADB错误, "实体 Android 设备"):
+            设备_usb.确认在线()
+        self.assertEqual(len(runner_usb.命令), 1)
+
+        # 局域网真机：不在 127.0.0.1/localhost，直接拦截
+        runner_lan = 假Runner(
+            结果(b"List of devices attached\n192.168.1.88:5555 device product:dm3q model:SM_S908E\n")
+        )
+        设备_lan = ADB设备操作类(ADB, "192.168.1.88:5555", runner=runner_lan)
+        with self.assertRaisesRegex(ADB错误, "实体 Android 设备"):
+            设备_lan.确认在线()
+        self.assertEqual(len(runner_lan.命令), 1)
+
+        # 本机 5555 端口转发但无 BlueStacks 特征的真机：探测失败后仍被拦截
+        runner_fwd = 假Runner(
+            结果(b"List of devices attached\n127.0.0.1:5555 device product:dm3q model:SM_S908E\n"),
+            结果(b"[ro.product.brand]: [samsung]\n[ro.product.model]: [SM-S908E]\n"),
+            结果(code=1, 错误=b"ls: /data/.bluestacks.prop: No such file or directory\n"),
+        )
+        设备_fwd = ADB设备操作类(ADB, "127.0.0.1:5555", runner=runner_fwd)
+        with self.assertRaisesRegex(ADB错误, "实体 Android 设备"):
+            设备_fwd.确认在线()
+
+    def test_macOS候选ADB路径包含BlueStacksAir和MuMuMac版(self):
+        with patch("模块.ADB设备操作类.sys.platform", "darwin"):
+            候选 = ADB设备操作类._候选ADB路径()
+        路径集合 = {str(项) for 项 in 候选}
+        self.assertIn("/Applications/BlueStacks.app/Contents/MacOS/hd-adb", 路径集合)
+        self.assertIn("/Applications/MuMuPlayer.app/Contents/MacOS/tools/adb", 路径集合)
+        self.assertIn("/Applications/MuMuPlayerPro.app/Contents/MacOS/tools/adb", 路径集合)
+
+    def test_POSIX无exe后缀adb路径下emulator别名可识别为MuMu(self):
+        with tempfile.TemporaryDirectory() as 临时目录:
+            假adb = Path(临时目录) / "adb"
+            假adb.write_text("#!/bin/sh\n", encoding="utf-8")
+            runner = 假Runner(结果(
+                b"DisplayDeviceInfo{mumuscreen001: uniqueId=local:4619827767814508545}"
+            ))
+            设备 = ADB设备操作类(str(假adb), "emulator-5556", runner=runner, 自动检测路径=False)
+            self.assertTrue(设备._是MuMu连接())
+            self.assertEqual(
+                runner.命令[0][1:],
+                ["-s", "emulator-5556", "shell", "dumpsys", "display"],
+            )
+
+    def test_BlueStacks本机端口断线后支持重连且局域网地址不自动重连(self):
+        runner_bs = 假Runner(结果(b"connected to 127.0.0.1:5555"))
+        设备_bs = ADB设备操作类(ADB, "127.0.0.1:5555", runner=runner_bs)
+        设备_bs._连接已保存网络设备()
+        self.assertEqual(len(runner_bs.命令), 1)
+        self.assertEqual(runner_bs.命令[0][1:], ["connect", "127.0.0.1:5555"])
+
+        runner_lan = 假Runner()
+        设备_lan = ADB设备操作类(ADB, "192.168.1.5:5555", runner=runner_lan)
+        设备_lan._连接已保存网络设备()
+        self.assertEqual(runner_lan.命令, [])
+
+    def test_解析逻辑视口优先跳过valid为false的旧视口(self):
+        输出 = (
+            "DisplayViewport{type=INTERNAL, valid=false, displayId=0, logicalFrame=Rect(0, 0 - 1080, 1920)}\n"
+            "DisplayViewport{type=INTERNAL, valid=true, displayId=0, logicalFrame=Rect(0, 0 - 1920, 1080)}\n"
+        )
+        self.assertEqual(ADB设备操作类._解析逻辑视口尺寸(输出), (1920, 1080))
 
 
 if __name__ == "__main__":

@@ -123,6 +123,9 @@ class ADB屏幕:
                     except Exception:
                         pass
             设备高度, 设备宽度 = 原图.shape[:2]
+            记录尺寸 = getattr(self.设备, "记录截图尺寸", None)
+            if callable(记录尺寸):
+                记录尺寸(设备宽度, 设备高度)
             from 模块.画面几何 import 记录设备尺寸
 
             记录设备尺寸(设备宽度, 设备高度)
