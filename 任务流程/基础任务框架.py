@@ -3562,6 +3562,43 @@ class 任务上下文:
                     )
                     self._战斗奖励弹窗已记录 = True
                 return True
+            if 结果.页面 == "战斗过渡":
+                # 奖励选择候选挂起状态必须保留原有跨帧确认语义，不能跳过。
+                依据列表 = tuple(getattr(结果, "依据", ()) or ())
+                是否奖励挂起 = any("奖励选择候选" in str(项) for 项 in 依据列表)
+                if not 是否奖励挂起:
+                    复核结果 = None
+                    try:
+                        延时函数 = getattr(self, "脚本延时", None)
+                        for _ in range(2):
+                            if callable(延时函数):
+                                延时函数(180)
+                            self._点击识别截图 = None
+                            self._点击识别截图时间 = 0.0
+                            复核结果 = self.识别点击画面(强制=True)
+                            复核页面 = str(getattr(复核结果, "页面", "") or "") if 复核结果 is not None else ""
+                            if 复核页面 != "战斗过渡":
+                                break
+                    except Exception:
+                        复核结果 = None
+                    if 复核结果 is not None and 复核结果.页面 == "战斗中":
+                        self._战斗过渡已阻止日志 = False
+                        self.置脚本状态(
+                            "战斗过渡单帧抖动，跨帧复核仍在战斗中，继续下兵"
+                        )
+                        return False
+                    if 复核结果 is not None and 复核结果.页面 == "断线弹窗":
+                        self.页面恢复失败 = True
+                        self.置脚本状态(
+                            "战斗中检测到 CoC 连接中断弹窗，停止后续输入并保留当前画面"
+                        )
+                        try:
+                            self.停止事件.set()
+                        except Exception:
+                            pass
+                        return True
+                    if 复核结果 is not None:
+                        结果 = 复核结果
             if 结果.页面 != "战斗中":
                 if not getattr(self, "_战斗过渡已阻止日志", False):
                     self.置脚本状态(
@@ -4097,6 +4134,32 @@ class 任务上下文:
             防休眠.保持唤醒()
         return 已暂停
 
+    def 保活心跳(self, 说明: str = "", 超时秒: float = 60.0) -> bool:
+        """在合法长循环的每次迭代中续期心跳，避免无刷屏日志导致误判无心跳。
+
+        只有循环本身仍在推进迭代时才会调用；若线程在截图、OCR、ADB 或锁中
+        真正卡死，将停止续期，监控中心仍会按超时阈值触发心跳超时。
+        """
+        停止事件 = getattr(self, "停止事件", None)
+        if 停止事件 is not None:
+            try:
+                if 停止事件.is_set():
+                    return False
+            except Exception:
+                return False
+        续期回调 = getattr(self, "续期心跳", None)
+        if not callable(续期回调):
+            return False
+        try:
+            超时秒数 = max(10.0, float(超时秒 or 60.0))
+        except (TypeError, ValueError):
+            超时秒数 = 60.0
+        try:
+            续期回调(超时秒数, str(说明 or "").strip())
+        except TypeError:
+            续期回调(超时秒数)
+        return True
+
     def _续期长时等待心跳(self, 剩余秒数: float) -> bool:
         """在合法长时等待循环内定期续期心跳，避免监控中心误判无心跳。"""
         说明 = str(getattr(self, "_长时等待说明", "") or "长时等待中").strip()
@@ -4203,9 +4266,17 @@ class 任务上下文:
                 self._续期长时等待心跳(max(0.0, 截止时间 - 当前单调时间))
                 上次心跳时间 = 当前单调时间
 
+            # 拖动操作中（左键处于按下态）禁止插入全屏截图/OCR 弹窗检查：
+            # 一方面无法在手势中途点击弹窗，另一方面 16ms 拖动手势每步都被
+            # ~2.5s 的截图+OCR 打断会把单次拖动拉长到 60+ 秒并触发心跳超时。
+            拖动中 = getattr(getattr(self, "鼠标", None), "_按下起点", None) is not None
+
             # 升级完成弹窗只做低频、双帧确认，不参与战斗输入路径。这样
             # 可在主世界等待期间自动处理确认，同时不会给下兵循环增加 OCR。
-            if 当前单调时间 - float(getattr(self, "_升级完成弹窗调度时间", 0.0)) >= 0.5:
+            if (
+                not 拖动中
+                and 当前单调时间 - float(getattr(self, "_升级完成弹窗调度时间", 0.0)) >= 0.5
+            ):
                 self._升级完成弹窗调度时间 = 当前单调时间
                 try:
                     self.自动确认升级完成弹窗()
@@ -4232,7 +4303,8 @@ class 任务上下文:
                 getattr(self, "_最近点击页面结果", None), "页面", ""
             )
             if (
-                not getattr(self, "_战斗中", False)
+                not 拖动中
+                and not getattr(self, "_战斗中", False)
                 and not self._部落竞赛占用画面()
                 # 和升级完成弹窗检查一样：已识别为活动列表/竞赛面板时
                 # 肯定不是主页中央提示，不做整屏复核/OCR。
@@ -4278,11 +4350,18 @@ class 任务上下文:
                     if 当前单调时间 - 上次错误 >= 5.0:
                         self.置脚本状态(f"中央能力/教程提示处理暂时失败：{异常}")
                         self._中央提示调度错误时间 = 当前单调时间
+                finally:
+                    # 以结束时刻更新下次检查基准，避免 OCR 耗时超过间隔时
+                    # 在连续短延时中每步背靠背触发全屏截图与 OCR。
+                    self._中央提示调度时间 = time.monotonic()
 
             # 回营后可能先显示覆盖主页的夜世界星级奖励确认框。低频
             # 视觉检查只在战斗结束链路仍未清理时运行，避免长期待机时
             # 每个机器人持续做全屏 OCR/模板操作。
-            if 当前单调时间 - float(getattr(self, "_星级奖励调度时间", 0.0)) >= 0.75:
+            if (
+                not 拖动中
+                and 当前单调时间 - float(getattr(self, "_星级奖励调度时间", 0.0)) >= 0.75
+            ):
                 self._星级奖励调度时间 = 当前单调时间
                 if (
                     not getattr(self, "_战斗中", False)

@@ -952,6 +952,9 @@ class 搜索目标敌人任务(基础任务):
         开始时间 = time.time()
 
         while time.time() - 开始时间 < 超时时间:
+            保活 = getattr(上下文, "保活心跳", None)
+            if callable(保活):
+                保活("等待敌方搜索页面")
             # 获取按钮区域图像
             屏幕图像 = 上下文.op.获取屏幕图像cv(*按钮区域)
 
@@ -1055,7 +1058,10 @@ class 搜索目标敌人任务(基础任务):
                 样本列表 = [(金币, 圣水, 黑油)]
                 op = getattr(上下文, "op", None)
                 可重新截图 = op is not None and callable(getattr(op, "获取屏幕图像cv", None))
-                for _ in range(int(self.资源异常复读最大次数)):
+                for 复读序号 in range(int(self.资源异常复读最大次数)):
+                    保活 = getattr(上下文, "保活心跳", None)
+                    if callable(保活):
+                        保活(f"敌方资源OCR异常复读({复读序号 + 1}/{int(self.资源异常复读最大次数)})")
                     if not 可重新截图:
                         break
                     延时函数 = getattr(上下文, "脚本延时", None)

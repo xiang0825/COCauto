@@ -116,6 +116,7 @@ class 下兵(夜世界基础任务):
             技能次数=0
             while self.尝试点击放兵种技能():
                 技能次数 += 1
+                self._保活心跳(f"夜世界释放兵种技能({技能次数})")
                 self.上下文.脚本延时(random.randint(20, 60))
                 self.上下文.置脚本状态("放兵种技能")
                 if 技能次数>=40:
@@ -128,21 +129,31 @@ class 下兵(夜世界基础任务):
             self.异常处理(e)
             return False
 
-    def _等待真实战斗画面(self) -> bool:
+    def _保活心跳(self, 说明: str) -> None:
+        保活 = getattr(self.上下文, "保活心跳", None)
+        if callable(保活):
+            保活(说明)
+
+    def _等待真实战斗画面(self, 超时秒: float = 20.0, 静默: bool = False) -> bool:
         """等待战斗过渡结束，避免把过渡页误当成可下兵画面。"""
         识别 = getattr(self.上下文, "识别点击画面", None)
         if not callable(识别):
             # 旧测试替身没有页面识别接口；真实运行时由基础上下文提供。
             return True
-        截止时间 = time.monotonic() + 20
+        截止时间 = time.monotonic() + float(超时秒)
         收起次数 = 0
         while time.monotonic() < 截止时间:
             if getattr(self.上下文, "停止事件", None) is not None and self.上下文.停止事件.is_set():
                 return False
-            结果 = 识别()
+            self._保活心跳("等待夜世界战斗画面确认")
+            try:
+                结果 = 识别(强制=True)
+            except TypeError:
+                结果 = 识别()
             页面 = str(getattr(结果, "页面", "") or "") if 结果 is not None else ""
             if 页面 == "战斗中":
-                self.上下文.置脚本状态("夜世界战斗过渡完成，允许开始下兵")
+                if not 静默:
+                    self.上下文.置脚本状态("夜世界战斗过渡完成，允许开始下兵")
                 return True
             if 页面 == "更换部队弹窗":
                 # 弹层遮住“结束战斗”按钮，页面永远等不到“战斗中”；
@@ -155,8 +166,61 @@ class 下兵(夜世界基础任务):
                     return False
                 continue
             if 页面 in {"断线弹窗", "战斗结算", "系统维护"}:
+                if 页面 == "战斗结算":
+                    self._战斗结算已确认 = True
                 return False
             self.上下文.脚本延时(250)
+        return False
+
+    def _最近页面可短暂重试(self) -> bool:
+        """仅在点击被单帧/短暂战斗过渡抖动拒绝时允许有限等待后重试。"""
+        最近 = getattr(self.上下文, "_最近点击页面结果", None)
+        if 最近 is None:
+            return False
+        页面 = str(getattr(最近, "页面", "") or "")
+        if 页面 == "战斗中":
+            return True
+        if 页面 != "战斗过渡":
+            return False
+        依据 = tuple(getattr(最近, "依据", ()) or ())
+        if any("奖励选择候选" in str(项) for 项 in 依据):
+            return False
+        return True
+
+    def _点击并在短暂过渡后重试(
+        self,
+        x: int,
+        y: int,
+        延时: int = 80,
+        *,
+        是否精确点击: bool = True,
+        剩余过渡重试: list[int],
+    ) -> bool:
+        """执行战斗点击；遇到偶发战斗过渡抖动时等待复核战斗页后再重试。"""
+        if self.上下文.点击(x, y, 延时, 是否精确点击=是否精确点击) is not False:
+            return True
+        while 剩余过渡重试[0] > 0:
+            if getattr(self.上下文, "停止事件", None) is not None and self.上下文.停止事件.is_set():
+                return False
+            if self._当前已是结算页():
+                self._战斗结算已确认 = True
+                return False
+            if self._当前是更换部队弹窗():
+                if self._收起更换部队弹窗():
+                    if self.上下文.点击(x, y, 延时, 是否精确点击=是否精确点击) is not False:
+                        return True
+                return False
+            if not self._最近页面可短暂重试():
+                return False
+            剩余过渡重试[0] -= 1
+            self.上下文.置脚本状态(
+                f"夜世界下兵遇短暂战斗过渡抖动，复核战斗画面后重试（{x},{y}）"
+            )
+            self.上下文.脚本延时(250)
+            if not self._等待真实战斗画面(超时秒=2.5, 静默=True):
+                return False
+            if self.上下文.点击(x, y, 延时, 是否精确点击=是否精确点击) is not False:
+                return True
         return False
 
     def 执行下兵操作(self) -> bool:
@@ -165,6 +229,7 @@ class 下兵(夜世界基础任务):
         # 固定少量安全槽位和边缘点，点击是否被战斗护栏接受作为反馈。
         总成功点击 = 0
         有效槽位 = 0
+        剩余过渡重试 = [6]
         槽位列表 = self.兵种槽位
         if getattr(self, "第二场", False):
             可用兵卡 = self._第二场可用兵卡()
@@ -181,13 +246,16 @@ class 下兵(夜世界基础任务):
         for 槽位, (槽位x, 槽位y) in enumerate(槽位列表, start=1):
             if getattr(self.上下文, "停止事件", None) is not None and self.上下文.停止事件.is_set():
                 return False
-            选中 = self.上下文.点击(槽位x, 槽位y, 80, 是否精确点击=True)
-            if 选中 is False and self._当前是更换部队弹窗():
+            self._保活心跳(f"夜世界下兵第{槽位}格")
+            选中 = self._点击并在短暂过渡后重试(
+                槽位x, 槽位y, 80, 是否精确点击=True, 剩余过渡重试=剩余过渡重试
+            )
+            if not 选中 and not self._战斗结算已确认 and self._当前是更换部队弹窗():
                 # 换兵弹层挡住了兵栏/战场：只收起一次再重试本槽。
                 if self._收起更换部队弹窗():
-                    选中 = self.上下文.点击(槽位x, 槽位y, 80, 是否精确点击=True)
-            if 选中 is False:
-                if self._当前已是结算页():
+                    选中 = self.上下文.点击(槽位x, 槽位y, 80, 是否精确点击=True) is not False
+            if not 选中:
+                if self._战斗结算已确认 or self._当前已是结算页():
                     self._战斗结算已确认 = True
                     self.上下文.置脚本状态(
                         "选择下一兵槽时已确认战斗结算，停止兵槽循环"
@@ -198,9 +266,12 @@ class 下兵(夜世界基础任务):
             for 重复次数 in range(12):
                 if getattr(self.上下文, "停止事件", None) is not None and self.上下文.停止事件.is_set():
                     return False
+                self._保活心跳(f"夜世界下兵第{槽位}格({重复次数 + 1}/12)")
                 点位 = self.可下兵点[重复次数 % len(self.可下兵点)]
-                if self.上下文.点击(*点位, 80, 是否精确点击=True) is False:
-                    if self._当前已是结算页():
+                if not self._点击并在短暂过渡后重试(
+                    *点位, 80, 是否精确点击=True, 剩余过渡重试=剩余过渡重试
+                ):
+                    if self._战斗结算已确认 or self._当前已是结算页():
                         self._战斗结算已确认 = True
                         self.上下文.置脚本状态(
                             "下兵点输入时已确认战斗结算，停止本槽及后续兵槽"

@@ -22,6 +22,9 @@ class 等待进入战斗(夜世界基础任务):
             self.上下文._夜世界首兵槽未选中 = False
 
             while time.time() - 开始时间 < 超时时间:
+                保活 = getattr(self.上下文, "保活心跳", None)
+                if callable(保活):
+                    保活("等待进入夜世界战斗")
                 页面结果, 有页面识别 = self._读取页面状态()
                 页面 = str(getattr(页面结果, "页面", "") or "")
 
