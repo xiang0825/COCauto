@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from 模块.ADB设备操作类 import ADB设备操作类
@@ -31,16 +33,20 @@ class MuMu截图显示回退测试(unittest.TestCase):
         )
 
     def test_截图流程可使用游戏的FocusedApplications显示层(self):
-        设备 = ADB设备操作类(
-            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
-            "127.0.0.1:16416",
-        )
-        设备.设置目标包名(游戏包名)
-        with patch.object(设备, "_MuMu显示服务仍缺失", return_value=False), \
-                patch.object(设备, "_获取MuMu输入显示ID", return_value=None), \
-                patch.object(设备, "_获取MuMu窗口状态", return_value=输入状态), \
-                patch.object(设备, "执行", return_value=显示状态):
-            self.assertEqual(设备._获取MuMu截图显示ID(), "4619827767814508545")
+        with tempfile.TemporaryDirectory() as 临时目录:
+            假MuMuADB = Path(临时目录) / "Netease" / "MuMuPlayer" / "nx_main" / "adb.exe"
+            假MuMuADB.parent.mkdir(parents=True, exist_ok=True)
+            假MuMuADB.write_text("#!/bin/sh\n", encoding="utf-8")
+            设备 = ADB设备操作类(
+                str(假MuMuADB),
+                "127.0.0.1:16416",
+            )
+            设备.设置目标包名(游戏包名)
+            with patch.object(设备, "_MuMu显示服务仍缺失", return_value=False), \
+                    patch.object(设备, "_获取MuMu输入显示ID", return_value=None), \
+                    patch.object(设备, "_获取MuMu窗口状态", return_value=输入状态), \
+                    patch.object(设备, "执行", return_value=显示状态):
+                self.assertEqual(设备._获取MuMu截图显示ID(), "4619827767814508545")
 
 
 if __name__ == "__main__":

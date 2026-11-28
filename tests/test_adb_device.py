@@ -50,9 +50,21 @@ def 结果(输出=b"", code=0, 错误=b""):
 
 class ADB设备测试(unittest.TestCase):
     def setUp(self):
-        # ADB 服务冷却是进程级保护；测试之间必须清理时间戳，避免前一个
-        # 测试的模拟重置影响后续测试的命令序列断言。
+        # ADB 服务冷却与 BlueStacks 探测缓存是进程级保护；测试之间必须清理，
+        # 避免前一个测试的状态影响后续测试的命令序列断言。
         ADB设备操作类._全局最近ADB服务重置时间 = 0.0
+        ADB设备操作类.清除BlueStacks探测缓存()
+
+    def _创建假ADB文件(self, *相对路径段: str) -> str:
+        临时目录 = tempfile.TemporaryDirectory()
+        self.addCleanup(临时目录.cleanup)
+        假adb = Path(临时目录.name).joinpath(*相对路径段)
+        假adb.parent.mkdir(parents=True, exist_ok=True)
+        假adb.write_text("#!/bin/sh\n", encoding="utf-8")
+        return str(假adb)
+
+    def _创建假MuMuADB(self) -> str:
+        return self._创建假ADB文件("Netease", "MuMuPlayer", "nx_main", "adb.exe")
 
     def test_单文件模式数据库放在EXE旁而非临时解包目录(self):
         with tempfile.TemporaryDirectory() as 临时目录:
@@ -308,7 +320,7 @@ class ADB设备测试(unittest.TestCase):
         runner = 假Runner(结果(
             b"DisplayDeviceInfo{mumuscreen001: uniqueId=local:4619827767814508545}"
         ))
-        设备 = ADB设备操作类(r"C:\adb\adb.exe", "emulator-5556", runner=runner)
+        设备 = ADB设备操作类(self._创建假ADB文件("adb", "adb.exe"), "emulator-5556", runner=runner)
         self.assertTrue(设备._是MuMu连接())
         self.assertEqual(
             runner.命令[0][1:],
@@ -350,7 +362,7 @@ class ADB设备测试(unittest.TestCase):
 
     def test_MuMu截图使用当前虚拟显示(self):
         设备 = ADB设备操作类(
-            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            self._创建假MuMuADB(),
             "127.0.0.1:16416",
         )
         设备.设置目标包名("com.supercell.clashofclans")
@@ -365,7 +377,7 @@ class ADB设备测试(unittest.TestCase):
 
     def test_MuMu多显示优先选择游戏所在显示而不是启动器(self):
         设备 = ADB设备操作类(
-            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            self._创建假MuMuADB(),
             "127.0.0.1:16416",
         )
         设备.设置目标包名("com.supercell.clashofclans")
@@ -385,7 +397,7 @@ mViewports=[DisplayViewport{type=INTERNAL, valid=true, displayId=0, uniqueId='lo
 
     def test_MuMu显示查询短暂空响应会有界重试(self):
         设备 = ADB设备操作类(
-            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            self._创建假MuMuADB(),
             "127.0.0.1:16416",
         )
         设备.设置目标包名("com.supercell.clashofclans")
@@ -402,7 +414,7 @@ mViewports=[DisplayViewport{type=EXTERNAL, valid=true, displayId=6, uniqueId='lo
 
     def test_MuMu窗口焦点短暂丢失复用最近逻辑显示层(self):
         设备 = ADB设备操作类(
-            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            self._创建假MuMuADB(),
             "127.0.0.1:16416",
         )
         设备.设置目标包名("com.supercell.clashofclans")
@@ -413,7 +425,7 @@ mViewports=[DisplayViewport{type=EXTERNAL, valid=true, displayId=6, uniqueId='lo
 
     def test_MuMu显示层短暂丢失复用最近物理映射但不回退display0(self):
         设备 = ADB设备操作类(
-            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            self._创建假MuMuADB(),
             "127.0.0.1:16416",
         )
         设备.设置目标包名("com.supercell.clashofclans")
@@ -447,7 +459,7 @@ FocusedWindows:
 """
         runner = 假Runner(结果(活动输出))
         设备 = ADB设备操作类(
-            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            self._创建假MuMuADB(),
             "127.0.0.1:16416", runner=runner, 自动检测路径=False,
         )
         设备.设置目标包名("com.supercell.clashofclans")
@@ -508,7 +520,7 @@ FocusedWindows:
 """
         runner = 假Runner(结果(输入输出))
         设备 = ADB设备操作类(
-            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            self._创建假MuMuADB(),
             "127.0.0.1:16416", runner=runner, 自动检测路径=False,
         )
         设备.设置目标包名("com.supercell.clashofclans")
@@ -524,7 +536,7 @@ FocusedWindows:
             b"  displayId=4, name='87ab31 com.supercell.clashofclans/com.supercell.titan.GameApp'\n"
         ))
         设备 = ADB设备操作类(
-            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            self._创建假MuMuADB(),
             "127.0.0.1:16416", runner=runner, 自动检测路径=False,
         )
         with patch.object(设备, "_验证目标"):
@@ -547,7 +559,7 @@ packageName=com.supercell.clashofclans processName=com.supercell.clashofclans
         显示输出 = b"mViewports=[DisplayViewport{displayId=4, uniqueId='local:123', logicalFrame=Rect(0, 0 - 1280, 720)}]"
         runner = 假Runner(结果(活动输出), 结果(显示输出))
         设备 = ADB设备操作类(
-            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            self._创建假MuMuADB(),
             "127.0.0.1:16416", runner=runner, 自动检测路径=False,
         )
         设备.设置目标包名("com.supercell.clashofclans")
@@ -557,7 +569,7 @@ packageName=com.supercell.clashofclans processName=com.supercell.clashofclans
     def test_MuMu触控命令明确发送到游戏display(self):
         runner = 假Runner()
         设备 = ADB设备操作类(
-            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            self._创建假MuMuADB(),
             "127.0.0.1:16416",
             runner=runner,
             自动检测路径=False,
@@ -577,7 +589,7 @@ packageName=com.supercell.clashofclans processName=com.supercell.clashofclans
         """organized display 的单指拖动必须沿用截图方向，不能误点 HUD。"""
         runner = 假Runner()
         设备 = ADB设备操作类(
-            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            self._创建假MuMuADB(),
             "127.0.0.1:16416",
             runner=runner,
             自动检测路径=False,
@@ -620,7 +632,7 @@ Input Reader State:
             结果(),
         )
         设备 = ADB设备操作类(
-            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            self._创建假MuMuADB(),
             "127.0.0.1:16416",
             runner=runner,
             自动检测路径=False,
@@ -852,7 +864,7 @@ Input Reader State:
 
     def test_MuMu未确认游戏显示层时拒绝退回启动器截图(self):
         设备 = ADB设备操作类(
-            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            self._创建假MuMuADB(),
             "127.0.0.1:16416",
             runner=假Runner(),
             自动检测路径=False,
@@ -866,7 +878,7 @@ Input Reader State:
 
     def test_MuMu显示服务缺失时不复用旧显示ID或创建截图进程(self):
         设备 = ADB设备操作类(
-            r"C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe",
+            self._创建假MuMuADB(),
             "127.0.0.1:16416",
             runner=假Runner(
                 结果(错误=b"Can't find service: window\n"),
@@ -1450,6 +1462,71 @@ FocusedWindows:
         设备_fwd = ADB设备操作类(ADB, "127.0.0.1:5555", runner=runner_fwd)
         with self.assertRaisesRegex(ADB错误, "实体 Android 设备"):
             设备_fwd.确认在线()
+
+    def test_BlueStacks扫描探测按序列号缓存_不再重复调用getprop且支持失效(self):
+        bs列表 = b"List of devices attached\n127.0.0.1:5555 device product:dm3q model:SM_S908E device:dm3q\n"
+        # 第一次扫描触发 getprop，第二次扫描命中缓存，不再调用 getprop。
+        runner = 假Runner(
+            结果(bs列表),
+            结果(b"[ro.product.brand]: [samsung]\n[ro.bluestacks.version]: [5.21.100]\n"),
+            结果(bs列表),
+        )
+        首次 = ADB设备操作类.扫描设备(ADB, runner=runner)
+        次次 = ADB设备操作类.扫描设备(ADB, runner=runner)
+        self.assertFalse(首次[0].疑似实体设备)
+        self.assertFalse(次次[0].疑似实体设备)
+        getprop命令 = [命令 for 命令 in runner.命令 if 命令[-2:] == ["shell", "getprop"]]
+        self.assertEqual(len(getprop命令), 1)
+        self.assertEqual([命令[1:] for 命令 in runner.命令], [
+            ["devices", "-l"],
+            ["-s", "127.0.0.1:5555", "shell", "getprop"],
+            ["devices", "-l"],
+        ])
+
+        # 显式清除缓存后，再次扫描应重新探测。
+        ADB设备操作类.清除BlueStacks探测缓存("127.0.0.1:5555")
+        runner_cleared = 假Runner(
+            结果(bs列表),
+            结果(b"[ro.product.brand]: [samsung]\n[ro.bluestacks.version]: [5.21.100]\n"),
+        )
+        清后 = ADB设备操作类.扫描设备(ADB, runner=runner_cleared)
+        self.assertFalse(清后[0].疑似实体设备)
+        self.assertEqual(
+            len([命令 for 命令 in runner_cleared.命令 if 命令[-2:] == ["shell", "getprop"]]),
+            1,
+        )
+
+        # 设备从扫描列表消失后缓存失效：随后同端口接入无 BlueStacks 特征的三星真机仍被拦截。
+        runner_swap = 假Runner(
+            结果(b"List of devices attached\n"),
+            结果(bs列表),
+            结果(b"[ro.product.brand]: [samsung]\n[ro.product.model]: [SM-S908E]\n"),
+            结果(code=1, 错误=b"ls: /data/.bluestacks.prop: No such file or directory\n"),
+        )
+        self.assertEqual(ADB设备操作类.扫描设备(ADB, runner=runner_swap), [])
+        设备_真机 = ADB设备操作类(ADB, "127.0.0.1:5555", runner=runner_swap)
+        with self.assertRaisesRegex(ADB错误, "实体 Android 设备"):
+            设备_真机.确认在线()
+
+    def test_BlueStacks探测超时不缓存_恢复后下次扫描可重新探测放行(self):
+        bs列表 = b"List of devices attached\n127.0.0.1:5555 device product:dm3q model:SM_S908E device:dm3q\n"
+        调用次数 = {"getprop": 0}
+
+        def 超时后恢复Runner(命令, **_参数):
+            if 命令[1:] == ["devices", "-l"]:
+                return 结果(bs列表)
+            if 命令[-2:] == ["shell", "getprop"]:
+                调用次数["getprop"] += 1
+                if 调用次数["getprop"] == 1:
+                    raise subprocess.TimeoutExpired(命令, 5)
+                return 结果(b"[ro.product.brand]: [samsung]\n[ro.bluestacks.version]: [5.21.100]\n")
+            return 结果()
+
+        首次 = ADB设备操作类.扫描设备(ADB, runner=超时后恢复Runner)
+        self.assertTrue(首次[0].疑似实体设备)
+        次次 = ADB设备操作类.扫描设备(ADB, runner=超时后恢复Runner)
+        self.assertFalse(次次[0].疑似实体设备)
+        self.assertEqual(调用次数["getprop"], 2)
 
     def test_macOS候选ADB路径包含BlueStacksAir和MuMuMac版(self):
         with patch("模块.ADB设备操作类.sys.platform", "darwin"):

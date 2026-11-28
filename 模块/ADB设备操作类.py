@@ -137,6 +137,13 @@ class ADB设备操作类:
     # 否则容易把正在恢复的 transport 再次打断，造成设备反复掉线。
     _ADB服务重置锁 = threading.Lock()
     _全局最近ADB服务重置时间 = 0.0
+    # 按 (规范adb路径, 序列号, 设备描述) 缓存本机 5555-5585 端口的 BlueStacks
+    # 只读探测结果，避免每次扫描设备重复执行 getprop（单次最长超时 5s）。
+    # 仅缓存确定性判定；超时或传输异常不缓存，且设备离线/消失、重置 ADB 服务、
+    # 切换设备或显式清缓存时失效，防止同端口复用造成误判。
+    _BlueStacks探测缓存: dict[tuple[str, str, str], tuple[bool, float]] = {}
+    _BlueStacks探测缓存锁 = threading.Lock()
+    _BlueStacks探测缓存秒数 = 300.0
 
     @staticmethod
     def _获取主机内存状态() -> dict[str, int] | None:
@@ -612,6 +619,7 @@ class ADB设备操作类:
                 return
             self._最近ADB服务重置时间 = 当前时间
             type(self)._全局最近ADB服务重置时间 = 当前时间
+            type(self).清除BlueStacks探测缓存()
             try:
                 self._运行ADB服务命令("kill-server")
                 self._运行ADB服务命令("start-server")
@@ -731,16 +739,74 @@ class ADB设备操作类:
         return False
 
     @classmethod
+    def 清除BlueStacks探测缓存(cls, 序列号: str | None = None) -> None:
+        """清理 BlueStacks 只读探测缓存；传入序列号时仅清理该设备。"""
+        目标序列号 = str(序列号 or "").strip().lower()
+        with cls._BlueStacks探测缓存锁:
+            if not 目标序列号:
+                cls._BlueStacks探测缓存.clear()
+                return
+            待删 = [键 for 键 in cls._BlueStacks探测缓存 if 键[1] == 目标序列号]
+            for 键 in 待删:
+                cls._BlueStacks探测缓存.pop(键, None)
+
+    @staticmethod
+    def _BlueStacks探测缓存键(
+            adb路径: str,
+            序列号: str,
+            描述: str = "",
+    ) -> tuple[str, str, str]:
+        return (
+            os.path.normcase(os.path.abspath(str(adb路径 or ""))),
+            str(序列号 or "").strip().lower(),
+            str(描述 or "").strip(),
+        )
+
+    @classmethod
+    def _清理离线BlueStacks探测缓存(
+            cls,
+            adb路径: str,
+            设备列表: Iterable[ADB设备信息],
+    ) -> None:
+        """移除已不在当前在线列表或描述已变化的缓存项，避免端口复用误判。"""
+        规范adb路径 = os.path.normcase(os.path.abspath(str(adb路径 or "")))
+        在线集合 = {
+            (设备.序列号.strip().lower(), 设备.描述.strip())
+            for 设备 in 设备列表
+            if 设备.状态 == "device"
+        }
+        with cls._BlueStacks探测缓存锁:
+            待删 = [
+                键 for 键 in cls._BlueStacks探测缓存
+                if 键[0] == 规范adb路径 and (键[1], 键[2]) not in 在线集合
+            ]
+            for 键 in 待删:
+                cls._BlueStacks探测缓存.pop(键, None)
+
+    @classmethod
     def _探测BlueStacks设备(
             cls,
             adb路径: str,
             序列号: str,
             runner: Callable = subprocess.run,
+            *,
+            描述: str = "",
+            使用缓存: bool = True,
     ) -> bool:
         """仅对本机 5555-5585 端口做只读 BlueStacks 白名单判定。"""
-        信息 = ADB设备信息(序列号, "device", "")
+        信息 = ADB设备信息(序列号, "device", 描述)
         if not 信息.是本机BlueStacks候选端口:
             return False
+        缓存键 = cls._BlueStacks探测缓存键(adb路径, 序列号, 描述)
+        当前时间 = time.monotonic()
+        if 使用缓存:
+            with cls._BlueStacks探测缓存锁:
+                缓存项 = cls._BlueStacks探测缓存.get(缓存键)
+                if 缓存项 is not None:
+                    缓存判定, 缓存时间 = 缓存项
+                    if 当前时间 - 缓存时间 < cls._BlueStacks探测缓存秒数:
+                        return 缓存判定
+                    cls._BlueStacks探测缓存.pop(缓存键, None)
         startupinfo = None
         creationflags = 0
         if os.name == "nt":
@@ -767,10 +833,18 @@ class ADB设备操作类:
                 stderr = stderr.decode("utf-8", errors="replace")
             return int(getattr(结果, "returncode", 1)), str(stdout), str(stderr)
 
+        def 写入缓存(判定: bool) -> bool:
+            if 使用缓存:
+                with cls._BlueStacks探测缓存锁:
+                    cls._BlueStacks探测缓存[缓存键] = (判定, time.monotonic())
+            return 判定
+
+        getprop成功 = False
         try:
             返回码, 输出, _ = 执行探测(["shell", "getprop"])
-            if 返回码 == 0 and cls._解析BlueStacks属性输出(输出):
-                return True
+            getprop成功 = 返回码 == 0
+            if getprop成功 and cls._解析BlueStacks属性输出(输出):
+                return 写入缓存(True)
         except (ADB错误, OSError, subprocess.TimeoutExpired):
             return False
 
@@ -783,7 +857,13 @@ class ADB设备操作类:
                 and "no such file" not in 合并低
                 and "permission denied" not in 合并低
             ):
-                return True
+                return 写入缓存(True)
+            if getprop成功 and (
+                返回码 == 0
+                or "no such file" in 合并低
+                or "permission denied" in 合并低
+            ):
+                return 写入缓存(False)
         except (ADB错误, OSError, subprocess.TimeoutExpired):
             return False
         return False
@@ -823,13 +903,19 @@ class ADB设备操作类:
         if isinstance(输出, bytes):
             输出 = 输出.decode("utf-8", errors="replace")
         设备列表 = 解析ADB设备列表(输出)
+        cls._清理离线BlueStacks探测缓存(临时适配器.adb路径, 设备列表)
         结果列表: list[ADB设备信息] = []
         for 设备 in 设备列表:
             if (
                 设备.状态 == "device"
                 and 设备.疑似实体设备
                 and 设备.是本机BlueStacks候选端口
-                and cls._探测BlueStacks设备(临时适配器.adb路径, 设备.序列号, runner=runner)
+                and cls._探测BlueStacks设备(
+                    临时适配器.adb路径,
+                    设备.序列号,
+                    runner=runner,
+                    描述=设备.描述,
+                )
             ):
                 结果列表.append(ADB设备信息(设备.序列号, 设备.状态, 设备.描述, 已确认模拟器=True))
             else:
@@ -1113,7 +1199,10 @@ class ADB设备操作类:
             except (ADB错误, OSError, subprocess.TimeoutExpired):
                 新设备 = None
             if 新设备 is not None:
+                旧序列号 = self.设备序列号
                 self.设备序列号 = 新设备.序列号
+                if 旧序列号 and 旧序列号 != self.设备序列号:
+                    self.清除BlueStacks探测缓存(旧序列号)
                 self._最近截图尺寸 = None
                 self._MuMu连接判定 = None
                 self._MuMu连接判定序列号 = ""

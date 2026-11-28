@@ -642,6 +642,76 @@ class 复审其它项测试(unittest.TestCase):
                 任务._配置分区.assert_not_called()
                 self.assertFalse(编.有待恢复竞赛快照(上下文))
                 self.assertEqual(上下文._竞赛配兵失败任务键, "指定兵种:攻城车")
+                日志 = " ".join(c.args[0] for c in 上下文.置脚本状态.call_args_list)
+                self.assertIn("只放弃攻城区换兵", 日志)
+
+    def test_攻城缓存过期或缺失时间时只放弃攻城区_兵种区仍正常换兵(self):
+        现在 = int(time.time())
+        兵种快照 = {"单位": dict(主人兵种), "容量": [352, 352]}
+        for 名称, 记录 in (
+            ("超过24小时过期", {"单位": {"攻城飞艇": 1}, "容量": [1, 3], "时间": 现在 - 25 * 3600}),
+            ("缺失时间戳", {"单位": {"攻城飞艇": 1}, "容量": [1, 3]}),
+        ):
+            with self.subTest(场景=名称):
+                上下文 = 竞赛上下文(
+                    _竞赛配兵关键单位={"兵种": ["苍蝇"], "攻城": ["攻城战车"]},
+                    _竞赛配兵任务键="指定兵种:亡灵与攻城车",
+                    _部落竞赛配兵任务类型="指定兵种",
+                    _竞赛配兵任务文本="至少需使用亡灵x3",
+                )
+                上下文.数据库.获取最新完整状态.return_value = SimpleNamespace(状态数据={
+                    编.最近确认攻城状态类型: 记录,
+                })
+                任务 = 挂页面桩(新任务(上下文))
+                任务._读取分区阵容 = Mock(side_effect=lambda 区: (
+                    (兵种快照, "") if 区 == "兵种" else (None, "攻城第1张卡片无法区分")
+                ))
+                任务._配置分区 = Mock(return_value=({"苍蝇": 14}, (352, 352)))
+
+                self.assertTrue(任务.执行())
+
+                任务._配置分区.assert_called_once()
+                self.assertEqual(任务._配置分区.call_args.args[0], "兵种")
+                self.assertEqual(任务._配置分区.call_args.args[2], ("苍蝇",))
+                快照 = 编.读取竞赛快照(上下文)
+                self.assertTrue(快照.get("已应用"))
+                self.assertEqual(set(快照.get("分区") or {}), {"兵种"})
+                self.assertEqual(getattr(上下文, "_竞赛配兵失败任务键", ""), "")
+                日志 = " ".join(c.args[0] for c in 上下文.置脚本状态.call_args_list)
+                self.assertIn("只放弃攻城区换兵", 日志)
+
+    def test_攻城缓存过期时其余兵种和法术区均继续参与换兵(self):
+        现在 = int(time.time())
+        兵种快照 = {"单位": dict(主人兵种), "容量": [352, 352]}
+        法术快照 = {"单位": {"闪电法术": 11}, "容量": [11, 11]}
+        上下文 = 竞赛上下文(
+            _竞赛配兵关键单位={"兵种": ["苍蝇"], "法术": ["狂暴法术"], "攻城": ["攻城战车"]},
+            _竞赛配兵任务键="指定兵种:多区组合",
+            _部落竞赛配兵任务类型="指定兵种",
+            _竞赛配兵任务文本="至少需使用亡灵x3",
+        )
+        上下文.数据库.获取最新完整状态.return_value = SimpleNamespace(状态数据={
+            编.最近确认攻城状态类型: {"单位": {"攻城飞艇": 1}, "容量": [1, 3], "时间": 现在 - 25 * 3600},
+        })
+        任务 = 挂页面桩(新任务(上下文))
+        任务._读取分区阵容 = Mock(side_effect=lambda 区: {
+            "兵种": (兵种快照, ""),
+            "法术": (法术快照, ""),
+            "攻城": (None, "攻城第1张卡片无法区分"),
+        }[区])
+        任务._配置分区 = Mock(return_value=({}, (1, 1)))
+        模拟构建 = Mock(return_value=({"兵种": {"苍蝇": 14}, "法术": {"狂暴法术": 1, "闪电法术": 9}}, ""))
+
+        with unittest.mock.patch("任务流程.活动.竞赛配兵策略.按快照构建临时阵容", 模拟构建):
+            self.assertTrue(任务.执行())
+
+        模拟构建.assert_called_once()
+        传入关键, 传入快照 = 模拟构建.call_args.args[2], 模拟构建.call_args.args[3]
+        self.assertEqual(set(传入关键), {"兵种", "法术"})
+        self.assertEqual(set(传入快照), {"兵种", "法术"})
+        self.assertEqual([c.args[0] for c in 任务._配置分区.call_args_list], ["兵种", "法术"])
+        快照 = 编.读取竞赛快照(上下文)
+        self.assertEqual(set(快照.get("分区") or {}), {"兵种", "法术"})
 
     def test_攻城区无任何恢复来源时不换兵并放弃该分区(self):
         上下文 = 竞赛上下文(
