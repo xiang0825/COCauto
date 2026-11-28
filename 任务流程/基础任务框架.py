@@ -3373,6 +3373,37 @@ class 任务上下文:
             pass
         return True
 
+    def _过期结算缓存已回到主页(self) -> bool:
+        """缓存的结算/星级奖励页面结果过期时，用新截图复核是否已回到主页。
+
+        实机 rc168 17:50 现场：圣水车边缘拖动把夜世界海面滚入画面，单帧
+        被识别为“战斗星级奖励”。该结果留在 ``_最近点击页面结果`` 中，
+        之后没有新的点击刷新缓存；下一次夜世界进攻入口点击时，结算锁
+        仅凭这条过期缓存拒绝输入，任务进入安全待命并消耗唯一的自动恢复
+        额度。这里只在战斗状态机 *没有* 确认本场结束时调用：强制重新
+        截图识别，新帧为高置信主页才清除结算视觉保护并放行；否则维持
+        原锁定行为。不发送任何输入。
+        """
+        try:
+            新结果 = self.识别点击画面(强制=True)
+        except Exception:
+            return False
+        页面 = str(getattr(新结果, "页面", "") or "") if 新结果 is not None else ""
+        try:
+            置信度 = float(getattr(新结果, "可信度", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            置信度 = 0.0
+        if 页面 not in {"主世界主页", "夜世界主页"} or 置信度 < 0.70:
+            return False
+        self._最近结算视觉时间 = 0.0
+        self._结算视觉跨帧阻断日志 = False
+        self._结算输入已锁定日志 = False
+        self._非战斗结算输入已拦截 = False
+        self.置脚本状态(
+            f"结算页缓存已过期，新截图复核为高置信{页面}，解除结算输入锁；不发送ESC"
+        )
+        return True
+
     def 检查宝石商店危险页面(self, 强制: bool = False) -> bool:
         """识别宝石/商店弹窗，ESC 退出后恢复任务，不允许点宝石。
 
@@ -3437,6 +3468,14 @@ class 任务上下文:
         # 回营失败”的跨帧回归。回营专用的“已确认安全按钮”不经过这里，
         # 点击成功并确认主世界后会清除该标志。
         最近页面 = getattr(getattr(self, "_最近点击页面结果", None), "页面", "")
+        if (
+            not getattr(self, "_战斗中", False)
+            and not getattr(self, "_军队编辑中", False)
+            and not bool(getattr(self, "_战斗结束已确认", False))
+            and 最近页面 in {"战斗结算", "战斗奖励选择", "战斗星级奖励"}
+            and self._过期结算缓存已回到主页()
+        ):
+            最近页面 = getattr(getattr(self, "_最近点击页面结果", None), "页面", "")
         if (
             not getattr(self, "_战斗中", False)
             and not getattr(self, "_军队编辑中", False)

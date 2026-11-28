@@ -445,3 +445,59 @@ class 长循环心跳续期与真卡死检测测试(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class 过期结算缓存锁修复测试(unittest.TestCase):
+    """实机 17:50：拖动中单帧误识别“战斗星级奖励”后缓存残留，锁住进攻入口。"""
+
+    def _上下文(self, 新帧序列):
+        上下文 = 任务上下文.__new__(任务上下文)
+        上下文._战斗中 = False
+        上下文._军队编辑中 = False
+        上下文._战斗结束已确认 = False
+        上下文._宝石保护已触发 = False
+        上下文._最近结算视觉时间 = 0.0
+        上下文._最近点击页面结果 = _页面(
+            "战斗星级奖励", 可信度=0.96, 依据=("蓝紫星级奖励面板+中央确定按钮0.96",)
+        )
+        上下文.置脚本状态 = Mock()
+        上下文.脚本延时 = Mock()
+        上下文._获取点击识别截图 = Mock(return_value=np.zeros((600, 800, 3), np.uint8))
+        帧 = iter(新帧序列)
+
+        def 识别(强制=False):
+            结果 = next(帧)
+            上下文._最近点击页面结果 = 结果
+            return 结果
+
+        上下文.识别点击画面 = Mock(side_effect=识别)
+        return 上下文
+
+    def test_过期星级奖励缓存新帧为夜世界主页时解除结算锁放行进攻入口(self):
+        主页 = _页面("夜世界主页", "夜世界", 0.74, ("夜世界资源栏0.98", "新版战斗入口0.98"))
+        上下文 = self._上下文([主页, 主页])
+
+        self.assertFalse(上下文.检查宝石商店危险页面())
+        日志 = [调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list]
+        self.assertTrue(any("结算页缓存已过期" in 行 for 行 in 日志))
+        self.assertFalse(any("本场结算状态已锁定" in 行 for 行 in 日志))
+
+    def test_新帧仍为星级奖励时保持结算锁(self):
+        奖励 = _页面("战斗星级奖励", 可信度=0.96)
+        上下文 = self._上下文([奖励, 奖励])
+
+        self.assertTrue(上下文.检查宝石商店危险页面())
+        日志 = [调用.args[0] for 调用 in 上下文.置脚本状态.call_args_list]
+        self.assertTrue(any("本场结算状态已锁定" in 行 for 行 in 日志))
+
+    def test_新帧为低置信主页时保持结算锁(self):
+        上下文 = self._上下文([_页面("夜世界主页", "夜世界", 0.40)])
+
+        self.assertTrue(上下文.检查宝石商店危险页面())
+
+    def test_战斗状态机已确认结束时不复核直接锁定(self):
+        上下文 = self._上下文([])
+        上下文._战斗结束已确认 = True
+
+        self.assertTrue(上下文.检查宝石商店危险页面())
+        上下文.识别点击画面.assert_not_called()
